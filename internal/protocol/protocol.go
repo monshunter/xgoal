@@ -314,6 +314,8 @@ func Schema(name string) ([]byte, error) {
 		SchemaPatchBundle:         "schema/patch-bundle-v1alpha1.json",
 		SchemaCommandReceipt:      "schema/command-receipt-v1alpha1.json",
 		SchemaEnvironmentSnapshot: "schema/environment-snapshot-v1alpha1.json",
+		SchemaReviewPacket:        "schema/review-packet-v1alpha1.json",
+		SchemaReviewResult:        "schema/review-result-v1alpha1.json",
 	}[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown schema %q", name)

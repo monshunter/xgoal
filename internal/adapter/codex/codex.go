@@ -107,7 +107,7 @@ func New(configuration Config) (*Adapter, error) {
 		return nil, err
 	}
 	root := filepath.Join(runtimeRoot, "adapters", "codex")
-	for _, directory := range []string{root, filepath.Join(root, "invocations"), filepath.Join(root, "sessions"), filepath.Join(root, "probes")} {
+	for _, directory := range []string{root, filepath.Join(root, "invocations"), filepath.Join(root, "reviews"), filepath.Join(root, "sessions"), filepath.Join(root, "probes")} {
 		if err := ensurePrivateDirectory(directory); err != nil {
 			return nil, err
 		}
@@ -637,11 +637,15 @@ func readPacket(filename string) (string, protocol.WorkPacket, error) {
 }
 
 func validateOutputSchema(content []byte) ([]byte, string, error) {
+	return validateSchemaContract(content, protocol.SchemaAgentResult, protocol.AgentResultVersion)
+}
+
+func validateSchemaContract(content []byte, schemaName, schemaVersion string) ([]byte, string, error) {
 	model, err := decodeJSONModel(content)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid Codex output schema: %w", err)
 	}
-	expected, err := protocol.Schema(protocol.SchemaAgentResult)
+	expected, err := protocol.Schema(schemaName)
 	if err != nil {
 		return nil, "", err
 	}
@@ -649,11 +653,11 @@ func validateOutputSchema(content []byte) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	inputHash, err := canonical.Hash("agent-output-schema", protocol.AgentResultVersion, model)
+	inputHash, err := canonical.Hash("agent-output-schema", schemaVersion, model)
 	if err != nil {
 		return nil, "", err
 	}
-	expectedHash, err := canonical.Hash("agent-output-schema", protocol.AgentResultVersion, expectedModel)
+	expectedHash, err := canonical.Hash("agent-output-schema", schemaVersion, expectedModel)
 	if err != nil || inputHash != expectedHash {
 		return nil, "", errors.New("Codex output schema is not the xgoal AgentResult contract")
 	}
@@ -661,7 +665,7 @@ func validateOutputSchema(content []byte) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	hash, err := canonical.Hash("codex-output-schema", protocol.AgentResultVersion, providerModel)
+	hash, err := canonical.Hash("codex-output-schema", schemaVersion, providerModel)
 	if err != nil {
 		return nil, "", err
 	}

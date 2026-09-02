@@ -36,4 +36,5 @@ Plans:
 - [x] [PLAN-002：实现 M1 持久状态与控制循环](docs/plans/PLAN-002.md)
 - [x] [PLAN-003：实现 M2 Git、环境与验证闭环](docs/plans/PLAN-003.md)
 - [x] [PLAN-004：实现 M3 Codex Adapter 与真实执行门禁](docs/plans/PLAN-004.md)
+- [x] [PLAN-005：实现 M4 Claude Adapter 与独立 Review](docs/plans/PLAN-005.md)
 ---

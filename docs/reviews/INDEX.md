@@ -25,4 +25,7 @@
 | REVIEW-020-plan-004 | REVIEW-020：PLAN-004 初始 Plan Review | [REVIEW-020-plan-004.md](REVIEW-020-plan-004.md) |
 | REVIEW-021-design-002 | REVIEW-021：DESIGN-002 M3 Codex CLI Adapter | [REVIEW-021-design-002.md](REVIEW-021-design-002.md) |
 | REVIEW-022-plan-004-change | REVIEW-022：PLAN-004 M3 Change Review | [REVIEW-022-plan-004-change.md](REVIEW-022-plan-004-change.md) |
+| REVIEW-023-plan-005 | REVIEW-023：PLAN-005 初始 Plan Review | [REVIEW-023-plan-005.md](REVIEW-023-plan-005.md) |
+| REVIEW-024-design-003 | REVIEW-024：DESIGN-003 M4 Claude Adapter 与独立 Review | [REVIEW-024-design-003.md](REVIEW-024-design-003.md) |
+| REVIEW-025-plan-005-change | REVIEW-025：PLAN-005 M4 Change Review | [REVIEW-025-plan-005-change.md](REVIEW-025-plan-005-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->

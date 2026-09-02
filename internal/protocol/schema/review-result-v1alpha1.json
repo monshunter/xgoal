@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xgoal.dev/schema/xgoal.review-result/v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "review_status", "findings", "suggested_validators"],
+  "properties": {
+    "protocol_version": {"type": "string", "const": "xgoal.review-result/v1alpha1"},
+    "review_status": {"type": "string", "enum": ["approved", "changes_requested", "blocked"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "category", "path", "line", "claim", "basis", "recommended_fix"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "severity": {"type": "string", "enum": ["blocker", "high", "medium", "low", "note"]},
+          "category": {"type": "string", "enum": ["correctness", "regression", "test_gap", "scope", "security", "maintainability"]},
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "claim": {"type": "string", "minLength": 1},
+          "basis": {"type": "string", "minLength": 1},
+          "recommended_fix": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "suggested_validators": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

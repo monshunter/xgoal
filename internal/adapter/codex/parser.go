@@ -137,6 +137,28 @@ func (stream *jsonlStream) Finalize(maxResultBytes int64) (protocol.AgentResult,
 	return result, stream.sessionID, cloneUsage(stream.latestUsage), nil
 }
 
+func (stream *jsonlStream) FinalizeReview(maxResultBytes int64) (protocol.ReviewResult, string, *protocol.Usage, error) {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.parseErr != nil {
+		return protocol.ReviewResult{}, stream.sessionID, cloneUsage(stream.latestUsage), stream.parseErr
+	}
+	if len(stream.pending) != 0 || stream.sessionID == "" || stream.finalText == "" {
+		return protocol.ReviewResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: Codex review JSONL is incomplete", adapter.ErrInvalidOutput)
+	}
+	result, err := protocol.DecodeReviewResult(strings.NewReader(stream.finalText), maxResultBytes)
+	if err != nil {
+		return protocol.ReviewResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
+	}
+	for index := range result.Findings {
+		result.Findings[index].Path = redact.String(result.Findings[index].Path)
+		result.Findings[index].Claim = redact.String(result.Findings[index].Claim)
+		result.Findings[index].Basis = redact.String(result.Findings[index].Basis)
+		result.Findings[index].RecommendedFix = redact.String(result.Findings[index].RecommendedFix)
+	}
+	return result, stream.sessionID, cloneUsage(stream.latestUsage), nil
+}
+
 func (stream *jsonlStream) processLine(line []byte) error {
 	if len(line) > maxCodexEventBytes {
 		return errors.New("Codex JSONL event exceeded its per-line limit")

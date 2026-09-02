@@ -1,4 +1,4 @@
-.PHONY: verify-m0 verify-m1 verify-m2 verify-m3 fmt-check test shuffle race vet cli-smoke sqlite-cross-build m2-failure-matrix m2-cross-build m3-contract m3-real-smoke
+.PHONY: verify-m0 verify-m1 verify-m2 verify-m3 verify-m4 fmt-check test shuffle race vet cli-smoke sqlite-cross-build m2-failure-matrix m2-cross-build m3-contract m3-real-smoke m4-contract m4-real-smoke
 
 verify-m0: fmt-check test race vet cli-smoke
 
@@ -7,6 +7,8 @@ verify-m1: fmt-check test shuffle race vet cli-smoke sqlite-cross-build
 verify-m2: fmt-check test m2-failure-matrix shuffle race vet cli-smoke sqlite-cross-build m2-cross-build
 
 verify-m3: verify-m2 m3-contract m3-real-smoke
+
+verify-m4: verify-m3 m4-contract m4-real-smoke
 
 fmt-check:
 	sh scripts/xgoal/gofmt-check.sh
@@ -44,3 +46,9 @@ m3-contract:
 
 m3-real-smoke:
 	XGOAL_RUN_CODEX_SMOKE=1 go test ./internal/adapter/codex -run '^TestM3RealCodexFastAndStandardImplementer$$' -count=1 -v
+
+m4-contract:
+	go test ./internal/adapter/... ./internal/protocol ./internal/review ./internal/store/sqlite -count=1
+
+m4-real-smoke:
+	XGOAL_RUN_CROSS_REVIEW_SMOKE=1 go test ./internal/review -run '^TestM4RealCrossProviderReview$$' -count=1 -v

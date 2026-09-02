@@ -355,6 +355,33 @@ func (s EvidenceState) Valid() bool {
 	return s == EvidenceCurrent || s == EvidenceStale || s == EvidenceSuperseded || s == EvidenceInvalid
 }
 
+type FindingState string
+
+const (
+	FindingOpen                FindingState = "OPEN"
+	FindingResolvedByPatch     FindingState = "RESOLVED_BY_PATCH"
+	FindingDisprovedByEvidence FindingState = "DISPROVED_BY_EVIDENCE"
+	FindingWaivedByHuman       FindingState = "WAIVED_BY_HUMAN"
+	FindingSuperseded          FindingState = "SUPERSEDED"
+)
+
+var findingTransitions = transitions[FindingState]{
+	FindingOpen:                set(FindingResolvedByPatch, FindingDisprovedByEvidence, FindingWaivedByHuman, FindingSuperseded),
+	FindingResolvedByPatch:     {},
+	FindingDisprovedByEvidence: {},
+	FindingWaivedByHuman:       {},
+	FindingSuperseded:          {},
+}
+
+func (s FindingState) Valid() bool {
+	_, exists := findingTransitions[s]
+	return exists
+}
+
+func ValidateFindingTransition(from, to FindingState) error {
+	return findingTransitions.validate("review finding", from, to)
+}
+
 type transitions[T comparable] map[T]map[T]struct{}
 
 func (t transitions[T]) allows(from, to T) bool {

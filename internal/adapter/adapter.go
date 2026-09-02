@@ -76,6 +76,7 @@ type Invocation struct {
 	OutputSchema     []byte
 	Environment      map[string]string
 	SandboxPolicy    string
+	PermissionMode   string
 	ToolPolicy       []string
 	Timeout          time.Duration
 	MaxOutputBytes   int64

@@ -137,6 +137,12 @@ func TestEmbeddedSchemasAreValidAndVersioned(t *testing.T) {
 		protocol.SchemaEnvironmentSnapshot: {
 			version: protocol.EnvironmentSnapshotVersion, digest: "f549c2e9f6704dbef91d1932caca27fde117764114d21ea1c0967f42f55a5983",
 		},
+		protocol.SchemaReviewPacket: {
+			version: protocol.ReviewPacketVersion, digest: "156f17e817c93789bfb2a6d7c5f49a042af580ec6c376105ad69e44e8de85f91",
+		},
+		protocol.SchemaReviewResult: {
+			version: protocol.ReviewResultVersion, digest: "1a988670afb88424ab8faf92c2ba03f04f90284d35c087599f3f465f4337b961",
+		},
 	}
 	for name, expected := range want {
 		t.Run(name, func(t *testing.T) {
