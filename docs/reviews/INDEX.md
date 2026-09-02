@@ -11,4 +11,8 @@
 | REVIEW-006-plan-001-change | REVIEW-006：PLAN-001 M0 Change Review | [REVIEW-006-plan-001-change.md](REVIEW-006-plan-001-change.md) |
 | REVIEW-007-plan-001-change-r2 | REVIEW-007：PLAN-001 M0 Change Review 修订复审 | [REVIEW-007-plan-001-change-r2.md](REVIEW-007-plan-001-change-r2.md) |
 | REVIEW-008-plan-002 | REVIEW-008：PLAN-002 初始 Plan Review | [REVIEW-008-plan-002.md](REVIEW-008-plan-002.md) |
+| REVIEW-009-adr-001 | REVIEW-009：ADR-001 SQLite Driver 与持久事务基线 | [REVIEW-009-adr-001.md](REVIEW-009-adr-001.md) |
+| REVIEW-010-technical-spec-claimed-recovery | REVIEW-010：技术 SPEC CLAIMED 恢复转换定向复审 | [REVIEW-010-technical-spec-claimed-recovery.md](REVIEW-010-technical-spec-claimed-recovery.md) |
+| REVIEW-011-plan-002-change | REVIEW-011：PLAN-002 M1 Change Review | [REVIEW-011-plan-002-change.md](REVIEW-011-plan-002-change.md) |
+| REVIEW-012-plan-002-change-r2 | REVIEW-012：PLAN-002 M1 Change Review 修订复审 | [REVIEW-012-plan-002-change-r2.md](REVIEW-012-plan-002-change-r2.md) |
 <!-- AGENT-HARNESS:END INDEX -->

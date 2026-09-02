@@ -57,7 +57,7 @@ func TestMemoryStoreAllowsOnlyOneActiveLease(t *testing.T) {
 			errorsByAttempt <- memory.ClaimWork(
 				work.ID,
 				1,
-				domain.Lease{ID: leaseID, WorkItemID: work.ID, AttemptID: attemptID, Holder: "worker", Generation: int64(index), ExpiresAt: time.Unix(200, 0), Active: true},
+				domain.Lease{ID: leaseID, WorkItemID: work.ID, AttemptID: attemptID, Holder: "worker", Generation: int64(index), State: domain.LeaseActive, ExpiresAt: time.Unix(200, 0), Version: 1},
 				domain.Attempt{ID: attemptID, WorkItemID: work.ID, State: domain.AttemptCreated, Version: 1},
 			)
 		}(i)
@@ -100,7 +100,7 @@ func TestMemoryStoreLeaseClaimRemainsUniqueUnderContention(t *testing.T) {
 			results <- memory.ClaimWork(
 				work.ID,
 				1,
-				domain.Lease{ID: "lease_" + attemptID, WorkItemID: work.ID, AttemptID: attemptID, Holder: "worker", Generation: int64(index), ExpiresAt: time.Unix(200, 0), Active: true},
+				domain.Lease{ID: "lease_" + attemptID, WorkItemID: work.ID, AttemptID: attemptID, Holder: "worker", Generation: int64(index), State: domain.LeaseActive, ExpiresAt: time.Unix(200, 0), Version: 1},
 				domain.Attempt{ID: attemptID, WorkItemID: work.ID, State: domain.AttemptCreated, Version: 1},
 			)
 		}(index)

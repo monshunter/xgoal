@@ -79,6 +79,16 @@ func TestStateTransitionPredicatesMatchValidators(t *testing.T) {
 			},
 		},
 		{
+			name:   "plan revision",
+			states: []string{string(domain.PlanDraft), string(domain.PlanActive), string(domain.PlanSuperseded)},
+			allows: func(from, to string) bool {
+				return domain.PlanRevisionState(from).CanTransition(domain.PlanRevisionState(to))
+			},
+			validate: func(from, to string) error {
+				return domain.ValidatePlanRevisionTransition(domain.PlanRevisionState(from), domain.PlanRevisionState(to))
+			},
+		},
+		{
 			name: "work",
 			states: []string{
 				string(domain.WorkPending), string(domain.WorkReady), string(domain.WorkClaimed), string(domain.WorkRunning),
@@ -107,6 +117,28 @@ func TestStateTransitionPredicatesMatchValidators(t *testing.T) {
 			},
 		},
 		{
+			name:   "lease",
+			states: []string{string(domain.LeaseActive), string(domain.LeaseReleased), string(domain.LeaseExpired), string(domain.LeaseRevoked)},
+			allows: func(from, to string) bool {
+				return domain.LeaseState(from).CanTransition(domain.LeaseState(to))
+			},
+			validate: func(from, to string) error {
+				return domain.ValidateLeaseTransition(domain.LeaseState(from), domain.LeaseState(to))
+			},
+		},
+		{
+			name: "gate",
+			states: []string{
+				string(domain.GateOpen), string(domain.GateApproved), string(domain.GateDenied), string(domain.GateExpired), string(domain.GateRevoked),
+			},
+			allows: func(from, to string) bool {
+				return domain.GateState(from).CanTransition(domain.GateState(to))
+			},
+			validate: func(from, to string) error {
+				return domain.ValidateGateTransition(domain.GateState(from), domain.GateState(to))
+			},
+		},
+		{
 			name: "effect",
 			states: []string{
 				string(domain.EffectRequested), string(domain.EffectExecuting), string(domain.EffectObserving),
@@ -129,6 +161,70 @@ func TestStateTransitionPredicatesMatchValidators(t *testing.T) {
 					valid := test.validate(from, to) == nil
 					if allowed != valid {
 						t.Fatalf("%s -> %s: predicate = %v, validator = %v", from, to, allowed, valid)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestTerminalStatesNeverTransition(t *testing.T) {
+	tests := []struct {
+		name     string
+		terminal []string
+		states   []string
+		validate func(string, string) error
+	}{
+		{
+			name: "goal", terminal: []string{string(domain.GoalCompleted), string(domain.GoalCancelled)},
+			states: []string{string(domain.GoalDraft), string(domain.GoalReady), string(domain.GoalRunning), string(domain.GoalWaiting), string(domain.GoalVerifying), string(domain.GoalCompleted), string(domain.GoalCancelled)},
+			validate: func(from, to string) error {
+				return domain.ValidateGoalTransition(domain.GoalState(from), domain.GoalState(to))
+			},
+		},
+		{
+			name: "work", terminal: []string{string(domain.WorkCompleted), string(domain.WorkCancelled)},
+			states: []string{string(domain.WorkPending), string(domain.WorkReady), string(domain.WorkClaimed), string(domain.WorkRunning), string(domain.WorkVerifying), string(domain.WorkReconciling), string(domain.WorkWaiting), string(domain.WorkCompleted), string(domain.WorkCancelled)},
+			validate: func(from, to string) error {
+				return domain.ValidateWorkTransition(domain.WorkState(from), domain.WorkState(to))
+			},
+		},
+		{
+			name:     "attempt",
+			terminal: []string{string(domain.AttemptSucceeded), string(domain.AttemptFailed), string(domain.AttemptTimedOut), string(domain.AttemptInterrupted), string(domain.AttemptInvalidOutput), string(domain.AttemptQuarantined)},
+			states:   []string{string(domain.AttemptCreated), string(domain.AttemptPreparing), string(domain.AttemptStarting), string(domain.AttemptRunning), string(domain.AttemptCollecting), string(domain.AttemptValidating), string(domain.AttemptReviewing), string(domain.AttemptPromoting), string(domain.AttemptSucceeded), string(domain.AttemptFailed), string(domain.AttemptTimedOut), string(domain.AttemptInterrupted), string(domain.AttemptInvalidOutput), string(domain.AttemptQuarantined)},
+			validate: func(from, to string) error {
+				return domain.ValidateAttemptTransition(domain.AttemptState(from), domain.AttemptState(to))
+			},
+		},
+		{
+			name: "lease", terminal: []string{string(domain.LeaseReleased), string(domain.LeaseExpired), string(domain.LeaseRevoked)},
+			states: []string{string(domain.LeaseActive), string(domain.LeaseReleased), string(domain.LeaseExpired), string(domain.LeaseRevoked)},
+			validate: func(from, to string) error {
+				return domain.ValidateLeaseTransition(domain.LeaseState(from), domain.LeaseState(to))
+			},
+		},
+		{
+			name: "gate", terminal: []string{string(domain.GateDenied), string(domain.GateExpired), string(domain.GateRevoked)},
+			states: []string{string(domain.GateOpen), string(domain.GateApproved), string(domain.GateDenied), string(domain.GateExpired), string(domain.GateRevoked)},
+			validate: func(from, to string) error {
+				return domain.ValidateGateTransition(domain.GateState(from), domain.GateState(to))
+			},
+		},
+		{
+			name: "effect", terminal: []string{string(domain.EffectSucceeded), string(domain.EffectFailed)},
+			states: []string{string(domain.EffectRequested), string(domain.EffectExecuting), string(domain.EffectObserving), string(domain.EffectRecovering), string(domain.EffectSucceeded), string(domain.EffectFailed)},
+			validate: func(from, to string) error {
+				return domain.ValidateEffectTransition(domain.EffectState(from), domain.EffectState(to))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, from := range test.terminal {
+				for _, to := range test.states {
+					if err := test.validate(from, to); err == nil {
+						t.Fatalf("terminal transition %s -> %s was accepted", from, to)
 					}
 				}
 			}

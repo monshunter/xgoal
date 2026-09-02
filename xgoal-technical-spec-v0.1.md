@@ -223,6 +223,7 @@ $XGOAL_HOME/
 ├── projects/<project-id>/
 │   ├── state.db                # 项目状态与事件
 │   ├── lock                    # 单写者锁
+│   ├── backups/                # Migration 前一致快照与校验 Hash
 │   ├── packets/                # 不可变 Work Packet
 │   ├── patches/                # Attempt Patch/Tree Manifest
 │   ├── logs/                   # Agent 与 Validator 日志
@@ -424,7 +425,7 @@ CREATE TABLE events (
 );
 ```
 
-完整迁移必须由二进制内嵌、单向编号的 Migration 执行；升级前备份 DB，迁移失败时不得启动写循环。
+完整迁移必须由二进制内嵌、单向编号的 Migration 执行；已有 DB 升级前在项目私有 `backups/` 使用 SQLite 一致快照能力生成并校验备份，备份完成后才迁移。迁移失败时不得启动写循环，已完成备份与中断残留不得静默删除。
 
 ---
 
@@ -465,6 +466,7 @@ stateDiagram-v2
     PENDING --> READY: 依赖满足
     READY --> CLAIMED: 获取 Lease
     CLAIMED --> RUNNING: Attempt 启动
+    CLAIMED --> RECONCILING: 启动前失败或确认旧 Worker 已停止
     RUNNING --> VERIFYING: Agent 结束并捕获候选 Patch
     RUNNING --> RECONCILING: Agent 失败/超时/中断
     VERIFYING --> COMPLETED: 验证、Review、Promotion 通过
@@ -482,6 +484,8 @@ stateDiagram-v2
     COMPLETED --> [*]
     CANCELLED --> [*]
 ```
+
+`CLAIMED → RECONCILING` 只用于 Attempt 启动前失败，或 Lease 过期后已通过外部读回确认旧 Worker 不再写入的恢复路径；单凭 TTL 到期不得执行该转换。
 
 ### 9.3 Attempt 状态
 

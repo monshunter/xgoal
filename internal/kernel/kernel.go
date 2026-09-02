@@ -98,7 +98,8 @@ func (k *Kernel) RunSimulation(ctx context.Context, spec SimulationSpec) (Simula
 	}
 	lease := domain.Lease{
 		ID: spec.LeaseID, WorkItemID: workID, AttemptID: spec.AttemptID, Holder: "simulation-kernel",
-		Generation: 1, ExpiresAt: k.clock.Now().Add(90 * time.Second), Active: true,
+		Generation: 1, State: domain.LeaseActive, AcquiredAt: k.clock.Now(), HeartbeatAt: k.clock.Now(),
+		ExpiresAt: k.clock.Now().Add(90 * time.Second), Version: 1,
 	}
 	attempt := domain.Attempt{
 		ID: spec.AttemptID, WorkItemID: workID, AgentProfileID: spec.AgentProfileID,

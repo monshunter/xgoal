@@ -10,10 +10,13 @@ import (
 )
 
 var (
-	ErrAlreadyExists = errors.New("already exists")
-	ErrNotFound      = errors.New("not found")
-	ErrConflict      = errors.New("version conflict")
-	ErrActiveLease   = errors.New("active lease exists")
+	ErrAlreadyExists       = errors.New("already exists")
+	ErrNotFound            = errors.New("not found")
+	ErrConflict            = errors.New("version conflict")
+	ErrActiveLease         = errors.New("active lease exists")
+	ErrIdempotencyConflict = errors.New("idempotency key conflict")
+	ErrExpired             = errors.New("expired")
+	ErrStaleLease          = errors.New("stale lease generation")
 )
 
 type Memory struct {
@@ -138,13 +141,13 @@ func (m *Memory) ClaimWork(workID string, expectedVersion int64, lease domain.Le
 	if work.Version != expectedVersion {
 		return fmt.Errorf("work item %q: %w", workID, ErrConflict)
 	}
-	if existing, exists := m.activeLeases[workID]; exists && existing.Active {
+	if existing, exists := m.activeLeases[workID]; exists && existing.State == domain.LeaseActive {
 		return fmt.Errorf("work item %q: %w", workID, ErrActiveLease)
 	}
 	if err := domain.ValidateWorkTransition(work.State, domain.WorkClaimed); err != nil {
 		return err
 	}
-	if lease.ID == "" || lease.WorkItemID != workID || lease.AttemptID != attempt.ID || !lease.Active || lease.Generation <= 0 {
+	if lease.ID == "" || lease.WorkItemID != workID || lease.AttemptID != attempt.ID || lease.State != domain.LeaseActive || lease.Generation <= 0 {
 		return fmt.Errorf("invalid lease")
 	}
 	if attempt.ID == "" || attempt.WorkItemID != workID || attempt.State != domain.AttemptCreated || attempt.Version <= 0 {
@@ -197,13 +200,13 @@ func (m *Memory) ReleaseLease(workID string, generation int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lease, exists := m.activeLeases[workID]
-	if !exists || !lease.Active {
+	if !exists || lease.State != domain.LeaseActive {
 		return fmt.Errorf("work item %q lease: %w", workID, ErrNotFound)
 	}
 	if lease.Generation != generation {
 		return fmt.Errorf("work item %q lease: %w", workID, ErrConflict)
 	}
-	lease.Active = false
+	lease.State = domain.LeaseReleased
 	delete(m.activeLeases, workID)
 	m.appendEvent("work", workID, "LeaseReleased")
 	return nil

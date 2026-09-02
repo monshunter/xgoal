@@ -6,19 +6,25 @@
 
 ## 当前实现状态
 
-当前代码完成 M0 契约骨架：
+当前代码已完成 M0 契约骨架和 M1 持久状态与控制循环：
 
 - Go CLI 入口，以及严格的 `xgoal.yaml` 解析和校验；
 - Goal、Work、Attempt、Effect 与 Evidence 状态类型；
 - Work Packet、Agent Result、Agent Event 与 Evidence `v1alpha1` 协议和 Golden Hash；
 - Fake Clock、Fake Adapter、Fake Process、内存 CAS/Lease Store；
 - 仅供开发测试的确定性模拟 Kernel，证明 Agent Claim 不能直接完成 Goal。
+- 每项目私有 SQLite Store、固定 WAL/同步参数和运行版本校验；
+- 内嵌单向 Migration、历史 Hash 校验、升级前一致备份、失败回滚与中断备份保留。
+- Goal Revision、Plan DAG、Work、Attempt、Lease、Gate、Idempotency 与 Effect Journal 的持久 Repository；
+- 当前状态与 Event 同事务提交、Version CAS、项目级单活 Lease、Generation/TTL/Heartbeat 和迟到写回隔离；
+- 依赖与 Required Gate 驱动的持久 Ready 调度，以及重读事实后原子提交的 Completion Predicate；
+- 非终态 Effect 扫描与 `Request → Execute → Read Back → Observe` 跨进程恢复路径。
 
-当前尚不能运行真实 Goal。SQLite 持久化、Git worktree/Patch、Codex/Claude Adapter、Daemon/API、恢复、报告和 Benchmark 将在后续里程碑实现。模拟测试不构成真实 Agent、Git 或用户旅程验收。
+当前尚不能运行真实 Goal。Git worktree/Patch/Promotion、真实 Codex/Claude Adapter、Daemon/API、完整 Reconcile/Policy、报告和 Benchmark 将在后续里程碑实现。M1 的恢复测试使用真实子进程和 SQLite 文件，但仍不构成真实 Agent、Git 或用户旅程验收。
 
 ## M0 使用与验收
 
-要求 Go 1.24 或兼容版本。
+要求 Go 1.25 或兼容版本；`go.mod` 建议使用 Go 1.25.13，较旧的 Go 命令需允许标准 `GOTOOLCHAIN=auto` 下载匹配 Toolchain。
 
 ```bash
 go run ./cmd/xgoal version
@@ -27,6 +33,14 @@ make verify-m0
 ```
 
 `make verify-m0` 依次执行格式检查、单元测试、Race Detector、`go vet` 和两个真实 CLI 命令。命令全部成功才表示 M0 骨架在当前 checkout 通过验收，不表示全部 v0.1 Feature 已完成。
+
+## M1 使用与验收
+
+```bash
+make verify-m1
+```
+
+`make verify-m1` 在 M0 基础上增加全仓 20 次乱序执行、真实子进程重启/Effect Read Back 恢复场景，以及 `CGO_ENABLED=0` 的 Darwin arm64、Linux amd64 SQLite 测试包交叉构建。通过只证明 M1 持久状态与控制不变量成立，不代表 M2–M6 或完整 v0.1 已交付。
 
 当前可用命令：
 
