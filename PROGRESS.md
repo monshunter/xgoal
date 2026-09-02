@@ -1,0 +1,28 @@
+# Project Progress
+
+> 项目根目录全局唯一的上层进度视图。`autogo` 只在文件缺失时创建；之后由主 Agent 维护，重装不覆盖。
+
+## 使用规则
+
+- 每个 Objective 使用一个由 `---` 分隔的区块，包含 `ID`、`Objective`、`Status` 和内嵌的 `Plans` Checklist。
+- Objective 状态只允许使用：`还没开始`、`正在处理`、`已完成`。
+- 接受新目标时，追加一个 Objective 区块，并同时列出完成它所需的 Plans；不创建未来占位项。
+- 每个 Plan 包含名称和路径；`[ ]` 表示未完成，`[x]` 表示已完成。
+- 开始处理任一未完成 Plan 前，将所属 Objective 改为 `正在处理`；Plan 达到自身完成条件并通过当前验证后，才勾选为 `[x]`。
+- Plans 全部未开始时，Objective 使用 `还没开始`；开始处理后且仍有未勾选 Plan 时，使用 `正在处理`；全部 Plans 勾选后，使用 `已完成`。
+- 新增、拆分或调整 Plans 后立即重新汇总所属 Objective。除此之外，本文件不记录任何 Plan 内部内容。
+
+## 格式样例
+
+> 以下内容只演示格式，不表示项目真实进度。
+
+---
+ID: OBJ-001
+Objective: 完成示例功能
+Status: 正在处理
+Plans:
+- [x] [PLAN-001：完成基础实现](docs/plans/PLAN-001.md)
+- [ ] [PLAN-002：完成验证与收口](docs/plans/PLAN-002.md)
+---
+
+## Objectives

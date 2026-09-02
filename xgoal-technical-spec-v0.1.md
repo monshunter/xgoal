@@ -1,0 +1,2019 @@
+# xgoal 技术 SPEC
+
+> **项目**：xgoal — Evidence-Closed Multi-Agent Coding Orchestrator  
+> **版本**：v0.1 Draft  
+> **日期**：2026-08-26  
+> **作者**：monshunter  
+> **实现语言**：Go  
+> **目标平台**：macOS、Linux  
+> **配套文档**：《xgoal 产品设计 SPEC v0.1》
+
+---
+
+## 0. 文档定位
+
+本文给出 `xgoal` v0.1 的可实施技术设计，包括责任边界、进程模型、组件、数据模型、状态机、Agent Adapter、Git 工作区、环境管理、验证与证据、调度与租约、失败恢复、权限策略、配置、测试和演进路径。
+
+设计目标不是描述一个“理想 Multi-Agent Demo”，而是形成一套可以逐步编码、测试、故障注入和验收的工程合同。
+
+---
+
+## 1. 技术结论摘要
+
+### 1.1 核心架构决策
+
+1. **新建独立 Go 项目**，不在 AutoGo 中嵌入运行时，也不直接 Fork LoopX。
+2. 采用 **Native Agent Execution, External Orchestration**：Codex/Claude Code 负责有界回合中的推理和编码，xgoal 负责跨 Agent 生命周期。
+3. 不实现 Manager LLM、模型路由推理链或自有工具调用循环；所有 Agent 均通过 CLI Adapter 启动。
+4. 使用 **确定性 Orchestration Kernel** 管理 Goal、Work Graph、Lease、Gate、Budget、Evidence、Reconcile 和 Completion。
+5. 使用 **SQLite 当前状态 + 同事务追加事件**；不是纯文件状态，也不是完整 Event Sourcing。
+6. 每个 Attempt 使用独立 **Git worktree**；Agent 工作区不被直接信任，补丁在干净验证工作区重放后再晋升。
+7. v0.1 默认 `max_parallel = 1`；状态、恢复和闭环正确后再开放安全并行。
+8. Codex 通过非交互 `exec`、JSONL 和结构化输出接入；Claude Code 通过 Print Mode、JSON/Stream JSON 和 JSON Schema 接入。
+9. Agent 结果是 **Claim**；xgoal 独立读取 Git/文件事实并运行受信 Validator。
+10. Completion 是一个确定性谓词，只能在最终集成 Tree 上全部满足。
+11. 外部副作用采用 **Request → Execute → Read Back → Observe** 模型，支持崩溃恢复和幂等重放。
+12. v0.1 明确只支持**可信本地仓库**；本地进程 Provider 不声称具备容器级强隔离。
+
+### 1.2 MVP 最小拓扑
+
+```text
+Human
+  │
+  ▼
+CLI ── Local API/Unix Socket ── xgoal Daemon/Kernel
+                                      │
+          ┌───────────────────────────┼──────────────────────────┐
+          ▼                           ▼                          ▼
+   Agent Adapter                Workspace/Env              Validator
+ Codex / Claude CLI          Git worktree/process       Git/Test/Probe
+          │                           │                          │
+          └─────────────── Evidence + Events ──────────────────┘
+                                      │
+                                SQLite + Files
+                                      │
+                               Promotion/Report
+```
+
+---
+
+## 2. 需求与质量属性
+
+### 2.1 功能性要求
+
+- 创建并版本化 Goal Contract。
+- 生成、校验和执行 Work Graph。
+- 编排 Codex CLI 与 Claude Code CLI。
+- 对 Agent Invocation、日志、会话、输出和退出进行统一抽象。
+- 创建隔离 worktree、准备环境、捕获补丁、清理工作区。
+- 独立运行受信 Validator 并生成可追溯 Evidence。
+- 支持 Planner、Implementer、Reviewer 逻辑角色。
+- 支持 Lease、暂停、恢复、取消、超时、重试、重规划和 Human Gate。
+- 支持补丁在当前集成版本上的串行重放、复验和 Commit。
+- 支持 Final Validation 和 Markdown/JSON 报告。
+
+### 2.2 质量属性
+
+| 属性 | 技术要求 |
+|---|---|
+| 一致性 | 一个项目同一时刻只有一个状态写入者；状态变更与事件追加同事务提交。 |
+| 可恢复性 | 任一外部 Effect 前后崩溃，重启后都能通过状态和外部读回决定下一步。 |
+| 幂等性 | 所有调度、Attempt、Validator Run、Promotion 和 Gate Decision 有幂等键。 |
+| 可审计性 | 每次决策能追溯 Goal Revision、代码 Tree、输入包、Agent、命令和 Evidence。 |
+| 安全性 | 默认最小权限；无网络、无密钥、无远端写、无生产操作；能力不足时明确降级。 |
+| 可替换性 | Kernel 不依赖 Codex/Claude 私有数据结构；通过规范化 Adapter 协议接入。 |
+| 可测试性 | 核心状态机和 Effect Interpreter 可使用 Fake Adapter、Fake Clock、Fake Process 测试。 |
+| 可观测性 | 结构化事件、日志、状态快照、预算和最近实质进展均可查询。 |
+| 简洁性 | v0.1 不引入分布式一致性、消息队列、Kubernetes、插件市场或复杂角色社会。 |
+
+---
+
+## 3. 责任边界
+
+### 3.1 Human
+
+- 定义目标、业务意图和不可自动推断的验收标准。
+- 批准高风险权限、范围变化和业务取舍。
+- 对生产、发布和最终业务责任保留所有权。
+
+### 3.2 Native Agent
+
+- 理解一个 Work Packet。
+- 在给定范围和权限内探索、推理、修改代码或审查补丁。
+- 输出符合 Schema 的结果声明和阻塞说明。
+- 不拥有 Goal 状态、Work Item 状态、Lease、最终完成状态或 Promotion 权限。
+
+### 3.3 xgoal Kernel
+
+- 维护唯一持久状态。
+- 编译并冻结 Goal Revision。
+- 校验 Work Graph，选择 Ready Work Item。
+- 分配 Lease、创建 Attempt 和 Workspace。
+- 选择 Agent Profile，构建 Invocation 并监督进程。
+- 读取外部事实、运行 Validator、记录 Evidence。
+- 执行 Reconcile、Gate、Budget 和 Promotion。
+- 根据确定性 Completion Predicate 结束 Goal。
+
+### 3.4 Project Tooling
+
+- Git 提供版本事实和 Patch/Tree。
+- 编译器、测试、Lint、脚本和运行探针提供执行证据。
+- CI 可在后续版本作为外部 Validator Provider。
+
+### 3.5 AutoGo 集成边界
+
+- AutoGo 的 AGENTS、Skills、Spec/Plan/ADR 等是 Agent 工作方式和工程内容输入。
+- xgoal 可以调用 AutoGo 安装器或检查已安装 Harness。
+- xgoal 不复制 AutoGo Skills，不维护另一份 AGENTS 规则树。
+- xgoal 数据库是运行态权威；`PROGRESS.md` 最多作为只读导出或 Agent 可读快照。
+
+---
+
+## 4. 系统上下文与组件
+
+### 4.1 上下文图
+
+```mermaid
+flowchart LR
+    H[Human] --> CLI[xgoal CLI]
+    CLI --> API[Local API over Unix Socket]
+    API --> K[Orchestration Kernel]
+
+    K --> GC[Goal Compiler]
+    K --> WG[Work Graph]
+    K --> SCH[Scheduler + Lease]
+    K --> POL[Policy + Human Gate]
+    K --> REC[Reconcile Engine]
+    K --> REP[Report Builder]
+
+    SCH --> SUP[Worker Supervisor]
+    SUP --> ADP[Agent Adapter]
+    ADP --> CX[Codex CLI]
+    ADP --> CL[Claude Code CLI]
+
+    K --> WM[Workspace Manager]
+    WM --> GIT[Git Worktrees]
+    WM --> ENV[Environment Provider]
+
+    K --> VAL[Validator Runner]
+    VAL --> TOOL[Build/Test/Lint/Runtime Probe]
+
+    K --> INT[Promotion Manager]
+    INT --> GIT
+
+    GC --> DB[(SQLite)]
+    WG --> DB
+    SCH --> DB
+    POL --> DB
+    REC --> DB
+    VAL --> DB
+    REP --> FS[(Reports/Logs/Patches)]
+```
+
+### 4.2 组件清单
+
+| 组件 | 责任 | 是否可调用 LLM |
+|---|---|---|
+| CLI/API | 用户命令、参数校验、状态流展示 | 否 |
+| Goal Compiler | 调用 Planner 生成 Goal Contract，再做 Schema/规则校验 | 仅通过 Agent Adapter |
+| Work Graph Manager | Plan Revision、依赖、范围和 Ready 状态 | 否 |
+| Scheduler | 选择任务、Agent 和并发槽；获取 Lease | 否 |
+| Worker Supervisor | 子进程启动、事件流、超时、取消、进程组回收 | 否 |
+| Agent Adapter | 供应商 CLI 参数、事件和结构化结果转换 | 否；只启动外部 Agent |
+| Workspace Manager | worktree、运行目录、Patch 捕获、清理 | 否 |
+| Environment Provider | 环境快照、bootstrap、服务生命周期、容器扩展点 | 否 |
+| Validator Runner | 受信命令、文件断言、运行探针、Evidence | 否 |
+| Review Coordinator | 创建 Reviewer Work Packet，保存 Finding | Reviewer 通过 Adapter |
+| Reconcile Engine | 根据状态和证据决定修复、重试、重规划或 Gate | 否 |
+| Policy/Gate Engine | 权限、风险、授权范围和过期控制 | 否 |
+| Budget Manager | Attempt、时长、token、费用和并发上限 | 否 |
+| Promotion Manager | 干净重放、复验、集成 Commit 和最终锁 | 否 |
+| Evidence Store | Evidence 元数据、哈希、过期关系 | 否 |
+| Report Builder | Goal→Criteria→Evidence 的最终报告 | 否，可选 Agent 仅润色非事实部分 |
+| State/Event Store | 当前状态、事件、Effect、事务和查询 | 否 |
+
+---
+
+## 5. 进程与部署模型
+
+### 5.1 单一二进制
+
+输出一个 `xgoal` Go 二进制，支持两种运行方式：
+
+1. **Daemon 模式（默认长期任务）**
+   - `xgoal daemon start` 启动当前用户的本地协调进程。
+   - CLI 通过权限为 `0600` 的 Unix Domain Socket 调用本地 JSON API。
+   - Daemon 是运行状态的唯一写入者，并监督 Agent 子进程。
+
+2. **Foreground 模式（开发与调试）**
+   - `xgoal run --foreground` 在当前进程运行同一 Kernel。
+   - 获取相同的项目写锁，禁止与 Daemon 并行写入。
+
+Windows 不属于 v0.1 范围。
+
+### 5.2 本地目录
+
+通过 `XGOAL_HOME` 统一覆盖；默认使用平台约定的 State/Cache/Runtime 目录。
+
+```text
+$XGOAL_HOME/
+├── registry.db                 # 本地项目注册信息
+├── run/xgoal.sock              # Unix Socket
+├── projects/<project-id>/
+│   ├── state.db                # 项目状态与事件
+│   ├── lock                    # 单写者锁
+│   ├── packets/                # 不可变 Work Packet
+│   ├── patches/                # Attempt Patch/Tree Manifest
+│   ├── logs/                   # Agent 与 Validator 日志
+│   ├── evidence/               # 大型 Evidence Payload
+│   └── reports/                # Markdown/JSON 报告
+└── workspaces/<project-id>/
+    ├── integration/            # xgoal 私有集成 worktree
+    ├── validation/             # 可复用但每次重置的干净验证 worktree
+    └── attempts/<attempt-id>/  # Agent 独立 worktree
+```
+
+项目仓库中只要求：
+
+```text
+xgoal.yaml                      # 可版本管理配置
+```
+
+可选：
+
+```text
+.xgoalignore                    # 报告/上下文排除，不替代 .gitignore
+scripts/xgoal/                  # 受信的复杂验证脚本
+```
+
+### 5.3 项目标识
+
+- `xgoal init` 在当前 Git Common Directory 的本地 Git Config 中写入随机 `xgoal.projectID`，不提交到仓库。
+- 同一仓库的 worktree 共享该 ID。
+- 新 Clone 默认生成新 Project ID；可显式导入历史状态，但不得自动合并两个运行数据库。
+
+---
+
+## 6. 推荐 Go 工程结构
+
+```text
+xgoal/
+├── cmd/xgoal/                  # main 与子命令入口
+├── internal/
+│   ├── app/                    # 依赖组装、生命周期
+│   ├── api/                    # Unix Socket HTTP/JSON API
+│   ├── cli/                    # CLI 命令与展示
+│   ├── kernel/                 # 顶层状态推进循环
+│   ├── domain/                 # Goal/Work/Attempt/Gate/Evidence 类型
+│   ├── store/                  # SQLite repository、事务、迁移
+│   ├── event/                  # Append-only event 与订阅
+│   ├── effect/                 # Effect Interpreter 与读回恢复
+│   ├── goal/                   # Goal Contract 与 Revision
+│   ├── workgraph/              # DAG、依赖、范围冲突
+│   ├── scheduler/              # Ready 选择、能力匹配、并发槽
+│   ├── lease/                  # TTL、心跳、CAS、回收
+│   ├── adapter/
+│   │   ├── protocol/           # 规范化 Invocation/Event/Result
+│   │   ├── codex/              # Codex CLI Adapter
+│   │   ├── claude/             # Claude Code CLI Adapter
+│   │   └── fake/               # 测试 Adapter
+│   ├── supervisor/             # 子进程、超时、取消、日志
+│   ├── workspace/              # worktree、Patch、Manifest
+│   ├── environment/            # 本地环境与未来容器 Provider
+│   ├── validator/              # Validator Registry/Runner
+│   ├── evidence/               # Evidence、哈希、过期
+│   ├── review/                 # Review Packet/Finding
+│   ├── reconcile/              # Failure Fingerprint/决策
+│   ├── policy/                 # 权限、Scope、Gate
+│   ├── budget/                 # 配额与资源使用
+│   ├── promotion/              # 干净重放与串行集成
+│   ├── report/                 # Markdown/JSON 报告
+│   └── observability/          # slog、metrics、redaction
+├── docs/
+│   ├── adr/
+│   ├── protocol/
+│   └── threat-model.md
+├── testdata/
+│   ├── adapters/
+│   ├── repositories/
+│   └── events/
+└── benchmarks/
+```
+
+实现优先使用 Go 标准库，包括 `context`、`os/exec`、`net/http`、`log/slog`、`encoding/json`、`crypto/sha256` 和 `syscall`/平台适配。必要外部依赖控制在 SQLite Driver、YAML Parser 和 JSON Schema Validator 等少数基础库，并固定版本与供应链校验。
+
+Git 操作使用系统 `git` CLI，而不是在 v0.1 使用纯 Go Git 实现，以保持 worktree、属性、过滤器、子模块和用户仓库行为的一致性。
+
+---
+
+## 7. 领域模型
+
+### 7.1 主要实体
+
+| 实体 | 关键字段 | 核心不变量 |
+|---|---|---|
+| Project | id, root, git_common_dir, config_hash, status | root 必须属于预期 Git Common Dir；配置变更可追溯 |
+| Goal | id, project_id, state, active_revision_id, version | 一个 Goal 同时只有一个 Active Revision |
+| GoalRevision | id, goal_id, revision, raw_goal, contract_json, hash, frozen_at | 执行后不可原地修改；语义变更创建新 Revision |
+| PlanRevision | id, goal_revision_id, revision, graph_hash, status | 通过结构校验后才可激活 |
+| WorkItem | id, plan_revision_id, state, objective, scope, required, version | 状态转换必须符合状态机；Required 节点决定 Goal 完成 |
+| WorkDependency | from_id, to_id, type | 图必须无环；目标节点只有依赖完成后 Ready |
+| Attempt | id, work_item_id, agent_profile_id, state, base_tree, result_tree, result_kind | 一次不可覆盖；失败重试创建新 Attempt |
+| AgentProfile | id, adapter, roles, command, capability_json, probe_at | 调度前能力满足角色与策略 |
+| Lease | id, work_item_id, holder, generation, expires_at, state | 同一 Work Item 最多一个 Active Lease |
+| Workspace | id, attempt_id, path, base_tree, state, manifest_hash | 一个 Attempt 一个主要写工作区 |
+| ValidatorDefinition | id, config_hash, type, policy, required | 来自受信配置；版本变化会使旧运行失效 |
+| ValidatorRun | id, validator_id, subject_type/id, tree_hash, state, result_hash | 结果必须绑定代码 Tree 和 Validator 版本 |
+| Evidence | id, kind, subject, producer, authority, tree_hash, payload_hash, state | 不可静默覆盖；过期状态显式记录 |
+| ReviewFinding | id, review_attempt_id, severity, status, location, evidence_ref | Blocker 未关闭时阻止 Promotion/Completion |
+| Gate | id, scope, reason, state, options, decision, expires_at | 授权必须限制动作、对象和有效期 |
+| Budget | goal_id, limits, consumed | 预算阻止新调度，不替代完成验证 |
+| Effect | id, key, type, state, request, observation | 同一 Effect Key 不重复产生不可控副作用 |
+| Event | id, aggregate, sequence, type, actor, payload_hash, created_at | 追加写；同一 Aggregate Sequence 唯一 |
+
+### 7.2 ID 与版本
+
+- ID 使用不可预测、可排序的 Opaque ID，展示前缀如 `goal_`、`work_`、`att_`。
+- 所有可并发修改的 Aggregate 包含整数 `version`，更新使用 Compare-And-Swap。
+- API 写请求必须携带 `Idempotency-Key`；Daemon 将键、请求哈希和响应关联保存。
+
+---
+
+## 8. 状态存储与事件
+
+### 8.1 SQLite 策略
+
+每个项目独立 `state.db`：
+
+```text
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA synchronous = FULL;      # v0.1 优先正确性
+PRAGMA busy_timeout = 5000;
+```
+
+原则：
+
+- Daemon 是唯一写者；读请求同样经 API，避免 CLI 绕过业务规则。
+- 每次领域状态变更与 Event 追加在同一事务中完成。
+- Event 用于审计、状态订阅和恢复分析；当前状态表用于高效查询。
+- 不要求通过 Event 从零重放全部状态，因此不是完整 Event Sourcing。
+- 大型 stdout、stderr、Patch 和报告保存在权限受控的文件中；DB 保存路径、长度和哈希。
+
+### 8.2 最小表约束示例
+
+```sql
+CREATE TABLE work_items (
+    id              TEXT PRIMARY KEY,
+    plan_revision_id TEXT NOT NULL,
+    state           TEXT NOT NULL,
+    required        INTEGER NOT NULL,
+    version         INTEGER NOT NULL DEFAULT 1,
+    objective_json  BLOB NOT NULL,
+    scope_json      BLOB NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE leases (
+    id           TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL,
+    holder       TEXT NOT NULL,
+    generation   INTEGER NOT NULL,
+    state        TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX one_active_lease_per_work
+ON leases(work_item_id)
+WHERE state = 'ACTIVE';
+
+CREATE TABLE events (
+    id             TEXT PRIMARY KEY,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id   TEXT NOT NULL,
+    sequence       INTEGER NOT NULL,
+    event_type     TEXT NOT NULL,
+    actor_type     TEXT NOT NULL,
+    actor_id       TEXT,
+    correlation_id TEXT,
+    payload_json   BLOB NOT NULL,
+    created_at     TEXT NOT NULL,
+    UNIQUE(aggregate_type, aggregate_id, sequence)
+);
+```
+
+完整迁移必须由二进制内嵌、单向编号的 Migration 执行；升级前备份 DB，迁移失败时不得启动写循环。
+
+---
+
+## 9. 状态机
+
+### 9.1 Goal 状态
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> READY: Goal Revision 冻结且可验收
+    READY --> RUNNING: Plan 激活并开始调度
+    RUNNING --> WAITING: Gate/Budget/环境/无进展阻塞
+    WAITING --> RUNNING: 阻塞解除
+    RUNNING --> VERIFYING: Required Work 全部完成
+    VERIFYING --> RUNNING: 最终验证失败并可修复
+    VERIFYING --> WAITING: 需要 Human Gate
+    VERIFYING --> COMPLETED: Completion Predicate=true
+    DRAFT --> CANCELLED
+    READY --> CANCELLED
+    RUNNING --> CANCELLED
+    WAITING --> CANCELLED
+    VERIFYING --> CANCELLED
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+```
+
+约束：
+
+- Goal 不使用 `FAILED` 作为一般终态。不可自动恢复的问题进入 `WAITING`，由用户修正或取消。
+- `COMPLETED` 和 `CANCELLED` 是终态；已完成 Goal 的后续需求创建新 Goal 或新 Revision/Continuation，不原地篡改历史。
+
+### 9.2 Work Item 状态
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> READY: 依赖满足
+    READY --> CLAIMED: 获取 Lease
+    CLAIMED --> RUNNING: Attempt 启动
+    RUNNING --> VERIFYING: Agent 结束并捕获候选 Patch
+    RUNNING --> RECONCILING: Agent 失败/超时/中断
+    VERIFYING --> COMPLETED: 验证、Review、Promotion 通过
+    VERIFYING --> RECONCILING: 验证/Review/Promotion 失败
+    RECONCILING --> READY: 允许新 Attempt
+    RECONCILING --> WAITING: Gate/预算/无进展
+    WAITING --> READY: 阻塞解除
+    PENDING --> CANCELLED
+    READY --> CANCELLED
+    CLAIMED --> CANCELLED
+    RUNNING --> CANCELLED
+    VERIFYING --> CANCELLED
+    RECONCILING --> CANCELLED
+    WAITING --> CANCELLED
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+```
+
+### 9.3 Attempt 状态
+
+Attempt 记录不可复用：
+
+```text
+CREATED → PREPARING → STARTING → RUNNING → COLLECTING
+        → VALIDATING → REVIEWING → PROMOTING → SUCCEEDED
+
+任一非终态可进入：
+FAILED | TIMED_OUT | INTERRUPTED | INVALID_OUTPUT | QUARANTINED
+```
+
+Attempt 失败不会覆盖旧 Attempt，也不会自动使 Goal 终止。
+
+### 9.4 Effect 状态
+
+```text
+REQUESTED → EXECUTING → OBSERVING → SUCCEEDED
+                          └──────→ FAILED
+REQUESTED/EXECUTING/OBSERVING ──重启──→ RECOVERING → OBSERVING
+```
+
+任何 Effect 的成功都必须通过外部读回确认，而不是只依赖函数返回值。
+
+---
+
+## 10. Goal 与 Plan 编译
+
+### 10.1 Goal Compiler 流程
+
+1. 保存用户原始输入，生成 `GoalDrafted` Event。
+2. 创建只读项目快照和 Planner Work Packet。
+3. 调用 Planner Agent，要求输出 Goal Contract JSON。
+4. 验证 JSON Schema。
+5. 执行确定性规则：
+   - `summary`、范围、约束、Acceptance Criteria 不为空。
+   - 每个 Criteria 有可验证方式或显式 Human Acceptance。
+   - in-scope 与 out-of-scope 无明显冲突。
+   - 高风险能力具有 Gate。
+   - Completion Policy 不允许 Agent 自述直接满足。
+6. 对关键缺口创建 Gate；否则冻结 Goal Revision。
+7. 对冻结 Revision 生成哈希：
+
+```text
+goal_revision_hash = SHA256(canonical_contract_json)
+```
+
+### 10.2 Plan Compiler
+
+Planner 输出：
+
+```json
+{
+  "plan_summary": "...",
+  "work_items": [
+    {
+      "client_key": "core-store",
+      "title": "实现持久状态与事件事务",
+      "objective": "...",
+      "depends_on": [],
+      "read_scope": ["/**"],
+      "write_scope": ["/internal/store/**", "/internal/event/**"],
+      "acceptance_criteria": ["AC-001"],
+      "validators": ["go-test-store", "race-store"],
+      "recommended_role": "implementer",
+      "required": true
+    }
+  ]
+}
+```
+
+确定性校验：
+
+- `client_key` 唯一并映射为系统 ID。
+- 图无环；依赖存在。
+- Required Criteria 至少映射一个 Required Work Item。
+- 写范围使用规范化仓库相对路径；不允许 `..`、绝对路径或 `.git`。
+- 无法证明不冲突的写范围按冲突处理。
+- Work Item 太大时给出 Plan Finding；不让 Kernel 自动凭主观判断任意拆分。
+- Validator ID 必须已注册，或创建“新增 Validator” Gate/工作项。
+
+### 10.3 Plan Revision
+
+- Planner 修改计划时创建新 Plan Revision。
+- 系统计算已有 Work Item、进行中 Attempt 和 Evidence 的影响。
+- 已完成工作只有在新 Goal/Plan 仍覆盖且证据未过期时才可继承。
+- 不能删除正在运行节点；必须先取消 Attempt 并释放 Lease。
+
+---
+
+## 11. Scheduler、Lease 与并发
+
+### 11.1 调度循环
+
+```go
+for {
+    recoverExpiredLeases()
+    reconcileUnknownEffects()
+    refreshDerivedReadiness()
+
+    if projectPaused || goalNotRunnable {
+        waitForEvent()
+        continue
+    }
+
+    candidate := selectReadyWorkItem()
+    if candidate == nil {
+        evaluateGoalCompletionOrWaiting()
+        waitForEvent()
+        continue
+    }
+
+    if !budgetAllows(candidate) || !policyAllows(candidate) {
+        createOrRefreshGateOrWaitingReason()
+        continue
+    }
+
+    profile := selectCompatibleAgent(candidate)
+    lease := tryAcquireLeaseCAS(candidate, profile)
+    if lease == nil {
+        continue
+    }
+
+    dispatchAttempt(lease, candidate, profile)
+}
+```
+
+### 11.2 Ready 判定
+
+Work Item 进入 Ready 必须同时满足：
+
+- 所有 Hard Dependency 均为 `COMPLETED`。
+- 所属 Goal 和 Plan Revision 当前有效。
+- 不存在未解决 Gate。
+- 未超过 Attempt/Budget 上限。
+- 没有活动 Lease。
+- 所需 Agent 能力、环境和 Validator 可用。
+- 并发模式下，与活动任务的写 Scope 不冲突。
+
+### 11.3 Lease
+
+Lease 字段：
+
+```text
+lease_id
+work_item_id
+attempt_id
+holder = daemon-instance/worker-id
+generation
+acquired_at
+heartbeat_at
+expires_at
+state = ACTIVE|RELEASED|EXPIRED|REVOKED
+```
+
+- 获取 Lease、创建 Attempt 和写 Event 在一个事务中完成。
+- Worker 以固定间隔发送心跳；TTL 必须大于最大可接受调度抖动。
+- 过期只意味着“所有权未知”，不意味着可以立即重复执行；Kernel 先检查 PID、日志和 Workspace 外部事实。
+- 恢复后只有确认旧 Worker 不再写入，才能撤销 Lease 并启动新 Attempt。
+
+### 11.4 安全并行（v0.2 开启）
+
+- 默认 `max_parallel = 1`。
+- 写 Scope 转换为规范化 Path Set；任一范围为未知或全局时获取项目级写锁。
+- 两个 Work Item 只有在依赖满足且写 Scope 可证明不相交时并行。
+- 读取范围不加排他锁，但基础 Tree 必须记录。
+- 每个 Attempt 使用独立 worktree。
+- Promotion 始终持有全局 Integration Lock，并在最新 Integration Tree 上重放与复验。
+
+---
+
+## 12. Agent Adapter 协议
+
+### 12.1 设计目标
+
+- 隔离供应商 CLI 参数和事件差异。
+- 支持能力探测，而不是假设某个版本永远支持某参数。
+- 将所有供应商输出标记为不可信输入。
+- 允许添加新的 CLI Agent，而不修改 Kernel 状态机。
+
+### 12.2 Go 接口
+
+```go
+type Adapter interface {
+    ID() string
+    Probe(ctx context.Context, spec ProbeSpec) (Capabilities, error)
+    Start(ctx context.Context, inv Invocation, sink EventSink) (Handle, error)
+    Resume(ctx context.Context, inv Invocation, sessionID string, sink EventSink) (Handle, error)
+    Cancel(ctx context.Context, handle Handle) error
+    Wait(ctx context.Context, handle Handle) (AgentResult, error)
+}
+
+type Capabilities struct {
+    Version             string
+    StructuredOutput    bool
+    StreamingEvents     bool
+    ResumeSession       bool
+    UsageReporting      bool
+    CostReporting       bool
+    SandboxModes        []string
+    ToolAllowlist       bool
+    ApprovalModes       []string
+}
+```
+
+### 12.3 Invocation
+
+```go
+type Invocation struct {
+    InvocationID   string
+    AttemptID      string
+    Role           Role
+    WorkDir        string
+    PacketPath     string
+    Prompt         string
+    OutputSchema   json.RawMessage
+    Environment    map[string]string // 已经过白名单
+    SandboxPolicy  SandboxPolicy
+    ToolPolicy     ToolPolicy
+    Timeout        time.Duration
+    MaxOutputBytes int64
+    SessionPolicy  SessionPolicy
+}
+```
+
+原则：
+
+- 使用 `exec.CommandContext` 和参数数组，不经 `sh -c` 拼接 Agent 命令。
+- Prompt 优先通过 stdin；Packet 通过只读路径传递。
+- `cmd.Dir` 设置为 Attempt Workspace。
+- stdout/stderr 分流、限长、落盘、脱敏和哈希。
+- 子进程使用独立进程组；取消先发送优雅终止信号，再超时强杀整个进程组。
+
+### 12.4 规范化 Agent Event
+
+```go
+type AgentEvent struct {
+    Type       string // session, turn, command, file_change, message, usage, result
+    At         time.Time
+    SessionID  string
+    Summary    string
+    Command    *CommandClaim
+    FileChange *FileChangeClaim
+    Usage      *Usage
+    RawRef     string // 脱敏后的原始事件文件引用
+}
+```
+
+注意：`CommandClaim` 和 `FileChangeClaim` 仅表示 Agent 流中声称发生的行为；实际结果仍由 Workspace Manager 和 Validator 读回。
+
+### 12.5 统一结果 Envelope
+
+```json
+{
+  "protocol_version": "xgoal.agent-result/v1alpha1",
+  "status": "completed|blocked|failed",
+  "summary": "实现了状态迁移与事务事件写入",
+  "changed_files_claimed": ["internal/store/store.go"],
+  "checks_claimed": [
+    {"name": "go test ./internal/store/...", "status": "passed"}
+  ],
+  "blockers": [],
+  "assumptions": [],
+  "recommended_next_action": "validate"
+}
+```
+
+Kernel 保存该 Envelope，但不会据此直接改变 Work Item 为 Completed。
+
+### 12.6 Codex CLI Adapter
+
+能力基线：
+
+- 使用非交互 `codex exec`。
+- 使用 `--json` 读取 JSONL 事件。
+- 使用 `--output-schema` 请求最终结构化结果。
+- Implementer 使用 `workspace-write` sandbox；Planner/Reviewer 使用 `read-only`。
+- CLI 支持时，配置为非交互批准策略，任何需要额外授权的动作由 xgoal Gate 控制。
+- 同一 Work Item 的安全恢复可使用 `codex exec resume <session-id>`；否则创建新会话。
+
+概念命令：
+
+```text
+codex exec
+  --json
+  --output-schema <schema-file>
+  --sandbox workspace-write|read-only
+  <prompt-via-stdin>
+```
+
+Adapter 必须：
+
+- 在 `Probe` 中执行版本和最小无副作用协议测试。
+- 对未知 Event Type 保留原始记录但不崩溃。
+- 结构化结果缺失、Schema 不匹配或 JSONL 截断时返回 `INVALID_OUTPUT`。
+- 不以进程退出码 0 代替结果校验。
+
+### 12.7 Claude Code CLI Adapter
+
+能力基线：
+
+- 使用 `claude -p` 非交互 Print Mode。
+- 使用 `--output-format json` 或 `stream-json`。
+- 使用 `--json-schema` 请求结构化输出。
+- 使用 `--allowedTools` 和 `--permission-mode` 实现角色级最小权限；锁定环境优先 `dontAsk`，未允许操作直接拒绝并转成 Gate/Failure。
+- 使用 `--resume <session-id>` 或等价能力恢复安全会话。
+
+概念命令：
+
+```text
+claude -p
+  --output-format stream-json
+  --json-schema <schema-json>
+  --permission-mode dontAsk
+  --allowedTools <role-specific-tools>
+  <prompt-via-stdin>
+```
+
+Go 没有官方 Claude Agent SDK 时，v0.1 直接使用 CLI 子进程；不得为追求 SDK 统一而引入 Python/TypeScript Sidecar。
+
+### 12.8 会话恢复策略
+
+只有同时满足以下条件时才恢复原 Session：
+
+- Session 属于同一 Work Item 和同一 Agent Profile。
+- Goal Revision、Plan Revision、基础 Tree 和权限策略未改变。
+- 上一次中断不是协议损坏或无进展循环。
+- Session ID 来自经过解析的供应商输出。
+
+否则生成 Fresh Work Packet，并把历史压缩为持久事实、失败证据和明确下一动作，不直接拼接全部聊天记录。
+
+---
+
+## 13. Work Packet
+
+### 13.1 不可变输入包
+
+每次 Attempt 生成只读 `packet.json`：
+
+```json
+{
+  "protocol_version": "xgoal.work-packet/v1alpha1",
+  "project": {
+    "name": "xgoal",
+    "base_tree": "sha256-or-git-tree",
+    "workspace": "/absolute/attempt/worktree"
+  },
+  "goal": {
+    "id": "goal_...",
+    "revision": 3,
+    "summary": "...",
+    "contract_hash": "..."
+  },
+  "work_item": {
+    "id": "work_...",
+    "title": "实现 Lease CAS",
+    "objective": "...",
+    "dependencies": ["work_store"],
+    "read_scope": ["/**"],
+    "write_scope": ["/internal/lease/**", "/internal/store/**"],
+    "acceptance_criteria": ["AC-004"],
+    "validator_ids": ["go-test-lease", "race-lease"]
+  },
+  "role": "implementer",
+  "constraints": {
+    "network": "deny",
+    "secrets": "deny",
+    "git_push": false,
+    "production": false
+  },
+  "environment": {
+    "os": "darwin",
+    "arch": "arm64",
+    "git_commit": "...",
+    "tool_versions": {},
+    "lockfile_hashes": {}
+  },
+  "prior_attempt": {
+    "failure_class": "validator_failed",
+    "failure_fingerprint": "...",
+    "evidence_refs": ["ev_..."]
+  },
+  "required_output_schema": "xgoal.agent-result/v1alpha1"
+}
+```
+
+### 13.2 Prompt 合同
+
+Prompt 只负责告诉 Agent：
+
+- 当前角色与 Work Packet 路径。
+- 只处理该 Work Item，不重定义 Goal。
+- 遵守写 Scope 和权限。
+- 在不确定或需要禁止动作时返回 `blocked`。
+- 不声称未实际执行的检查通过。
+- 最终严格输出指定 Schema。
+
+项目 AGENTS/AutoGo Skills 由原生 Agent 按其机制读取；xgoal 不把所有规则重复注入 Prompt。
+
+### 13.3 包哈希
+
+```text
+packet_hash = SHA256(canonical_packet_json)
+```
+
+Attempt、Agent Event、Result 和 Evidence 都保存 `packet_hash`，避免输入与结果失配。
+
+---
+
+## 14. Workspace 与 Git 模型
+
+### 14.1 分支模型
+
+```text
+user base branch (read only to xgoal v0.1)
+          │
+          └── xgoal/<goal-id>/integration
+                     ├── attempt worktree A (disposable)
+                     ├── attempt worktree B (disposable)
+                     └── validation worktree (clean replay)
+```
+
+- xgoal 不直接写用户当前 checkout。
+- 创建私有 Integration Branch，起点为 Goal 创建时记录的 Base Commit。
+- 默认不自动同步用户 Base Branch 的后续变化；检测到漂移时创建 Rebase/Goal Gate。
+- v0.1 不 push Integration Branch。
+
+### 14.2 Attempt Workspace 创建
+
+1. 记录 `WorkspaceCreateRequested` Effect。
+2. 使用固定基础 Commit 创建 worktree。
+3. 验证 `git rev-parse HEAD`、Git Common Dir 和工作目录。
+4. 写入 workspace marker：Attempt ID、Base Commit、Config Hash；marker 位于运行目录而不是业务仓库可提交范围。
+5. 记录实际路径与 Tree，Effect `SUCCEEDED`。
+
+### 14.3 不信任 Agent Git 历史
+
+Agent 可能提交、reset、rebase 或修改索引，因此：
+
+- xgoal 不直接 cherry-pick Agent 创建的 Commit。
+- Attempt 结束后读取实际文件系统和 Git 状态。
+- 验证当前 worktree 仍属于预期 Git Common Dir。
+- 基于记录的 Base Tree 捕获 tracked、untracked、deleted、renamed、binary 和 symlink 变化。
+- 明确拒绝 `.git`、Git Common Dir、其他 worktree、子模块元数据和范围外路径变化。
+- 生成 `Patch Manifest` 和内容哈希。
+
+### 14.4 Patch Manifest
+
+```json
+{
+  "attempt_id": "att_...",
+  "base_commit": "...",
+  "base_tree": "...",
+  "entries": [
+    {
+      "path": "internal/lease/lease.go",
+      "kind": "modified",
+      "mode_before": "100644",
+      "mode_after": "100644",
+      "content_hash": "..."
+    }
+  ],
+  "patch_file": "patches/att_....patch",
+  "patch_hash": "..."
+}
+```
+
+### 14.5 干净重放
+
+- Validation Workspace 重置到当前 Integration HEAD。
+- 应用 Patch；任何冲突都形成 `PATCH_STALE_OR_CONFLICT`。
+- 再次计算 Tree 和 Scope。
+- 仅在该干净 Tree 上运行受信 Validator。
+- Agent Workspace 的构建产物和未声明缓存不能作为最终通过依据。
+
+### 14.6 Promotion
+
+1. 获取项目级 Integration Lock。
+2. 将 Validation Workspace 重置到最新 Integration HEAD。
+3. 重放 Patch；如基础变化导致冲突，退出到 Reconcile。
+4. 运行 Item Validator 和影响范围 Validator。
+5. 检查 Blocker Finding 与 Gate。
+6. 由 xgoal 创建 Commit，包含 Trailer：
+
+```text
+XGoal-Goal: goal_...
+XGoal-Goal-Revision: 3
+XGoal-Work-Item: work_...
+XGoal-Attempt: att_...
+XGoal-Evidence-Set: evset_...
+```
+
+7. 记录新 Integration Commit/Tree 和 `PromotionObserved`。
+8. Work Item 才可进入 `COMPLETED`。
+
+若崩溃发生在 Git Commit 已创建但 DB 未更新，恢复流程通过 Commit Trailer 和 Tree 读回，幂等完成状态写回，不重复提交。
+
+---
+
+## 15. 环境管理
+
+### 15.1 Environment Provider 接口
+
+```go
+type Provider interface {
+    Probe(ctx context.Context, project Project) (EnvironmentCapabilities, error)
+    Prepare(ctx context.Context, spec EnvironmentSpec) (EnvironmentHandle, error)
+    Snapshot(ctx context.Context, h EnvironmentHandle) (EnvironmentSnapshot, error)
+    StartServices(ctx context.Context, h EnvironmentHandle, services []ServiceSpec) error
+    StopServices(ctx context.Context, h EnvironmentHandle) error
+    Cleanup(ctx context.Context, h EnvironmentHandle) error
+}
+```
+
+v0.1：`local-process`。  
+v0.2：`container`/`devcontainer`。
+
+### 15.2 环境快照
+
+至少记录：
+
+- OS、Kernel、Arch。
+- Git 版本与 Base Commit/Tree。
+- Codex/Claude CLI 版本和能力。
+- 项目工具链版本，如 Go、Node、Python、Docker。
+- 锁文件路径与哈希。
+- `xgoal.yaml`、受信脚本和 Goal Revision 哈希。
+- 环境变量名称清单；敏感值不记录。
+- 容器镜像 Digest（Container Provider）。
+- bootstrap/service 命令及结果。
+
+### 15.3 Bootstrap 与服务
+
+- 命令来自受信配置，使用 argv 形式。
+- 每个命令具有 timeout、cwd、env allowlist 和 expected exit codes。
+- 后台服务由 Supervisor 管理 PID/进程组、健康探针、日志和停止策略。
+- 服务健康不是通过“进程仍存在”判断，而是通过配置的 Probe。
+- 失败形成 Evidence 并触发 Environment Reconcile。
+
+### 15.4 缓存
+
+- 缓存位于 Workspace 外部，并按 Project、工具链和锁文件哈希分区。
+- 默认不共享可变构建目录。
+- 并行安全性不明确的缓存加互斥锁或改为 Attempt 私有。
+- 缓存命中不得绕过最终 Validator。
+
+### 15.5 隔离等级
+
+| 等级 | Provider | 能力 | 适用范围 |
+|---|---|---|---|
+| L0 | local process | worktree 隔离、环境白名单、Agent 原生权限策略 | 可信仓库；v0.1 |
+| L1 | local container | 文件挂载、网络 namespace、资源限制、临时凭据 | 不完全可信代码；v0.2 |
+| L2 | remote sandbox | VM/容器隔离、短期身份、网络出口策略 | 团队/云端；后续 |
+
+状态和报告必须显示实际等级。L0 不能声称硬性阻断所有网络或用户主目录访问。
+
+---
+
+## 16. Validator 与 Evidence
+
+### 16.1 Validator 类型
+
+| 类型 | 示例 | 权威性 |
+|---|---|---|
+| scope | 修改路径、文件数量、禁止目录、测试是否被删除 | 确定性 |
+| command | `go test ./...`、构建、Lint、迁移 dry-run | 确定性 |
+| file_assertion | 文件存在、JSON/YAML Schema、生成物哈希 | 确定性 |
+| runtime_probe | HTTP、端口、进程、数据库、CLI 行为 | 确定性观测 |
+| git_assertion | Tree、diff、冲突、未跟踪文件、Commit Trailer | 确定性 |
+| review | Reviewer Finding | 概率分析，只用于发现风险 |
+| human | Gate Decision、业务验收 | 显式决策 |
+
+### 16.2 Validator Definition
+
+```yaml
+- id: go-test-all
+  type: command
+  phase: [change, final]
+  argv: ["go", "test", "./..."]
+  cwd: "."
+  timeout: 20m
+  expected_exit_codes: [0]
+  env:
+    allow: ["GOCACHE", "GOMODCACHE"]
+  required: true
+  flaky:
+    enabled: false
+```
+
+复杂逻辑使用仓库中受审查脚本：
+
+```yaml
+argv: ["./scripts/xgoal/verify-recovery.sh"]
+```
+
+禁止：
+
+```yaml
+command: "${AGENT_SUGGESTED_COMMAND} && ..."
+```
+
+### 16.3 Validator 信任规则
+
+- 注册来源必须是当前 Goal Base 中已存在的 `xgoal.yaml` 或受信脚本。
+- Agent 对 Validator 的修改会被 Scope/Policy 识别；默认创建 Human Gate。
+- Validator Definition 的 Canonical Hash 是 Evidence 的一部分。
+- 未知、缺失或不可运行的 Required Validator 不是 Pass，而是 `UNAVAILABLE`，阻止完成。
+
+### 16.4 Command Receipt
+
+```json
+{
+  "validator_run_id": "vrun_...",
+  "validator_id": "go-test-all",
+  "definition_hash": "...",
+  "goal_revision_hash": "...",
+  "tree_hash": "...",
+  "argv": ["go", "test", "./..."],
+  "cwd": ".",
+  "environment_hash": "...",
+  "started_at": "...",
+  "finished_at": "...",
+  "exit_code": 0,
+  "stdout_ref": "logs/vrun_....stdout",
+  "stderr_ref": "logs/vrun_....stderr",
+  "output_hash": "...",
+  "result": "PASSED"
+}
+```
+
+### 16.5 Evidence 生命周期
+
+Evidence 状态：
+
+```text
+CURRENT | STALE | SUPERSEDED | INVALID
+```
+
+以下变化使 Evidence 过期：
+
+- Goal Revision 改变且影响对应 Criteria。
+- Subject Tree 改变。
+- Validator Definition/脚本改变。
+- 环境策略或关键工具链改变。
+- Human Decision 过期或被撤销。
+
+Evidence Store 不删除旧证据；Final Report 默认展示 Current，并可追溯历史。
+
+### 16.6 Acceptance Criterion 映射
+
+每个 Criteria 维护：
+
+```text
+Criterion → Required Validator Definition(s)
+          → Current Validator Run(s)
+          → Evidence Set
+          → Satisfied | Unsatisfied | Unknown
+```
+
+`Unknown` 与 `Failed` 均不能完成。没有可执行 Validator 的 Criteria 必须显式要求 Human Acceptance。
+
+---
+
+## 17. Reviewer 与 Finding
+
+### 17.1 Reviewer 输入
+
+Reviewer 使用独立只读会话，并接收：
+
+- Goal Revision 和当前 Work Item。
+- 实际 Patch Manifest 与 Diff，而非 Implementer 的摘要。
+- Validator Definition 和实际结果。
+- 受影响模块与已知风险。
+- 明确要求检查：目标遗漏、错误假设、边界条件、回归、测试不足、范围违规和安全风险。
+
+### 17.2 Finding Schema
+
+```json
+{
+  "review_status": "approved|changes_requested|blocked",
+  "findings": [
+    {
+      "id": "client-finding-1",
+      "severity": "blocker|high|medium|low|note",
+      "category": "correctness|regression|test_gap|scope|security|maintainability",
+      "path": "internal/lease/lease.go",
+      "line": 128,
+      "claim": "Lease 过期后可能在旧 Worker 仍运行时重复调度",
+      "basis": "缺少外部进程读回与 fencing generation 检查",
+      "recommended_fix": "在重新认领前校验 PID/Generation，并拒绝旧结果写回"
+    }
+  ],
+  "suggested_validators": []
+}
+```
+
+### 17.3 Finding 状态
+
+```text
+OPEN → RESOLVED_BY_PATCH
+     → DISPROVED_BY_EVIDENCE
+     → WAIVED_BY_HUMAN
+     → SUPERSEDED
+```
+
+- Blocker/High 默认阻止 Promotion，策略可配置。
+- `approved` 且无 Finding 只表示 Reviewer 没发现问题，不证明正确。
+- Reviewer 建议的新 Validator 需要受信配置变更流程。
+
+---
+
+## 18. Reconcile Engine
+
+### 18.1 输入
+
+- Goal/Plan/Work Item 当前版本。
+- Attempt Result、Agent Events、Patch Manifest。
+- Validator Runs、Review Findings、Environment Evidence。
+- Lease、Budget、Policy 和历史 Failure Fingerprint。
+
+### 18.2 Failure Class
+
+```text
+AGENT_UNAVAILABLE
+AGENT_PROTOCOL_INVALID
+AGENT_TIMEOUT
+AGENT_INTERRUPTED
+ENVIRONMENT_PREP_FAILED
+SCOPE_VIOLATION
+PATCH_EMPTY
+PATCH_CONFLICT
+VALIDATOR_FAILED
+VALIDATOR_UNAVAILABLE
+REVIEW_BLOCKED
+GOAL_AMBIGUOUS
+POLICY_BLOCKED
+BUDGET_EXHAUSTED
+NO_MATERIAL_PROGRESS
+INTERNAL_INVARIANT_VIOLATION
+```
+
+### 18.3 Failure Fingerprint
+
+```text
+fingerprint = SHA256(
+  failure_class
+  + normalized_primary_error
+  + validator_definition_hash
+  + base_tree
+  + result_tree
+  + goal_revision_hash
+  + relevant_config_hash
+)
+```
+
+归一化时去除时间戳、随机端口、临时路径和非语义日志噪声。
+
+### 18.4 实质进展判定
+
+```go
+func MaterialProgress(prev, curr Snapshot) bool {
+    return curr.AcceptedPatchHash != prev.AcceptedPatchHash ||
+        curr.ValidatorOutcomeSetHash != prev.ValidatorOutcomeSetHash ||
+        curr.ResolvedGateSetHash != prev.ResolvedGateSetHash ||
+        curr.OpenBlockingFindingSetHash != prev.OpenBlockingFindingSetHash ||
+        curr.PlanRevision != prev.PlanRevision ||
+        curr.NewAuthoritativeEvidence
+}
+```
+
+Agent 新增解释文本、重复相同 Patch 或产生同一失败输出不算进展。
+
+### 18.5 决策表
+
+| 条件 | 默认动作 |
+|---|---|
+| Agent 协议瞬时错误，未产生副作用，未超预算 | 新 Attempt；可切换 Adapter/Profile |
+| 环境缺少受信依赖 | 运行受信 bootstrap；仍失败则 Gate |
+| Scope Violation | Quarantine；把违规路径和策略反馈给新 Fix Attempt |
+| Validator Failed 且有新 Patch/新失败事实 | 创建 Fix Attempt，附失败 Evidence |
+| 同一 Fingerprint 且无实质进展 | 禁止相同重试；诊断、拆分、切换策略或 Gate |
+| Reviewer Blocker | 创建 Fix Work Item 或 Human Waiver Gate |
+| Patch 与最新 Integration 冲突 | 创建 Rebase/Fix Attempt，不直接覆盖 |
+| Goal/Acceptance 歧义 | Goal Revision Gate |
+| Budget 耗尽 | `WAITING(BUDGET)`；人类扩额、降范围或取消 |
+| 内部不变量破坏 | 停止项目写循环，生成高优先级系统 Gate 与诊断包 |
+
+### 18.6 Replan
+
+Replan 可以由 Planner 提议，但 Kernel 必须：
+
+- 保存旧 Plan Revision。
+- 说明触发证据和无法继续的原因。
+- 对完成节点、运行节点和旧 Evidence 做影响分析。
+- 校验新图和范围。
+- 需要改变 Goal Contract 时先走 Goal Revision Gate。
+
+---
+
+## 19. Policy 与 Human Gate
+
+### 19.1 Policy 动作模型
+
+```text
+READ_FILE
+WRITE_FILE
+EXEC_COMMAND
+ACCESS_NETWORK
+READ_ENV
+USE_SECRET
+MODIFY_VALIDATOR
+MODIFY_GIT_HISTORY
+PUSH_REMOTE
+PUBLISH_ARTIFACT
+DEPLOY_PRODUCTION
+DELETE_EXTERNAL_DATA
+EXPAND_SCOPE
+```
+
+Decision：
+
+```text
+ALLOW | DENY | REQUIRE_GATE
+```
+
+### 19.2 角色默认策略
+
+| 动作 | Planner | Implementer | Reviewer | xgoal Validator/Promotion |
+|---|---|---|---|---|
+| 读取项目 | Allow | Allow | Allow | Allow |
+| 写业务工作区 | Deny | Scope 内 Allow | Deny | 仅验证/集成工作区 Allow |
+| 网络 | Deny | Deny | Deny | Deny；显式 Gate 后有限开放 |
+| 密钥 | Deny | Deny | Deny | 临时、最小范围且 Gate |
+| Git Push | Deny | Deny | Deny | v0.1 Deny |
+| 修改 Validator | Propose only | Gate | Propose only | 按批准配置执行 |
+| 生产操作 | Deny | Deny | Deny | v0.1 Deny |
+
+### 19.3 Gate 数据
+
+```json
+{
+  "gate_id": "gate_...",
+  "goal_id": "goal_...",
+  "work_item_id": "work_...",
+  "reason_code": "NETWORK_REQUIRED",
+  "facts": [],
+  "unknowns": [],
+  "options": [
+    {
+      "id": "deny-and-replan",
+      "impact": "使用本地替代或取消相关范围"
+    },
+    {
+      "id": "allow-once",
+      "impact": "仅允许指定域名和命令，30 分钟后过期"
+    }
+  ],
+  "recommendation": "allow-once",
+  "requested_capability": {
+    "action": "ACCESS_NETWORK",
+    "scope": ["proxy.golang.org"],
+    "expires_in": "30m"
+  }
+}
+```
+
+### 19.4 授权约束
+
+Gate Decision 必须绑定：
+
+- Goal/Work Item/Attempt。
+- 明确动作和资源 Scope。
+- 有效期和最大次数。
+- 决策人、时间和理由。
+- 可撤销标识。
+
+不得把一次授权升级为全局永久权限。
+
+---
+
+## 20. Budget
+
+### 20.1 预算维度
+
+- Goal 总 Attempt 数。
+- 单 Work Item Attempt 数。
+- Agent Turn/Session 数。
+- 墙钟时间。
+- 并发数。
+- token 使用量（供应商可提供时）。
+- 费用估算（供应商可提供且口径明确时）。
+- Validator 总时长和单次超时。
+- Workspace/日志磁盘占用。
+
+### 20.2 执行规则
+
+- 调度前检查硬预算。
+- Agent 结束后基于真实 Usage 更新消耗；未知值标记 `unknown`，不填 0。
+- 达到 Soft Limit 时生成 Attention Event；达到 Hard Limit 时不启动新 Attempt。
+- 已在执行的 Attempt 是否取消由 Budget Policy 决定。
+- 增加预算走 Human Gate，并记录增量和原因。
+- 预算只限制资源，不能让未通过验证的任务被标记完成。
+
+---
+
+## 21. Completion Predicate
+
+### 21.1 形式定义
+
+对当前 Goal Revision `G` 和最终集成 Tree `T`：
+
+```text
+Complete(G, T) :=
+    GoalState(G) = VERIFYING
+    ∧ ∀ w ∈ RequiredWork(G): State(w) = COMPLETED
+    ∧ T = CurrentIntegrationTree(G)
+    ∧ ∀ c ∈ AcceptanceCriteria(G): Satisfied(c, G, T) = true
+    ∧ OpenBlockingFindings(G, T) = ∅
+    ∧ OpenRequiredGates(G) = ∅
+    ∧ ScopePolicyPassed(G, T)
+    ∧ FinalValidationSetIsCurrent(G, T)
+    ∧ FinalReportGenerated(G, T)
+    ∧ HumanAcceptanceSatisfiedWhenRequired(G)
+```
+
+### 21.2 事务
+
+完成流程：
+
+1. 获取 Goal Completion Lock。
+2. 固定当前 Integration Commit/Tree。
+3. 创建干净 Final Validation Workspace。
+4. 执行所有 Final Required Validators。
+5. 重查 Work、Finding、Gate、Policy、Evidence Staleness。
+6. 生成报告到临时文件并计算哈希。
+7. 在一个 DB 事务中写 `COMPLETED`、Final Tree、Evidence Set、Report Hash 和 Event。
+8. 原子 rename 报告文件；若文件步骤未知，恢复时按哈希读回。
+
+任何检查变化都回到 `RUNNING` 或 `WAITING`，不能保留半完成状态。
+
+---
+
+## 22. 外部 Effect 与崩溃恢复
+
+### 22.1 为什么需要 Effect Interpreter
+
+数据库事务无法覆盖以下外部动作：
+
+- 创建/删除 worktree。
+- 启动/杀死 Agent 进程。
+- 运行 Validator。
+- 写 Patch/报告文件。
+- 创建 Git Commit。
+
+因此每个动作采用：
+
+```text
+记录请求 → 执行动作 → 读取外部事实 → 记录观测结果 → 推进领域状态
+```
+
+### 22.2 Effect Key
+
+```text
+<project>/<goal>/<work>/<attempt>/<effect-type>/<generation>
+```
+
+相同 Key 的 Effect 不得创建第二个不可区分副作用。
+
+### 22.3 恢复矩阵
+
+| 崩溃点 | 重启读回 | 处理 |
+|---|---|---|
+| Lease 已写，Attempt 未启动 | Attempt/Effect/PID 不存在 | 继续启动或释放 Lease，按同一幂等键 |
+| Agent 已启动，DB 未记录 PID | marker、进程组、日志头 | 绑定到原 Attempt；无法确认则停止并进入 Interrupted |
+| Agent 已退出，结果未写回 | stdout/stderr、exit marker、session ID | 重新解析；再独立捕获 Patch 和验证 |
+| Patch 已生成，Evidence 未写 | Patch Manifest 与哈希 | 校验后补写，不重新让 Agent 修改 |
+| Validator 已运行，DB 未更新 | receipt 文件、tree/config hash | 读回并补写；哈希不匹配则重新运行 |
+| Git Commit 已创建，DB 未更新 | Integration HEAD、Commit Trailer、Tree | 幂等关联原 Attempt，不重复 Commit |
+| DB 标记 Promotion，Git 未变化 | 读回 Tree 不匹配 | 标记 Effect Failed，回到 Reconcile |
+| Goal 已完成，报告 rename 前崩溃 | DB report hash、临时文件 | 校验并完成 rename，或重建同哈希报告 |
+
+### 22.4 启动恢复顺序
+
+1. 获取单写者锁。
+2. 校验 DB Schema 和不变量。
+3. 扫描 `REQUESTED/EXECUTING/OBSERVING` Effect。
+4. 核对 worktree 注册、PID/进程组、日志、Patch、Commit 和报告。
+5. 回收已确认无主的 Lease；拒绝旧 Generation 的迟到结果。
+6. 更新 Derived Readiness。
+7. 恢复调度。
+
+旧 Worker 写回必须携带 Lease ID 和 Generation；不匹配时结果只能进入 Quarantine Evidence，不能推进状态。
+
+---
+
+## 23. Local API 与 CLI
+
+### 23.1 API 传输
+
+- HTTP/1.1 + JSON over Unix Domain Socket。
+- Socket 权限 `0600`；校验当前用户 UID。
+- 所有写请求使用 `Idempotency-Key`。
+- `status --watch` 使用 NDJSON Event Stream；断线后通过 `after_event_id` 继续。
+
+### 23.2 主要 Endpoint
+
+```text
+POST   /v1/projects/init
+POST   /v1/goals
+GET    /v1/goals/{id}
+POST   /v1/goals/{id}/pause
+POST   /v1/goals/{id}/resume
+POST   /v1/goals/{id}/cancel
+POST   /v1/goals/{id}/replan
+GET    /v1/goals/{id}/work-items
+GET    /v1/goals/{id}/events
+GET    /v1/goals/{id}/gates
+POST   /v1/gates/{id}/decisions
+GET    /v1/attempts/{id}/logs
+POST   /v1/work-items/{id}/retry
+GET    /v1/goals/{id}/report
+POST   /v1/projects/{id}/clean
+```
+
+### 23.3 CLI 退出码
+
+```text
+0  命令成功；不代表 Goal 一定 Completed
+2  用户输入/配置错误
+3  Goal 处于 Waiting/Human Gate
+4  Goal Cancelled
+5  内部不变量或状态存储错误
+6  Agent/环境/Validator 不可用
+7  权限或 Policy 拒绝
+```
+
+`xgoal run --wait` 可以在 Goal Completed 时退出 0，在 Waiting 时退出 3；默认 `run` 只负责创建并启动，不把“已接受任务”误写为“已完成目标”。
+
+---
+
+## 24. 配置设计
+
+### 24.1 示例 `xgoal.yaml`
+
+```yaml
+apiVersion: xgoal.dev/v1alpha1
+kind: Project
+
+metadata:
+  name: xgoal
+
+project:
+  baseBranch: main
+  trustedRepository: true
+  harness:
+    type: autogo
+    required: false
+
+orchestration:
+  defaultMode: standard
+  maxParallel: 1
+  leaseTTL: 90s
+  heartbeatInterval: 20s
+  noProgressLimit: 2
+  integrationBranchPrefix: xgoal/
+
+agents:
+  - id: codex-implementer
+    adapter: codex-cli
+    command: codex
+    roles: [implementer]
+    timeout: 45m
+    sandbox: workspace-write
+    environmentAllowlist: [PATH, HOME, TMPDIR, GOCACHE, GOMODCACHE]
+
+  - id: claude-reviewer
+    adapter: claude-cli
+    command: claude
+    roles: [planner, reviewer]
+    timeout: 30m
+    permissionMode: dontAsk
+    allowedTools: [Read, Glob, Grep, Bash]
+    environmentAllowlist: [PATH, HOME, TMPDIR]
+
+workspace:
+  provider: git-worktree
+  keepFailed: true
+  cleanupCompletedAfter: 168h
+
+runtime:
+  provider: local-process
+  isolationLevelRequired: L0
+  network: deny
+  secrets: deny
+
+scopePolicy:
+  deny:
+    - /.git/**
+    - /.env
+    - /**/credentials*
+  validatorChanges: human-gate
+
+bootstrap:
+  commands:
+    - id: go-download
+      argv: [go, mod, download]
+      timeout: 15m
+      network: require-gate
+
+validators:
+  - id: gofmt-check
+    type: command
+    phases: [change, final]
+    argv: [./scripts/xgoal/gofmt-check.sh]
+    timeout: 2m
+    required: true
+
+  - id: go-test-all
+    type: command
+    phases: [change, final]
+    argv: [go, test, ./...]
+    timeout: 20m
+    required: true
+
+  - id: go-race
+    type: command
+    phases: [final]
+    argv: [go, test, -race, ./...]
+    timeout: 40m
+    required: true
+
+review:
+  requiredInStandard: true
+  blockSeverities: [blocker, high]
+  requireIndependentSession: true
+  preferDifferentProvider: true
+
+policy:
+  gitPush: deny
+  publishArtifact: deny
+  production: deny
+  destructiveCommands: human-gate
+  expandScope: human-gate
+
+budget:
+  maxAttemptsPerWorkItem: 3
+  maxAttemptsPerGoal: 40
+  maxWallTime: 8h
+  maxValidatorTime: 3h
+  maxCostUSD: 25
+  onUnknownCost: allow-with-attention
+
+report:
+  formats: [markdown, json]
+  includeAgentRawLogs: false
+  includeReproductionCommands: true
+```
+
+### 24.2 配置安全
+
+- 解析后生成 Canonical Config Hash。
+- YAML 禁止重复 Key；未知字段默认报错，避免拼写导致策略失效。
+- 路径全部相对项目 Root，并做 symlink/`..` 逃逸检查。
+- 命令使用 argv 数组；复杂 shell 逻辑放入受版本控制脚本。
+- Agent Profile 的环境变量仅按名称白名单传递；敏感值需要 Gate/Secret Provider。
+- 运行中配置变化触发新 Config Revision，并评估对 Evidence 和 Attempt 的影响。
+
+---
+
+## 25. 安全与威胁模型
+
+### 25.1 威胁主体
+
+- 产生错误或越界行为的 Agent。
+- 仓库中恶意/误导性的 AGENTS、脚本、依赖和测试。
+- 被污染的 Agent CLI 输出或结构化事件。
+- 崩溃后重复执行外部副作用。
+- 日志中的密钥、源码和个人信息泄露。
+- 用户误授权范围过大。
+
+### 25.2 核心防护
+
+- Agent 子进程按不可信执行器处理。
+- 不使用 Agent 输出构造 Kernel SQL、路径、状态或任意 shell 命令。
+- Work Packet、Result 和配置均做 Schema 验证和大小限制。
+- 路径规范化并校验处于预期 worktree；拒绝 symlink 逃逸。
+- Agent 工作区不直接晋升；必须干净重放和复验。
+- Lease Generation 防止迟到 Worker 写回。
+- 默认不传密钥；环境变量日志只记录名称或脱敏值。
+- 日志、Packet、Patch、DB 和 Socket 使用当前用户权限，默认文件模式 `0600`、目录 `0700`。
+- 远端 push、生产、发布和 destructive action 在 v0.1 硬禁止或 Gate。
+- Validator 由受信配置提供，不能由模型临时注入。
+
+### 25.3 本地进程 Provider 的诚实边界
+
+仅依赖 Codex/Claude 自身 sandbox、工具白名单和环境清理，无法在所有平台上硬性阻止 Agent 读取用户主目录或访问网络。因此：
+
+- v0.1 必须要求 `trustedRepository: true`。
+- `xgoal doctor` 显示 `isolation=L0` 和限制。
+- 对不可信仓库、未知 Hook、可执行安装脚本生成警告或 Gate。
+- 强安全场景必须等待 v0.2 Container Provider，不以文档声明替代 OS 隔离。
+
+### 25.4 日志与保留
+
+- 原始 Prompt/Agent Event 默认仅本地保存，权限 `0600`。
+- 支持对路径、Token、Authorization Header、常见 Secret Pattern 脱敏。
+- 大输出截断只影响展示，原始文件按策略保留并哈希。
+- `xgoal clean` 遵守 Evidence 引用计数和保留策略；正在使用或 Final Report 引用的文件不删除。
+
+---
+
+## 26. 可观测性
+
+### 26.1 结构化日志
+
+使用 `slog`，字段至少包括：
+
+```text
+project_id, goal_id, goal_revision, plan_revision,
+work_item_id, attempt_id, lease_id, effect_id,
+agent_profile, role, workspace_id, validator_run_id,
+event_type, state_before, state_after, correlation_id
+```
+
+### 26.2 事件类别
+
+```text
+GoalDrafted / GoalRevisionFrozen / PlanActivated
+WorkReady / LeaseAcquired / AttemptStarted / AgentEventObserved
+PatchCaptured / ValidationStarted / ValidationFinished
+ReviewFindingOpened / GateOpened / GateDecided
+AttemptReconciled / PromotionCommitted
+FinalValidationFinished / GoalCompleted / GoalCancelled
+InvariantViolation / RecoveryAction
+```
+
+### 26.3 状态摘要
+
+`status` 的摘要由数据库事实计算，不由 LLM 生成。可选自然语言说明必须清楚标记为 Summary，并附事实链接。
+
+### 26.4 指标
+
+本地 Prometheus Exporter 属于 P1；v0.1 至少在报告中计算：
+
+- Goal/Work/Attempt 数量和耗时。
+- 成功/失败/超时/中断分布。
+- Failure Fingerprint 重复次数。
+- Validator 通过率、Flaky 重跑次数。
+- Human Gate 和等待时间。
+- 恢复动作、过期 Lease、迟到结果。
+- token/费用（可用时）。
+
+---
+
+## 27. 测试策略
+
+### 27.1 测试金字塔
+
+1. **领域单元测试**：状态机、Completion Predicate、Scope、Budget、Failure Fingerprint。
+2. **属性/模型测试**：随机事件序列下不出现非法状态、重复 Lease 和终态回退。
+3. **Store 测试**：事务、CAS、迁移、WAL、并发读写、数据库损坏处理。
+4. **Fake Adapter 集成测试**：可脚本化输出、超时、截断 JSON、迟到事件和崩溃。
+5. **Git Workspace 测试**：tracked/untracked/binary/symlink/rename/submodule/冲突/Agent 自建 Commit。
+6. **Validator 测试**：超时、输出限制、flaky、脚本变化、Evidence 过期。
+7. **Adapter Contract 测试**：针对支持的 Codex/Claude CLI 版本运行最小无副作用任务。
+8. **端到端测试**：Goal→Plan→Attempt→Review→Promotion→Final Report。
+9. **故障注入测试**：每个 Effect 边界 kill -9 后恢复。
+10. **基准测试**：与原生 Agent、AutoGo 单 Agent 比较。
+
+### 27.2 必测不变量
+
+- 同一 Work Item 最多一个 Active Lease。
+- 旧 Lease Generation 的结果不能推进当前状态。
+- Agent exit 0 但无有效 Result/证据时不能完成。
+- 验证通过后修改 Tree，旧 Evidence 自动失效。
+- Blocker Finding、Required Gate 或 Unknown Criteria 存在时不能完成。
+- Agent 修改范围外文件时 Patch 不会进入 Integration。
+- Promotion 崩溃恢复不会产生重复 Commit。
+- Goal 完成后状态不可回退。
+- 取消不会删除审计历史。
+- 相同 Failure Fingerprint 且无实质进展时不无限重试。
+
+### 27.3 故障注入场景
+
+| 场景 | 期望结果 |
+|---|---|
+| SQLite Commit 前 kill | 状态和 Event 均不存在；安全重试 |
+| SQLite Commit 后、Agent 启动前 kill | 恢复同一 Effect/Attempt，不重复创建 |
+| Agent 运行中 kill Daemon | 重启读回进程；安全绑定或终止并标记 Interrupted |
+| Agent stdout JSONL 截断 | Attempt `INVALID_OUTPUT`；Patch 仍独立检查，不宣称成功 |
+| Validator Pass 后 kill | Receipt 读回并校验哈希；不盲目重复或丢失 |
+| Git Commit 后 kill | 通过 Trailer/Tree 恢复 Promotion |
+| 同一任务两个 Scheduler 竞争 | 只有一个 CAS 成功 |
+| 旧 Worker 延迟写回 | Generation 不匹配，进入 Quarantine |
+| Final Report 临时文件存在 | 按 Hash 原子完成或重建 |
+
+### 27.4 Adapter 测试策略
+
+- CI 默认使用录制的脱敏 Event Fixtures 和 Stub CLI，不要求真实账号。
+- 可选 Nightly/Manual Job 使用真实 Codex、Claude CLI 做兼容性验证。
+- Probe 结果保存版本；未通过兼容测试的版本显示 `unsupported` 或 `degraded`。
+- 解析器对未知字段前向兼容，对缺少关键字段 Fail Closed。
+
+### 27.5 Go 工程质量
+
+建议发布门禁：
+
+```text
+gofmt check
+go vet ./...
+go test ./...
+go test -race ./...
+static analysis（项目选定工具）
+recovery fault suite
+adapter fixture contract tests
+```
+
+实际命令以仓库 `xgoal.yaml` 中受信 Validator 为准。
+
+---
+
+## 28. Benchmark 设计
+
+### 28.1 对照组
+
+- A：原生单 Agent CLI，给定同一 Goal 和资源上限。
+- B：AutoGo 治理下单 Agent。
+- C：xgoal Standard。
+
+### 28.2 任务类别
+
+| 类别 | 示例验收 |
+|---|---|
+| Bug Fix | 复现测试先失败，修复后通过，回归集通过 |
+| Feature | API/CLI 行为、单测、集成测试和文档 |
+| Refactor | 行为不变、静态检查、性能/兼容约束 |
+| Environment | 从干净环境启动、健康探针、可清理 |
+| Recovery | 中途 kill，恢复后最终状态和代码正确 |
+| Multi-module | 写 Scope、依赖和串行 Promotion 正确 |
+
+### 28.3 公平性
+
+- 固定初始 Commit、工具版本和验收脚本。
+- 相同墙钟、token/费用或 Attempt 上限。
+- 对照组同样不能看隐藏验收答案。
+- 每个任务多次运行，记录方差。
+- 失败和人工介入不能静默排除。
+
+### 28.4 输出
+
+```text
+final_acceptance_pass
+false_completed
+first_attempt_pass
+regression_failures
+human_interventions
+recovery_success
+no_progress_attempt_ratio
+wall_time
+token_usage
+estimated_cost
+```
+
+简历和 README 只引用实际采集、可复现的结果。
+
+---
+
+## 29. 实施阶段
+
+### M0：协议与骨架
+
+- 初始化 Go 项目、CLI、配置 Schema、领域类型。
+- Fake Clock、Fake Adapter、Fake Process、内存 Store。
+- 冻结 Work Packet、Agent Result、Event 和 Evidence v1alpha1 Schema。
+
+**门禁**：核心协议有 Golden Test；无真实 Agent 也能跑模拟闭环。
+
+### M1：状态与控制循环
+
+- SQLite Migration、Repository、Event、CAS、Idempotency。
+- Goal/Work/Attempt/Gate/Lease 状态机。
+- Kernel 调度循环和 Completion Predicate。
+
+**门禁**：状态属性测试、重复 Lease 测试、进程重启恢复测试通过。
+
+### M2：Git、环境与验证
+
+- Git worktree、Patch Manifest、干净重放、Scope Check。
+- Local Environment Provider、Supervisor。
+- Validator Registry、Command Receipt、Evidence Staleness。
+- Promotion Manager。
+
+**门禁**：Agent 自建 Commit、范围逃逸、冲突、Validator 过期和 Promotion 崩溃测试通过。
+
+### M3：Codex Adapter
+
+- Probe、JSONL Parser、结构化输出、sandbox、session resume。
+- Fixture Contract Test 和真实 CLI Smoke Test。
+
+**门禁**：实现一个 Fast Goal 和一个 Standard Implementer Attempt。
+
+### M4：Claude Adapter 与 Review
+
+- Print Mode、Stream JSON、JSON Schema、权限和 resume。
+- Reviewer Packet、Finding、独立会话。
+
+**门禁**：Codex 实现/Claude Review 和 Claude 实现/Codex Review 两条路径通过。
+
+### M5：Reconcile、Gate、Budget、Daemon
+
+- Failure Fingerprint、No-Progress、Replan。
+- Human Gate 与有限授权。
+- Unix Socket API、Daemon、状态流和进程组恢复。
+
+**门禁**：故障注入矩阵和 Gate 安全测试通过。
+
+### M6：Final Report、Benchmark 与发布
+
+- Final Validation、Markdown/JSON Report。
+- Benchmark Suite、对照组执行器。
+- Threat Model、ADR、操作文档、许可证和 Acknowledgements。
+
+**门禁**：产品 SPEC v0.1 发布验收清单全部满足；无虚构指标。
+
+---
+
+## 30. ADR 决策记录
+
+### ADR-001：独立 clean-room 实现
+
+- **选择**：新建 xgoal 仓库，概念借鉴 AutoGo/LoopX，不直接复制 LoopX 当前代码。
+- **原因**：保持产品责任、Go 技术栈、运行状态和许可证边界清晰。
+
+### ADR-002：确定性 Kernel 而非 Manager Agent
+
+- **选择**：所有状态与副作用编排由 Go 代码实现。
+- **原因**：调度和完成判断必须可复现、可测试、可恢复。
+
+### ADR-003：SQLite 当前状态 + Event
+
+- **替代**：纯 Markdown/JSON 文件、完整 Event Sourcing、外部 PostgreSQL。
+- **选择**：SQLite。
+- **原因**：本地事务、CAS、索引和恢复足够；运维成本最低；Event 保留审计而不强迫全量重放。
+
+### ADR-004：Git CLI + worktree + Patch 重放
+
+- **选择**：不信任 Agent Commit，捕获实际 Patch 后在干净 Tree 验证和晋升。
+- **原因**：隔离 Agent 历史操作，保证最终代码和证据绑定。
+
+### ADR-005：v0.1 默认串行
+
+- **选择**：`max_parallel=1`。
+- **原因**：先消除状态漂移、伪完成和恢复风险；并行属于性能优化。
+
+### ADR-006：最小三角色
+
+- **选择**：Planner、Implementer、Reviewer；Validator/Environment 不做 Agent。
+- **原因**：每个角色都对应独立责任，避免组织模拟和复杂拓扑。
+
+### ADR-007：运行 DB 单一真相
+
+- **选择**：不双向同步 `PROGRESS.md`。
+- **原因**：避免 Agent、Markdown 与 DB 的状态竞争；Markdown 只作为报告/投影。
+
+### ADR-008：本地可信仓库优先
+
+- **选择**：v0.1 使用 Local Process Provider，并公开 L0 隔离限制。
+- **原因**：先验证编排闭环；强隔离需要 Container/VM，不能用 Prompt 伪装实现。
+
+---
+
+## 31. 许可证与第三方兼容
+
+- AutoGo 采用 MIT License。
+- LoopX 当前主分支采用 Apache-2.0，并保留早期版本 MIT 历史说明。
+- xgoal 推荐清洁实现，并在 `ACKNOWLEDGEMENTS.md` 中注明设计启发。
+- 若复制 LoopX 当前代码，必须保留 Apache-2.0 许可证、NOTICE 和归属；不要把历史 MIT 说明误认为当前全部代码可直接按 MIT 使用。
+- xgoal 自有代码在未复制受限代码的前提下可选择 MIT 或 Apache-2.0；从基础设施项目和明确专利条款考虑，建议评估 Apache-2.0。
+- 依赖必须维护 SBOM/依赖清单、许可证扫描和版本固定。本节不是法律意见。
+
+---
+
+## 32. 技术验收标准
+
+### 32.1 状态与恢复
+
+- [ ] Goal、Work、Attempt、Lease、Gate、Evidence 状态机有单元和属性测试。
+- [ ] 同一 Work Item 不存在两个 Active Lease。
+- [ ] 任一 Effect 边界崩溃后可恢复为确定状态。
+- [ ] 迟到 Worker 无法用旧 Generation 覆盖状态。
+- [ ] SQLite 迁移失败时 Fail Closed，并保留备份。
+
+### 32.2 Agent Adapter
+
+- [ ] Codex 与 Claude Adapter 均支持 Probe、Start、Wait、Cancel 和安全 Resume。
+- [ ] 结构化输出 Schema 错误会进入 `INVALID_OUTPUT`。
+- [ ] 未知事件前向兼容且保留原始记录。
+- [ ] Agent exit 0 不会绕过 Patch 捕获与 Validator。
+- [ ] 角色权限和工作目录由 xgoal 设置，不能由 Agent 输出覆盖。
+
+### 32.3 Git 与环境
+
+- [ ] 每个 Attempt 独立 worktree。
+- [ ] tracked/untracked/binary/rename/symlink 变化均能归因。
+- [ ] `.git`、范围外路径和软链接逃逸被拒绝。
+- [ ] Agent Commit 不被直接信任。
+- [ ] Patch 在最新 Integration Tree 干净重放并复验。
+- [ ] Promotion 崩溃不会重复 Commit。
+
+### 32.4 验证与完成
+
+- [ ] Required Validator 只来自受信配置。
+- [ ] Evidence 绑定 Goal Revision、Config Hash、Validator Hash 和 Tree。
+- [ ] Tree 或 Validator 变化使旧 Evidence 过期。
+- [ ] Blocker、Gate、Unknown Criterion 阻止完成。
+- [ ] Final Validation 在最终 Integration Tree 上执行。
+- [ ] Final Report 可逐条追溯 Criteria→Evidence。
+
+### 32.5 安全与透明
+
+- [ ] 默认禁止 push、生产、发布、密钥和未授权网络。
+- [ ] `doctor/status/report` 显示真实隔离等级。
+- [ ] 日志和环境信息经过脱敏，文件权限正确。
+- [ ] 不可信仓库不会被错误标记为强隔离可安全执行。
+
+---
+
+## 33. 最终技术定义
+
+`xgoal` 不是“一个 Agent 指挥另一些 Agent”，而是一个软件工程专用的确定性生命周期系统：
+
+```text
+Agent Adapter 让原生 Agent 可被调用
+Work Packet 让每次执行有界
+Lease 与 State Machine 让长期任务可恢复
+Git Worktree 让修改可隔离和归因
+Validator 与 Evidence 让验收脱离 Agent 自述
+Reconcile 让失败形成下一决策而不是无限重试
+Promotion 让最终版本串行、干净、可复验
+Human Gate 让风险边界继续由人掌握
+```
+
+v0.1 成功的标志不是“同时跑了多少 Agent”，而是：**系统在中断、失败、误判和环境变化下，仍不会丢失目标、不会重复副作用、不会污染主分支，也不会在缺少最终证据时宣称完成。**
+
+---
+
+## 34. 兼容性参考
+
+- AutoGo：`https://github.com/monshunter/autogo`
+- LoopX：`https://github.com/huangruiteng/loopx`
+- Codex CLI：以非交互执行、JSONL Event、结构化输出、会话恢复和 sandbox 的实际 Probe 结果为准。
+- Claude Code CLI：以 Print Mode、JSON/Stream JSON、JSON Schema、会话恢复、工具白名单和权限模式的实际 Probe 结果为准。
+
+> Agent CLI 属于外部演进依赖。xgoal 必须把版本探测、能力协商和 Adapter Contract Test 视为发布功能，而不是安装说明中的假设。
