@@ -17,6 +17,8 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key conflict")
 	ErrExpired             = errors.New("expired")
 	ErrStaleLease          = errors.New("stale lease generation")
+	ErrAuthorizationDenied = errors.New("authorization denied")
+	ErrBudgetExceeded      = errors.New("budget exceeded")
 )
 
 type Memory struct {

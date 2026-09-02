@@ -8,4 +8,5 @@
 | PLAN-003 | PLAN-003：实现 M2 Git、环境与验证闭环 | [PLAN-003.md](PLAN-003.md) |
 | PLAN-004 | PLAN-004：实现 M3 Codex Adapter 与真实执行门禁 | [PLAN-004.md](PLAN-004.md) |
 | PLAN-005 | PLAN-005：实现 M4 Claude Adapter 与独立 Review | [PLAN-005.md](PLAN-005.md) |
+| PLAN-006 | PLAN-006：实现 M5 Reconcile、Gate、Budget 与 Daemon | [PLAN-006.md](PLAN-006.md) |
 <!-- AGENT-HARNESS:END INDEX -->

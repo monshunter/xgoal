@@ -28,4 +28,7 @@
 | REVIEW-023-plan-005 | REVIEW-023：PLAN-005 初始 Plan Review | [REVIEW-023-plan-005.md](REVIEW-023-plan-005.md) |
 | REVIEW-024-design-003 | REVIEW-024：DESIGN-003 M4 Claude Adapter 与独立 Review | [REVIEW-024-design-003.md](REVIEW-024-design-003.md) |
 | REVIEW-025-plan-005-change | REVIEW-025：PLAN-005 M4 Change Review | [REVIEW-025-plan-005-change.md](REVIEW-025-plan-005-change.md) |
+| REVIEW-026-plan-006 | REVIEW-026：PLAN-006 初始 Plan Review | [REVIEW-026-plan-006.md](REVIEW-026-plan-006.md) |
+| REVIEW-027-design-004 | REVIEW-027：DESIGN-004 M5 确定性控制面与单写 Daemon | [REVIEW-027-design-004.md](REVIEW-027-design-004.md) |
+| REVIEW-028-plan-006-change | REVIEW-028：PLAN-006 M5 Change Review | [REVIEW-028-plan-006-change.md](REVIEW-028-plan-006-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->
