@@ -15,50 +15,50 @@ import (
 
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/planner"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/redact"
 )
 
 const maxCodexEventBytes = 8 << 20
 
-type outputBudget struct {
+type outputLimiter struct {
 	mu        sync.Mutex
 	remaining int64
 }
 
-func (budget *outputBudget) consume(size int) error {
-	budget.mu.Lock()
-	defer budget.mu.Unlock()
-	if size < 0 || int64(size) > budget.remaining {
-		budget.remaining = 0
+func (limiter *outputLimiter) consume(size int) error {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if size < 0 || int64(size) > limiter.remaining {
+		limiter.remaining = 0
 		return errors.New("Codex output exceeded its configured limit")
 	}
-	budget.remaining -= int64(size)
+	limiter.remaining -= int64(size)
 	return nil
 }
 
 type jsonlStream struct {
-	mu          sync.Mutex
-	pending     []byte
-	directory   string
-	rawPrefix   string
-	sink        adapter.EventSink
-	clock       gistClock
-	budget      *outputBudget
-	cancel      func()
-	sequence    int
-	parseErr    error
-	sessionID   string
-	finalText   string
-	latestUsage *protocol.Usage
+	mu        sync.Mutex
+	pending   []byte
+	directory string
+	rawPrefix string
+	sink      adapter.EventSink
+	clock     gistClock
+	limiter   *outputLimiter
+	cancel    func()
+	sequence  int
+	parseErr  error
+	sessionID string
+	finalText string
 }
 
 type gistClock interface {
 	Now() time.Time
 }
 
-func newJSONLStream(directory, rawPrefix string, sink adapter.EventSink, source gistClock, budget *outputBudget, cancel func()) *jsonlStream {
-	return &jsonlStream{directory: directory, rawPrefix: rawPrefix, sink: sink, clock: source, budget: budget, cancel: cancel}
+func newJSONLStream(directory, rawPrefix string, sink adapter.EventSink, source gistClock, limiter *outputLimiter, cancel func()) *jsonlStream {
+	return &jsonlStream{directory: directory, rawPrefix: rawPrefix, sink: sink, clock: source, limiter: limiter, cancel: cancel}
 }
 
 func (stream *jsonlStream) Write(value []byte) (int, error) {
@@ -67,7 +67,7 @@ func (stream *jsonlStream) Write(value []byte) (int, error) {
 	if stream.parseErr != nil {
 		return len(value), stream.parseErr
 	}
-	if err := stream.budget.consume(len(value)); err != nil {
+	if err := stream.limiter.consume(len(value)); err != nil {
 		stream.fail(err)
 		return len(value), err
 	}
@@ -96,30 +96,30 @@ func (stream *jsonlStream) Write(value []byte) (int, error) {
 	}
 }
 
-func (stream *jsonlStream) Finalize(maxResultBytes int64) (protocol.AgentResult, string, *protocol.Usage, error) {
+func (stream *jsonlStream) Finalize(maxResultBytes int64) (protocol.AgentResult, string, error) {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if stream.parseErr != nil {
-		return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), stream.parseErr
+		return protocol.AgentResult{}, stream.sessionID, stream.parseErr
 	}
 	if len(stream.pending) != 0 {
-		return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: Codex JSONL ended without a newline", adapter.ErrInvalidOutput)
+		return protocol.AgentResult{}, stream.sessionID, fmt.Errorf("%w: Codex JSONL ended without a newline", adapter.ErrInvalidOutput)
 	}
 	if stream.sessionID == "" || stream.finalText == "" {
-		return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: Codex JSONL is missing session or final agent message", adapter.ErrInvalidOutput)
+		return protocol.AgentResult{}, stream.sessionID, fmt.Errorf("%w: Codex JSONL is missing session or final agent message", adapter.ErrInvalidOutput)
 	}
 	result, err := protocol.DecodeAgentResult(strings.NewReader(stream.finalText), maxResultBytes)
 	if err != nil {
-		return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
+		return protocol.AgentResult{}, stream.sessionID, fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
 	}
 	result = redactResult(result)
 	content, err := canonical.Marshal(result)
 	if err != nil {
-		return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), err
+		return protocol.AgentResult{}, stream.sessionID, err
 	}
 	resultPath := filepath.Join(filepath.Dir(stream.directory), "result.json")
 	if err := writeImmutable(resultPath, content, 0o600); err != nil {
-		return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), err
+		return protocol.AgentResult{}, stream.sessionID, err
 	}
 	if stream.sink != nil {
 		event := protocol.AgentEvent{
@@ -128,27 +128,27 @@ func (stream *jsonlStream) Finalize(maxResultBytes int64) (protocol.AgentResult,
 			RawRef: filepath.ToSlash(filepath.Join(stream.rawPrefix, "result.json")),
 		}
 		if err := event.Validate(); err != nil {
-			return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), err
+			return protocol.AgentResult{}, stream.sessionID, err
 		}
 		if err := stream.sink(event); err != nil {
-			return protocol.AgentResult{}, stream.sessionID, cloneUsage(stream.latestUsage), err
+			return protocol.AgentResult{}, stream.sessionID, err
 		}
 	}
-	return result, stream.sessionID, cloneUsage(stream.latestUsage), nil
+	return result, stream.sessionID, nil
 }
 
-func (stream *jsonlStream) FinalizeReview(maxResultBytes int64) (protocol.ReviewResult, string, *protocol.Usage, error) {
+func (stream *jsonlStream) FinalizeReview(maxResultBytes int64) (protocol.ReviewResult, string, error) {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if stream.parseErr != nil {
-		return protocol.ReviewResult{}, stream.sessionID, cloneUsage(stream.latestUsage), stream.parseErr
+		return protocol.ReviewResult{}, stream.sessionID, stream.parseErr
 	}
 	if len(stream.pending) != 0 || stream.sessionID == "" || stream.finalText == "" {
-		return protocol.ReviewResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: Codex review JSONL is incomplete", adapter.ErrInvalidOutput)
+		return protocol.ReviewResult{}, stream.sessionID, fmt.Errorf("%w: Codex review JSONL is incomplete", adapter.ErrInvalidOutput)
 	}
 	result, err := protocol.DecodeReviewResult(strings.NewReader(stream.finalText), maxResultBytes)
 	if err != nil {
-		return protocol.ReviewResult{}, stream.sessionID, cloneUsage(stream.latestUsage), fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
+		return protocol.ReviewResult{}, stream.sessionID, fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
 	}
 	for index := range result.Findings {
 		result.Findings[index].Path = redact.String(result.Findings[index].Path)
@@ -156,7 +156,23 @@ func (stream *jsonlStream) FinalizeReview(maxResultBytes int64) (protocol.Review
 		result.Findings[index].Basis = redact.String(result.Findings[index].Basis)
 		result.Findings[index].RecommendedFix = redact.String(result.Findings[index].RecommendedFix)
 	}
-	return result, stream.sessionID, cloneUsage(stream.latestUsage), nil
+	return result, stream.sessionID, nil
+}
+
+func (stream *jsonlStream) FinalizePlanner(maxResultBytes int64) (planner.Proposal, string, error) {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.parseErr != nil {
+		return planner.Proposal{}, stream.sessionID, stream.parseErr
+	}
+	if len(stream.pending) != 0 || stream.sessionID == "" || stream.finalText == "" {
+		return planner.Proposal{}, stream.sessionID, fmt.Errorf("%w: Codex Planner JSONL is incomplete", adapter.ErrInvalidOutput)
+	}
+	result, err := planner.Decode(strings.NewReader(stream.finalText), maxResultBytes)
+	if err != nil {
+		return planner.Proposal{}, stream.sessionID, fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
+	}
+	return result, stream.sessionID, nil
 }
 
 func (stream *jsonlStream) processLine(line []byte) error {
@@ -183,6 +199,7 @@ func (stream *jsonlStream) processLine(line []byte) error {
 	if !ok {
 		return errors.New("redacted Codex event changed JSON shape")
 	}
+	delete(sanitized, "usage")
 	content, err := json.Marshal(sanitized)
 	if err != nil {
 		return err
@@ -191,7 +208,7 @@ func (stream *jsonlStream) processLine(line []byte) error {
 		return err
 	}
 	rawRef := filepath.ToSlash(filepath.Join(stream.rawPrefix, "events", name))
-	events, finalText, sessionID, usage, err := normalizeEvent(rawType, raw, rawRef, stream.clock.Now().UTC())
+	events, finalText, sessionID, err := normalizeEvent(rawType, raw, rawRef, stream.clock.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("%w: %v", adapter.ErrInvalidOutput, err)
 	}
@@ -203,9 +220,6 @@ func (stream *jsonlStream) processLine(line []byte) error {
 	}
 	if finalText != "" {
 		stream.finalText = finalText
-	}
-	if usage != nil {
-		stream.latestUsage = usage
 	}
 	for _, event := range events {
 		if err := event.Validate(); err != nil {
@@ -233,57 +247,50 @@ func (stream *jsonlStream) failure() error {
 	return stream.parseErr
 }
 
-func normalizeEvent(rawType string, raw map[string]any, rawRef string, at time.Time) ([]protocol.AgentEvent, string, string, *protocol.Usage, error) {
+func normalizeEvent(rawType string, raw map[string]any, rawRef string, at time.Time) ([]protocol.AgentEvent, string, string, error) {
 	base := protocol.AgentEvent{ProtocolVersion: protocol.AgentEventVersion, At: at, RawRef: rawRef}
 	switch rawType {
 	case "thread.started":
 		sessionID, ok := stringField(raw, "thread_id")
 		if !ok || !validSessionID(sessionID) {
-			return nil, "", "", nil, errors.New("thread.started has an invalid thread_id")
+			return nil, "", "", errors.New("thread.started has an invalid thread_id")
 		}
 		base.Type = "session"
 		base.SessionID = sessionID
 		base.Summary = "Codex session started"
-		return []protocol.AgentEvent{base}, "", sessionID, nil, nil
+		return []protocol.AgentEvent{base}, "", sessionID, nil
 	case "turn.started":
 		base.Type = "turn"
 		base.Summary = "Codex turn started"
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	case "turn.completed":
-		usage := decodeUsage(raw["usage"])
-		if usage == nil {
-			base.Type = "turn"
-			base.Summary = "Codex turn completed"
-			return []protocol.AgentEvent{base}, "", "", nil, nil
-		}
-		base.Type = "usage"
-		base.Summary = "Codex usage reported"
-		base.Usage = usage
-		return []protocol.AgentEvent{base}, "", "", usage, nil
+		base.Type = "turn"
+		base.Summary = "Codex turn completed"
+		return []protocol.AgentEvent{base}, "", "", nil
 	case "turn.failed", "error":
 		base.Type = "message"
 		base.Summary = redact.String(firstString(raw, "message", "error"))
 		if base.Summary == "" {
 			base.Summary = rawType
 		}
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	case "item.started", "item.updated", "item.completed":
 		return normalizeItem(rawType, raw["item"], base)
 	default:
 		base.Type = "unknown"
 		base.Summary = redact.String(rawType)
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	}
 }
 
-func normalizeItem(rawType string, value any, base protocol.AgentEvent) ([]protocol.AgentEvent, string, string, *protocol.Usage, error) {
+func normalizeItem(rawType string, value any, base protocol.AgentEvent) ([]protocol.AgentEvent, string, string, error) {
 	item, ok := value.(map[string]any)
 	if !ok {
-		return nil, "", "", nil, errors.New("Codex item event has no object item")
+		return nil, "", "", errors.New("Codex item event has no object item")
 	}
 	itemType, ok := stringField(item, "type")
 	if !ok || itemType == "" {
-		return nil, "", "", nil, errors.New("Codex item event has no item type")
+		return nil, "", "", errors.New("Codex item event has no item type")
 	}
 	completed := rawType == "item.completed"
 	switch itemType {
@@ -295,9 +302,9 @@ func normalizeItem(rawType string, value any, base protocol.AgentEvent) ([]proto
 			base.Summary = "Codex agent message"
 		}
 		if completed {
-			return []protocol.AgentEvent{base}, text, "", nil, nil
+			return []protocol.AgentEvent{base}, text, "", nil
 		}
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	case "command_execution":
 		command := firstString(item, "command", "cmd")
 		base.Type = "command"
@@ -312,7 +319,7 @@ func normalizeItem(rawType string, value any, base protocol.AgentEvent) ([]proto
 			}
 			base.Command = claim
 		}
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	case "file_change":
 		changes, _ := item["changes"].([]any)
 		events := make([]protocol.AgentEvent, 0, len(changes))
@@ -337,38 +344,16 @@ func normalizeItem(rawType string, value any, base protocol.AgentEvent) ([]proto
 			base.Summary = "Codex file_change item without changes"
 			events = append(events, base)
 		}
-		return events, "", "", nil, nil
+		return events, "", "", nil
 	case "reasoning", "todo_list", "mcp_tool_call", "web_search":
 		base.Type = "message"
 		base.Summary = "Codex " + itemType + " event"
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	default:
 		base.Type = "unknown"
 		base.Summary = "Codex item type " + redact.String(itemType)
-		return []protocol.AgentEvent{base}, "", "", nil, nil
+		return []protocol.AgentEvent{base}, "", "", nil
 	}
-}
-
-func decodeUsage(value any) *protocol.Usage {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil
-	}
-	usage := &protocol.Usage{}
-	if value, ok := int64Field(object, "input_tokens"); ok && value >= 0 {
-		usage.InputTokens = &value
-	}
-	if value, ok := int64Field(object, "output_tokens"); ok && value >= 0 {
-		usage.OutputTokens = &value
-	}
-	if value, ok := int64Field(object, "cost_micros"); ok && value >= 0 {
-		usage.CostMicros = &value
-		usage.Currency = firstString(object, "currency")
-	}
-	if usage.InputTokens == nil && usage.OutputTokens == nil && usage.CostMicros == nil {
-		return nil
-	}
-	return usage
 }
 
 func redactResult(result protocol.AgentResult) protocol.AgentResult {
@@ -442,26 +427,6 @@ func truncate(value string, limit int) string {
 		limit--
 	}
 	return value[:limit]
-}
-
-func cloneUsage(usage *protocol.Usage) *protocol.Usage {
-	if usage == nil {
-		return nil
-	}
-	clone := *usage
-	if usage.InputTokens != nil {
-		value := *usage.InputTokens
-		clone.InputTokens = &value
-	}
-	if usage.OutputTokens != nil {
-		value := *usage.OutputTokens
-		clone.OutputTokens = &value
-	}
-	if usage.CostMicros != nil {
-		value := *usage.CostMicros
-		clone.CostMicros = &value
-	}
-	return &clone
 }
 
 var _ io.Writer = (*jsonlStream)(nil)

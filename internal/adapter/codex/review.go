@@ -59,13 +59,13 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 	}
 	runContext, cancel := context.WithTimeout(ctx, invocation.Timeout)
 	defer cancel()
-	budget := &outputBudget{remaining: invocation.MaxOutputBytes}
-	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("reviews", invocation.InvocationID)), sink, runtime.clock, budget, cancel)
-	stderr := &boundedStderr{budget: budget, cancel: cancel}
+	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
+	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("reviews", invocation.InvocationID)), sink, runtime.clock, limiter, cancel)
+	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
 	arguments := []string{runtime.binary, "--ask-for-approval", "never", "--sandbox", "read-only", "--cd", invocation.WorkDir, "exec", "--json", "--output-schema", schemaPath, "--color", "never", "-"}
 	process, processErr := supervisor.Run(runContext, supervisor.Command{Argv: arguments, Dir: invocation.WorkDir, Env: environmentList(environment), Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr, GracePeriod: defaultGracePeriod})
 	stderrErr := stderr.persist(filepath.Join(directory, "stderr.log"))
-	result, sessionID, usage, resultErr := stream.FinalizeReview(min64(invocation.MaxOutputBytes, maxResultBytes))
+	result, sessionID, resultErr := stream.FinalizeReview(min64(invocation.MaxOutputBytes, maxResultBytes))
 	var finalErr error
 	switch {
 	case stream.failure() != nil:
@@ -91,7 +91,7 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 	if err := writeImmutable(filepath.Join(directory, "result.json"), resultContent, 0o600); err != nil {
 		return reviewcontract.Execution{}, err
 	}
-	return reviewcontract.Execution{Result: result, SessionID: sessionID, Usage: usage}, nil
+	return reviewcontract.Execution{Result: result, SessionID: sessionID}, nil
 }
 
 var _ reviewcontract.Adapter = (*Adapter)(nil)

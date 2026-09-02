@@ -73,8 +73,8 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 		return protocol.CommandReceipt{}, errors.New("invalid command validator request")
 	}
 	definition, exists := runner.registry.Definition(request.ValidatorID)
-	if !exists || definition.Type != "command" {
-		return protocol.CommandReceipt{}, errors.New("unknown or non-command validator")
+	if !exists {
+		return protocol.CommandReceipt{}, errors.New("unknown validator")
 	}
 	stdoutRef := filepath.ToSlash(filepath.Join("logs", request.RunID+".stdout.log"))
 	stderrRef := filepath.ToSlash(filepath.Join("logs", request.RunID+".stderr.log"))
@@ -92,19 +92,19 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	exitCode := -1
 	var execution supervisor.Execution
 	var runErr error
-	budget := &outputBudget{remaining: request.MaxOutputBytes}
+	limiter := &outputLimiter{remaining: request.MaxOutputBytes}
 	runContext, cancel := context.WithTimeout(ctx, definition.Timeout)
-	budget.cancel = cancel
+	limiter.cancel = cancel
 	if err := verifyTrustedExecutable(runner.handle.Worktree, definition); err != nil {
 		runErr = err
 	} else {
 		execution, runErr = runner.environment.RunCommand(runContext, runner.handle, environment.CommandSpec{
 			Argv: definition.Argv, CWD: definition.CWD, EnvironmentAllowlist: definition.EnvironmentAllowlist,
-			Stdout: &limitedLog{file: stdout, budget: budget}, Stderr: &limitedLog{file: stderr, budget: budget},
+			Stdout: &limitedLog{file: stdout, limiter: limiter}, Stderr: &limitedLog{file: stderr, limiter: limiter},
 			GracePeriod: time.Second,
 		})
 		exitCode = execution.ExitCode
-		result = classifyCommand(runContext, execution, runErr, budget.exceeded, definition.ExpectedExitCodes)
+		result = classifyCommand(runContext, execution, runErr, limiter.exceeded, definition.ExpectedExitCodes)
 	}
 	cancel()
 	closeErr := errors.Join(syncAndClose(stdout), syncAndClose(stderr))
@@ -387,7 +387,7 @@ func validTreeID(value string) bool {
 	return true
 }
 
-type outputBudget struct {
+type outputLimiter struct {
 	mu        sync.Mutex
 	remaining int64
 	exceeded  bool
@@ -395,24 +395,24 @@ type outputBudget struct {
 }
 
 type limitedLog struct {
-	file   *os.File
-	budget *outputBudget
+	file    *os.File
+	limiter *outputLimiter
 }
 
 func (log *limitedLog) Write(value []byte) (int, error) {
-	log.budget.mu.Lock()
-	defer log.budget.mu.Unlock()
+	log.limiter.mu.Lock()
+	defer log.limiter.mu.Unlock()
 	allowed := int64(len(value))
-	if allowed > log.budget.remaining {
-		allowed = log.budget.remaining
-		log.budget.exceeded = true
-		log.budget.cancel()
+	if allowed > log.limiter.remaining {
+		allowed = log.limiter.remaining
+		log.limiter.exceeded = true
+		log.limiter.cancel()
 	}
 	if allowed > 0 {
 		if _, err := log.file.Write(value[:allowed]); err != nil {
 			return 0, err
 		}
-		log.budget.remaining -= allowed
+		log.limiter.remaining -= allowed
 	}
 	return len(value), nil
 }

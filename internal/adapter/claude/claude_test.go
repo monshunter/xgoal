@@ -13,6 +13,7 @@ import (
 	baseadapter "github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/domain"
+	"github.com/monshunter/xgoal/internal/planner"
 	"github.com/monshunter/xgoal/internal/protocol"
 )
 
@@ -46,9 +47,10 @@ case "$XGOAL_MODE" in
   truncated) printf '%s' '{"type":"result"'; exit 0 ;;
   invalid) printf '%s\n' '{"type":"result","is_error":false,"session_id":"claude-session-1","structured_output":{"protocol_version":"bad","status":"completed","summary":"bad"}}'; exit 0 ;;
   nonzero) exit 9 ;;
+  planner) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session-1","structured_output":{"protocol_version":"xgoal.planner-proposal/v1alpha1","contract":{"summary":"fixture plan","rationale":"test","in_scope":["output.txt"],"out_of_scope":["production"],"constraints":["no push"],"acceptance_criteria":[{"id":"AC-1","statement":"output exists","validators":["fixture"],"human_acceptance":false}],"quality_attributes":["correctness"],"human_gates":["scope expansion"],"completion_policy":{"require_all_required_items":true,"require_no_blocking_findings":true,"require_final_validation":true}},"plan":{"summary":"one item","work_items":[{"client_key":"implement","title":"implement","objective":"create output","depends_on":[],"read_scope":["/**"],"write_scope":["/output.txt"],"acceptance_criteria":["AC-1"],"validators":["fixture"],"recommended_role":"implementer","required":true}]},"ambiguities":[]}}'; exit 0 ;;
 esac
 printf '%s\n' '{"type":"future.event","secret":"sk-super-secret-value"}'
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session-1","total_cost_usd":0.000010,"usage":{"input_tokens":7,"output_tokens":3},"structured_output":{"protocol_version":"xgoal.agent-result/v1alpha1","status":"completed","summary":"fixture done","changed_files_claimed":[],"checks_claimed":[],"blockers":[],"assumptions":[],"recommended_next_action":""}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session-1","usage":{"input_tokens":101,"output_tokens":17},"total_cost_usd":0.42,"structured_output":{"protocol_version":"xgoal.agent-result/v1alpha1","status":"completed","summary":"fixture done","changed_files_claimed":[],"checks_claimed":[],"blockers":[],"assumptions":[],"recommended_next_action":""}}'
 `
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -146,6 +148,13 @@ func TestPassiveProbeAndFixtureContract(t *testing.T) {
 	if strings.Contains(string(artifacts), "super-secret-value") {
 		t.Fatal("event artifact contains secret")
 	}
+	resultArtifact, err := os.ReadFile(filepath.Join(f.runtimeRoot, "adapters", "claude", "invocations", inv.InvocationID, "events", "000003.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(resultArtifact), `"usage"`) || strings.Contains(string(resultArtifact), "total_cost_usd") {
+		t.Fatalf("persisted Claude artifact retained Provider model accounting: %s", resultArtifact)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(events) < 3 || events[1].Type != "unknown" {
@@ -228,18 +237,48 @@ func TestFailureCancellationAndPermissions(t *testing.T) {
 	}
 }
 
-func TestActiveProbeBudget(t *testing.T) {
+func TestActiveProbeRequiresTransportAndTimeout(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "valid")
 	runtime := f.adapter(t)
 	if _, err := runtime.Probe(context.Background(), baseadapter.ProbeSpec{Mode: baseadapter.ProbeActiveContract, ProfileID: "claude-fixture"}); err == nil {
-		t.Fatal("active probe accepted missing budget")
+		t.Fatal("active probe accepted missing transport and timeout")
 	}
-	capabilities, err := runtime.Probe(context.Background(), baseadapter.ProbeSpec{Mode: baseadapter.ProbeActiveContract, ProfileID: "claude-fixture", ProviderTransport: true, Timeout: 30 * time.Second, Budget: baseadapter.ProbeBudget{MaxWallTime: 30 * time.Second, MaxTokens: 20, MaxCostMicros: 20}})
+	capabilities, err := runtime.Probe(context.Background(), baseadapter.ProbeSpec{Mode: baseadapter.ProbeActiveContract, ProfileID: "claude-fixture", ProviderTransport: true, Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capabilities.Usage == nil || capabilities.Usage.CostMicros == nil || *capabilities.Usage.CostMicros != 10 {
-		t.Fatalf("active usage = %+v", capabilities.Usage)
+	if capabilities.ProbeMode != baseadapter.ProbeActiveContract || capabilities.ProviderTransport != "available" || capabilities.ProbeRef == "" {
+		t.Fatalf("active capabilities = %+v", capabilities)
+	}
+}
+
+func TestPlannerUsesReadOnlyToolsAndStructuredContract(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "planner")
+	runtime := f.adapter(t)
+	packetPath, packetHash, err := planner.Prepare(f.runtimeRoot, planner.Packet{
+		ProtocolVersion: planner.PacketVersion, GoalID: "goal_plan", RawGoal: "create output", Mode: "standard",
+		ConfigHash: strings.Repeat("a", 64), TrustedValidators: []string{"fixture"}, ProjectRoot: f.projectRoot,
+		ProjectNetwork: "deny", ProjectSecrets: "deny",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, _ := planner.Schema()
+	execution, err := runtime.Plan(context.Background(), planner.Invocation{
+		InvocationID: "planner_fixture", ProfileID: "claude-planner", WorkDir: f.projectRoot,
+		PacketPath: packetPath, PacketHash: packetHash, Prompt: "plan the fixture", OutputSchema: schema,
+		Environment: map[string]string{"XGOAL_ARGS": f.argsPath, "XGOAL_STDIN": f.stdinPath, "XGOAL_MODE": f.mode}, Timeout: 30 * time.Second, MaxOutputBytes: 4 << 20,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Proposal.Contract.Summary != "fixture plan" || len(execution.Proposal.Plan.WorkItems) != 1 || execution.SessionID != "claude-session-1" {
+		t.Fatalf("planner execution = %+v", execution)
+	}
+	arguments, _ := os.ReadFile(f.argsPath)
+	if !strings.Contains(string(arguments), "--tools Read,Glob,Grep") || strings.Contains(string(arguments), "Edit") || strings.Contains(string(arguments), "Write") {
+		t.Fatalf("planner tools are not read-only: %s", arguments)
 	}
 }

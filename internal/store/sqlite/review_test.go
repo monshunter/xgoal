@@ -72,3 +72,54 @@ func TestReviewAndFindingPersistenceRejectTamper(t *testing.T) {
 		t.Fatal("tampered review result was accepted")
 	}
 }
+
+func TestRecordReviewAllowsIdenticalResultsFromIndependentRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, request, _ := seedPromotionFixture(t, "review_duplicate_result")
+	t.Cleanup(func() { _ = store.Close() })
+	reviewStore, err := reviewartifact.NewStore(store.Info().ProjectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := protocol.ReviewResult{
+		ProtocolVersion:     protocol.ReviewResultVersion,
+		ReviewStatus:        protocol.ReviewApproved,
+		Findings:            []protocol.ReviewFinding{},
+		SuggestedValidators: []string{},
+	}
+	var firstHash string
+	for index, id := range []string{"review_same_result_1", "review_same_result_2"} {
+		packet := protocol.ReviewPacket{
+			ProtocolVersion: protocol.ReviewPacketVersion,
+			ID:              id, GoalRevisionHash: request.GoalRevisionHash,
+			PlanRevisionHash: strings.Repeat("7", 64), WorkItemID: request.WorkItemID,
+			ImplementationAttemptID: request.AttemptID, ImplementationProfileID: "shared-profile",
+			ImplementationSessionID: "implementation-session", BaseTree: request.OldTree,
+			CandidateTree: request.CandidateTree, ConfigHash: request.ConfigHash,
+			Workspace:       request.ValidationWorktree,
+			PatchBundlePath: filepath.Join(store.Info().ProjectDir, "patches", request.AttemptID),
+			PatchBundleHash: request.BundleHash,
+			ValidatorReceipts: []protocol.ReviewReceiptRef{{
+				ID: "validator_run_1", Path: filepath.Join(store.Info().ProjectDir, "validator", "receipts", "validator_run_1.json"), Hash: strings.Repeat("8", 64),
+			}},
+			RequiredChecks: []string{"correctness"}, ReviewerProfileID: "shared-profile",
+		}
+		packetArtifact, err := reviewStore.SavePacket(packet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resultArtifact, err := reviewStore.SaveResult(id, result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			firstHash = resultArtifact.Hash
+		} else if resultArtifact.Hash != firstHash {
+			t.Fatalf("identical results have hashes %q and %q", firstHash, resultArtifact.Hash)
+		}
+		if _, created, err := store.RecordReview(ctx, packetArtifact, resultArtifact, "review-session-"+id); err != nil || !created {
+			t.Fatalf("RecordReview(%s) created=%v error=%v", id, created, err)
+		}
+	}
+}

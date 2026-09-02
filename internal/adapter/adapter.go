@@ -26,31 +26,21 @@ type ProbeSpec struct {
 	Mode              ProbeMode
 	ProfileID         string
 	ProviderTransport bool
-	Budget            ProbeBudget
 	Timeout           time.Duration
 }
 
-type ProbeBudget struct {
-	MaxWallTime   time.Duration
-	MaxTokens     int64
-	MaxCostMicros int64
-}
-
 type Capabilities struct {
-	Version           string          `json:"version"`
-	StructuredOutput  bool            `json:"structured_output"`
-	StreamingEvents   bool            `json:"streaming_events"`
-	ResumeSession     bool            `json:"resume_session"`
-	UsageReporting    bool            `json:"usage_reporting"`
-	CostReporting     bool            `json:"cost_reporting"`
-	SandboxModes      []string        `json:"sandbox_modes"`
-	ToolAllowlist     bool            `json:"tool_allowlist"`
-	ApprovalModes     []string        `json:"approval_modes"`
-	ProbeMode         ProbeMode       `json:"probe_mode"`
-	ProviderTransport string          `json:"provider_transport"`
-	CredentialStatus  string          `json:"credential_status"`
-	ProbeRef          string          `json:"probe_ref,omitempty"`
-	Usage             *protocol.Usage `json:"usage,omitempty"`
+	Version           string    `json:"version"`
+	StructuredOutput  bool      `json:"structured_output"`
+	StreamingEvents   bool      `json:"streaming_events"`
+	ResumeSession     bool      `json:"resume_session"`
+	SandboxModes      []string  `json:"sandbox_modes"`
+	ToolAllowlist     bool      `json:"tool_allowlist"`
+	ApprovalModes     []string  `json:"approval_modes"`
+	ProbeMode         ProbeMode `json:"probe_mode"`
+	ProviderTransport string    `json:"provider_transport"`
+	CredentialStatus  string    `json:"credential_status"`
+	ProbeRef          string    `json:"probe_ref,omitempty"`
 }
 
 type SessionPolicy string
@@ -84,7 +74,8 @@ type Invocation struct {
 }
 
 type Handle struct {
-	ID string
+	ID  string
+	PID int
 }
 
 type EventSink func(protocol.AgentEvent) error

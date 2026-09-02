@@ -30,12 +30,13 @@ Plans:
 ---
 ID: OBJ-001
 Objective: 基于产品与技术 SPEC 完成并验收 xgoal v0.1 全部功能
-Status: 正在处理
+Status: 已完成
 Plans:
 - [x] [PLAN-001：建立 v0.1 契约基线与 M0 可执行骨架](docs/plans/PLAN-001.md)
 - [x] [PLAN-002：实现 M1 持久状态与控制循环](docs/plans/PLAN-002.md)
 - [x] [PLAN-003：实现 M2 Git、环境与验证闭环](docs/plans/PLAN-003.md)
 - [x] [PLAN-004：实现 M3 Codex Adapter 与真实执行门禁](docs/plans/PLAN-004.md)
 - [x] [PLAN-005：实现 M4 Claude Adapter 与独立 Review](docs/plans/PLAN-005.md)
-- [x] [PLAN-006：实现 M5 Reconcile、Gate、Budget 与 Daemon](docs/plans/PLAN-006.md)
+- [x] [PLAN-006：实现 M5 Reconcile、Gate 与 Daemon](docs/plans/PLAN-006.md)
+- [x] [PLAN-007：实现 M6 Final Report、Benchmark 与 v0.1 发布验收](docs/plans/PLAN-007.md)
 ---

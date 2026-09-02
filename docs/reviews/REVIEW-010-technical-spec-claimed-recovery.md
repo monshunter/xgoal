@@ -18,7 +18,7 @@
 
 - Lease 可能在 Attempt 启动前到期；若没有该转换，Work 会永久停留在 `CLAIMED`，与启动恢复矩阵和确定性恢复目标矛盾。
 - 新转换只覆盖“启动前失败”或“已通过外部读回确认旧 Worker 不再写入”，没有把 TTL 到期错误等同于安全重试。
-- 恢复仍先进入 `RECONCILING`，再由既有 `RECONCILING → READY/WAITING` 决策，不绕过 Gate、Budget、No-progress 或新 Attempt 边界。
+- 恢复仍先进入 `RECONCILING`，再由既有 `RECONCILING → READY/WAITING` 决策，不绕过 Gate、Policy、No-progress 或新 Attempt 边界。
 - `COMPLETED`、`CANCELLED` 终态不变；Goal、Attempt、Effect、Lease 的既有状态合同不受影响。
 - 产品 Feature、验收映射、Plan 范围与顺序未改变。
 

@@ -28,16 +28,6 @@
         "kind": {"type": "string"}
       }
     },
-    "usage": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "input_tokens": {"type": "integer", "minimum": 0},
-        "output_tokens": {"type": "integer", "minimum": 0},
-        "cost_micros": {"type": "integer", "minimum": 0},
-        "currency": {"type": "string"}
-      }
-    },
     "raw_ref": {"type": "string"}
   }
 }

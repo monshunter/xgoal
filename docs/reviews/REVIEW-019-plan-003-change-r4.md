@@ -25,7 +25,7 @@
 - Agent Commit/index 不作为真相；Patch 从冻结 Base Tree 与真实文件系统捕获，覆盖 tracked/untracked/binary/rename/mode/symlink/delete，并以 immutable object + Canonical Manifest 重放。
 - Scope、Symlink、Git Common Dir、Patch before-state、Validator Definition/Executable、Environment 与 Evidence Binding 均在受信侧验证；未知、冲突、超时和过期不会推进 Promotion。
 - Promotion 以进程内项目锁、Git ref CAS、Commit/Tree/Trailer read-back 和 SQLite 生命周期事务实现 M2 串行与崩溃恢复；用户 checkout/base branch 未被写入。
-- Local Provider 明示 L0，不声称文件系统、网络或 Credential 的硬隔离。真实 Codex/Claude Adapter、跨进程单写者、完整 Reconcile/Gate/Budget、Daemon/API、Final Report 和 Benchmark 仍属于 M3–M6，不作为 M2 完成结论。
+- Local Provider 明示 L0，不声称文件系统、网络或 Credential 的硬隔离。真实 Codex/Claude Adapter、跨进程单写者、完整 Reconcile/Gate、Daemon/API、Final Report 和 Benchmark 仍属于 M3–M6，不作为 M2 完成结论。
 
 ## 当前 Evidence
 

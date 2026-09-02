@@ -15,8 +15,8 @@
 ## 前序发现处置
 
 - Work Packet 现在收敛 Project Network/Secret 枚举并硬拒绝 Git Push/Production；Scope 基线拒绝 `.git`、逃逸与非法 Globstar；Prior Attempt 必填字段被校验。
-- Agent Event 现在拒绝空 Command/File Change 和负 Token/Cost；Evidence Authority/State 只接受冻结枚举。
-- `config validate` 现在校验 Workspace、Scope Policy、Bootstrap、Validator Phase/Timeout、Review、Policy、Budget、Report 以及 Agent 专属模式与白名单。
+- Agent Event 现在拒绝空 Command/File Change；Evidence Authority/State 只接受冻结枚举。模型核算字段不属于 xgoal Agent Event。
+- `config validate` 现在校验 Workspace、Scope Policy、Bootstrap、Validator Phase/Timeout、Review、Policy、Report 以及 Agent 专属模式与白名单。
 - 新增协议/配置负向矩阵先稳定触发失败，再由最小实现转绿；Schema 与 Go Validator 不再接受 Review 中列出的 Fail-Open 输入。
 
 ## 当前 Evidence

@@ -31,4 +31,9 @@
 | REVIEW-026-plan-006 | REVIEW-026：PLAN-006 初始 Plan Review | [REVIEW-026-plan-006.md](REVIEW-026-plan-006.md) |
 | REVIEW-027-design-004 | REVIEW-027：DESIGN-004 M5 确定性控制面与单写 Daemon | [REVIEW-027-design-004.md](REVIEW-027-design-004.md) |
 | REVIEW-028-plan-006-change | REVIEW-028：PLAN-006 M5 Change Review | [REVIEW-028-plan-006-change.md](REVIEW-028-plan-006-change.md) |
+| REVIEW-029-plan-007 | REVIEW-029：PLAN-007 初始 Plan Review | [REVIEW-029-plan-007.md](REVIEW-029-plan-007.md) |
+| REVIEW-030-design-005 | REVIEW-030：DESIGN-005 M6 最终闭环、Benchmark 与发布 | [REVIEW-030-design-005.md](REVIEW-030-design-005.md) |
+| REVIEW-031-plan-007-r2 | REVIEW-031：PLAN-007 系统闭环补充 Plan Review | [REVIEW-031-plan-007-r2.md](REVIEW-031-plan-007-r2.md) |
+| REVIEW-032-scope-removal | REVIEW-032：v0.1 计量边界移除复审 | [REVIEW-032-scope-removal.md](REVIEW-032-scope-removal.md) |
+| REVIEW-033-plan-007-change | REVIEW-033：PLAN-007 M6 与 v0.1 Change Review | [REVIEW-033-plan-007-change.md](REVIEW-033-plan-007-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->

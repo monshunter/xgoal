@@ -65,13 +65,9 @@ func TestWorkPacketValidateRejectsSchemaAndPolicyViolations(t *testing.T) {
 
 func TestAgentEventValidateRejectsInvalidNestedClaims(t *testing.T) {
 	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
-	negative := int64(-1)
 	tests := []protocol.AgentEvent{
 		{ProtocolVersion: protocol.AgentEventVersion, Type: "command", At: now, Command: &protocol.CommandClaim{}},
 		{ProtocolVersion: protocol.AgentEventVersion, Type: "file", At: now, FileChange: &protocol.FileChangeClaim{}},
-		{ProtocolVersion: protocol.AgentEventVersion, Type: "usage", At: now, Usage: &protocol.Usage{InputTokens: &negative}},
-		{ProtocolVersion: protocol.AgentEventVersion, Type: "usage", At: now, Usage: &protocol.Usage{OutputTokens: &negative}},
-		{ProtocolVersion: protocol.AgentEventVersion, Type: "usage", At: now, Usage: &protocol.Usage{CostMicros: &negative}},
 	}
 	for index, event := range tests {
 		if err := event.Validate(); err == nil {
@@ -128,7 +124,7 @@ func TestEmbeddedSchemasAreValidAndVersioned(t *testing.T) {
 	}{
 		protocol.SchemaWorkPacket:  {version: protocol.WorkPacketVersion, digest: "b9649e38bcd0fe1d3d7b9ae949713b2e58244a0a06bbb5955233d98f103a45e3"},
 		protocol.SchemaAgentResult: {version: protocol.AgentResultVersion, digest: "a71b93ea2850db6cac218d66564b8c94bc84f5552d2dc5594893e30edeca8303"},
-		protocol.SchemaAgentEvent:  {version: protocol.AgentEventVersion, digest: "6428f7e181f5b1d8f034238680cb70d7c0b9267ee9c362d3c59d20f5ebf5ecc8"},
+		protocol.SchemaAgentEvent:  {version: protocol.AgentEventVersion, digest: "bfb4de3beade4c1b1ee92633641cc4de7c05b54441a2ff0b4dd1d3ea5d193509"},
 		protocol.SchemaEvidence:    {version: protocol.EvidenceVersion, digest: "91cde100ace57970ae14e060496c886db3ad7549c3b673c03ed71390dc163663"},
 		protocol.SchemaPatchBundle: {version: protocol.PatchBundleVersion, digest: "837a5fd10ba619e549aebf1f5fb3b1995714113f027b575156655f50dfa1c485"},
 		protocol.SchemaCommandReceipt: {

@@ -1,0 +1,84 @@
+{
+  "protocol_version": "xgoal.benchmark-suite/v1",
+  "name": "xgoal-v0.1-fixed-suite",
+  "repetitions": 3,
+  "groups": [
+    {"id": "native", "kind": "native"},
+    {"id": "autogo-single", "kind": "autogo-single"},
+    {"id": "xgoal-standard", "kind": "xgoal-standard"}
+  ],
+  "tasks": [
+    {
+      "id": "bug-fix-division",
+      "category": "bug-fix",
+      "fixture": "fixtures/bug-fix",
+      "fixture_hash": "3d4bf72ad97c39ec373d2b5a85e8707f053aa86ed755678f2000013bccdd2b5d",
+      "initial_tree": "233ec245cbfc392a50991f90ab191e19d9174117",
+      "initial_commit": "db754cd5bb11d8ccdcff7e77414964656d15cd0b",
+      "hidden_overlay": "hidden/bug-fix",
+      "goal": "Fix Divide so division by zero returns ErrDivisionByZero while preserving normal integer division.",
+      "acceptance_argv": ["go", "test", "./..."],
+      "timeout_seconds": 600
+    },
+    {
+      "id": "feature-delete",
+      "category": "feature",
+      "fixture": "fixtures/feature",
+      "fixture_hash": "1919598aba61b03caf101e1ac08a1002b426609aa9f9688b9f71787c963589ae",
+      "initial_tree": "459543622491b29b62361fdce674e791d02c741f",
+      "initial_commit": "0f4fd1486c2257185307cb390c85fdf870220164",
+      "hidden_overlay": "hidden/feature",
+      "goal": "Add a concurrency-safe Delete method that returns the prior value and whether the key existed.",
+      "acceptance_argv": ["go", "test", "./..."],
+      "timeout_seconds": 600
+    },
+    {
+      "id": "refactor-normalize",
+      "category": "refactor",
+      "fixture": "fixtures/refactor",
+      "fixture_hash": "a42286b591b16e7022a5e11a49057c290e177b131d42b6e601f271d85fe6cc47",
+      "initial_tree": "582d605fe8e1ff12549ae023b836df5406395d46",
+      "initial_commit": "15a5920431e87eea0ef35a93a1fae97e44975061",
+      "hidden_overlay": "hidden/refactor",
+      "goal": "Refactor Normalize for clarity without changing trimming, lower-casing, or repeated-space behavior.",
+      "acceptance_argv": ["go", "test", "./..."],
+      "timeout_seconds": 600
+    },
+    {
+      "id": "environment-health",
+      "category": "environment",
+      "fixture": "fixtures/environment",
+      "fixture_hash": "42fcf6e6ea9b308ca5c6c1f65edb78a6896a614ea3b7a270260048f0e911eeae",
+      "initial_tree": "be152c52de1cff5c9698fca9d555936871b7805a",
+      "initial_commit": "8013e36d7044a7c72629cbe04a7f7b1205e018a8",
+      "hidden_overlay": "hidden/environment",
+      "goal": "Make the local health handler report HTTP 200 and body ok consistently across repeated probes.",
+      "acceptance_argv": ["go", "test", "./..."],
+      "timeout_seconds": 600
+    },
+    {
+      "id": "recovery-idempotency",
+      "category": "recovery",
+      "fixture": "fixtures/recovery",
+      "fixture_hash": "38b14b631dcc808c3242b7e3947a08f9afdfd222302e502e9bde5c1303f50eab",
+      "initial_tree": "9f50435f7a77a5919b8adc2014a526282591a47c",
+      "initial_commit": "c551d94d03f42437280d5f5731d15992633440f5",
+      "hidden_overlay": "hidden/recovery",
+      "goal": "Make replaying the same effect ID idempotent without changing first-application order.",
+      "acceptance_argv": ["go", "test", "./..."],
+      "timeout_seconds": 600
+    },
+    {
+      "id": "multi-module-normalization",
+      "category": "multi-module",
+      "fixture": "fixtures/multi-module",
+      "fixture_hash": "cc9b23226f081006cf8daf4accf325e04b230197f797a88891536730f27d0979",
+      "initial_tree": "695b857ec677b6c549c28214e1fc2baa250fb088",
+      "initial_commit": "6d70c07e5106096819d7771cfd23b9c2fabc4a1d",
+      "hidden_overlay": "hidden/multi-module",
+      "goal": "Normalize surrounding whitespace in the shared lib so the service returns hello Ada! for padded input.",
+      "acceptance_argv": ["go", "test", "./lib/...", "./service/..."],
+      "timeout_seconds": 600
+    }
+  ]
+}

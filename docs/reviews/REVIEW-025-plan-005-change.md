@@ -38,8 +38,8 @@ M4 变更与产品/技术 SPEC、DESIGN-003 和 PLAN-005 一致：Claude Code Ad
 
 - 当前本机 Claude CLI 的 Provider 通道实际依赖显式 `ANTHROPIC_*` 环境白名单。生产编排必须由 M5 Policy/Gate 决定是否注入；本次真实 smoke 只在临时可信仓库中使用，值未进入 Packet、元数据、Validator 或日志。
 - L0 本地进程隔离不能证明 CLI 及其内部工具对主机凭据的硬隔离，状态和最终报告必须继续披露该边界。
-- 为避免重复模型费用，两条真实子路径在修复后分别执行并均 PASS；没有再次把相同两条路径合并重跑一遍。
+- 两条真实子路径在修复后分别执行并均 PASS；没有再次机械重复相同路径。
 
 ## 下一路由
 
-PLAN-005 可关闭并提交；随后进入 M5 Reconcile、Gate、Budget 与 Daemon。
+PLAN-005 可关闭并提交；随后进入 M5 Reconcile、Gate 与 Daemon。

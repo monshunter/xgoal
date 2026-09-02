@@ -110,7 +110,7 @@ const (
 
 var workTransitions = transitions[WorkState]{
 	WorkPending:     set(WorkReady, WorkCancelled),
-	WorkReady:       set(WorkClaimed, WorkCancelled),
+	WorkReady:       set(WorkClaimed, WorkWaiting, WorkCancelled),
 	WorkClaimed:     set(WorkRunning, WorkReconciling, WorkCancelled),
 	WorkRunning:     set(WorkVerifying, WorkReconciling, WorkCancelled),
 	WorkVerifying:   set(WorkCompleted, WorkReconciling, WorkCancelled),

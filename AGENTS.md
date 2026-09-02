@@ -5,18 +5,19 @@
 
 `xgoal` 是一个面向长期软件工程目标的本地多 Agent 编排与证据闭环系统。它以确定性 Go Kernel 负责任务状态、租约、策略、工作区、验证、恢复、晋升与完成判断，通过 CLI Adapter 调用 Codex CLI 和 Claude Code CLI；Agent 的声明只作为 Claim，最终完成必须由绑定当前 Goal Revision 与最终 Git Tree 的 Evidence 证明。
 
-当前仓库已经完成 v0.1 的 M0 契约骨架：Go CLI、严格配置、领域/协议类型、测试替身、内存 CAS/Lease Store 和确定性模拟 Kernel 已实现；SQLite、Git 工作区、真实 Codex/Claude Adapter、Daemon、恢复、最终报告与 Benchmark 尚未实现。v0.1 只面向 macOS/Linux 上的可信本地 Git 仓库，默认串行执行和 L0 本地进程隔离，不承诺容器级安全，不自动 push、发布或部署生产。
+当前仓库已实现 v0.1 的自然语言 Planner、SQLite 单一状态、Unix Socket CLI/API、Codex/Claude Adapter、独立 worktree/Patch、受信 Validator/Evidence、独立 Review、Gate/Reconcile、串行 Promotion、崩溃恢复、Final Report 与固定 Benchmark Harness。v0.1 只面向 macOS/Linux 上的可信本地 Git 仓库，默认串行执行和 L0 本地进程隔离，不承诺容器级安全，不自动 push、发布或部署生产。
 
 ```text
 .
-├── cmd/xgoal/                    # 单一 Go CLI 入口
-├── internal/                     # 配置、协议、领域状态、Kernel、Store 与测试替身
+├── cmd/xgoal/                    # 单一 Go CLI/Daemon 入口
+├── internal/                     # Adapter、控制面、状态、编排、Git、验证、报告与基准
+├── benchmarks/                   # 固定 fixture、隐藏验收和三组公平性 Suite
 ├── scripts/xgoal/                # 受信的可复现验证脚本
 ├── xgoal-product-spec-v0.1.md    # 产品目标、功能需求与发布验收
 ├── xgoal-technical-spec-v0.1.md  # Go 架构、协议、状态机与技术验收
 ├── xgoal.example.yaml            # 可校验的 v0.1 项目配置示例
 ├── README.md                     # 当前能力、边界与验收入口
-├── Makefile                      # M0 可复现验收入口
+├── Makefile                      # M0–M6 可复现验收入口
 ├── docs/                         # Plan、Review、Spec、Design、Scenario 等持久制品
 ├── .agents/skills/               # 项目本地 AutoGo 工程 Skills
 ├── .autogo/                      # Harness 模板与参考资源
@@ -24,7 +25,7 @@
 └── AGENTS.md                     # 项目事实与工程运行合同
 ```
 
-当前 CLI 只实现 `version` 与 `config validate --file`；技术 SPEC 中的其他命令和推荐目录在源码创建前不是已实现事实。
+当前 CLI 实现 `init`、`doctor`、`run`、`status`、`logs`、`gates`、`approve`、`pause/resume/cancel`、`work retry`、`goal replan/finalize`、`report`、`clean`、`benchmark`、`config validate` 与 `daemon serve`。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
 
 ---
 

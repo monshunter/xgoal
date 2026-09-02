@@ -200,6 +200,41 @@ WHERE id = ? AND version = ?`, promotion.Failed, now, id, current.Version); err 
 	})
 }
 
+// RecoverablePromotions returns persisted non-terminal Promotion requests.
+// The Promotion Manager re-reads Git and its immutable marker before deciding
+// whether to execute or only record an already-completed external effect.
+func (s *Store) RecoverablePromotions(ctx context.Context) ([]promotion.Record, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id
+FROM promotions
+WHERE state IN (?, ?, ?)
+ORDER BY created_at, id`, promotion.Requested, promotion.CommitCreated, promotion.RefUpdated)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]promotion.Record, 0, len(ids))
+	for _, id := range ids {
+		record, err := readPromotion(ctx, s.db, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, record.Record)
+	}
+	return result, nil
+}
+
 func (s *Store) advancePromotion(ctx context.Context, id string, target promotion.State, commit, eventType string, observation any) (promotion.Record, error) {
 	if id == "" || commit == "" {
 		return promotion.Record{}, errors.New("promotion id and commit are required")

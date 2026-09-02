@@ -22,8 +22,8 @@ claude -p --input-format text --output-format stream-json --verbose
 - Implementer 工具基线为 `Read,Glob,Grep,Edit,Write`；M4 smoke 不授予 Bash、网络、MCP 或外部写入。
 - Planner/Reviewer 仅为 `Read,Glob,Grep`，不授予 Edit、Write 或 Bash。
 - `--permission-mode dontAsk` 使未预授权工具直接拒绝，不进入 CLI 交互确认。
-- Passive Probe 只执行 binary/version/help 与 `auth status`，不产生模型请求；Active Probe 才显式使用 Provider Transport 与预算。
-- Stream JSON 的 init/result Session ID、最终 `structured_output`、Usage/Cost 是供应商输入，必须校验、脱敏并持久化后才能归一化。
+- Passive Probe 只执行 binary/version/help 与 `auth status`，不产生模型请求；Active Probe 才显式使用 Provider Transport，并受正超时边界约束。
+- Stream JSON 的 init/result Session ID 与最终 `structured_output` 是供应商输入，必须校验、脱敏并持久化后才能归一化；供应商 Usage/Cost 字段在持久化前丢弃，不进入 xgoal 协议、状态或报告。
 
 ## Adapter 生命周期与恢复
 

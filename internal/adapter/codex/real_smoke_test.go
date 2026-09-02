@@ -104,7 +104,6 @@ func TestM3RealCodexFastAndStandardImplementer(t *testing.T) {
 	capabilities, err := harness.adapter.Probe(ctx, adapter.ProbeSpec{
 		Mode: adapter.ProbeActiveContract, ProfileID: "codex-real",
 		ProviderTransport: true, Timeout: 3 * time.Minute,
-		Budget: adapter.ProbeBudget{MaxWallTime: 3 * time.Minute},
 	})
 	if err != nil {
 		logRealCodexDiagnostics(t, harness.adapter.root)

@@ -59,14 +59,14 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 	}
 	runContext, cancel := context.WithTimeout(ctx, invocation.Timeout)
 	defer cancel()
-	budget := &outputBudget{remaining: invocation.MaxOutputBytes}
-	stream := newStream(eventsDir, filepath.ToSlash(filepath.Join("reviews", invocation.InvocationID)), sink, runtime.clock.Now, budget, cancel)
-	stderr := &boundedStderr{budget: budget, cancel: cancel}
+	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
+	stream := newStream(eventsDir, filepath.ToSlash(filepath.Join("reviews", invocation.InvocationID)), sink, runtime.clock.Now, limiter, cancel)
+	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
 	tools := strings.Join(invocation.Tools, ",")
 	arguments := []string{runtime.binary, "-p", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--json-schema", string(schema), "--permission-mode", invocation.PermissionMode, "--tools", tools, "--allowedTools", tools}
 	process, processErr := supervisor.Run(runContext, supervisor.Command{Argv: arguments, Dir: invocation.WorkDir, Env: environmentList(environment), Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr, GracePeriod: gracePeriod})
 	stderrErr := stderr.persist(filepath.Join(directory, "stderr.log"))
-	result, sessionID, usage, resultErr := stream.finalizeReview(min64(invocation.MaxOutputBytes, maxResultBytes))
+	result, sessionID, resultErr := stream.finalizeReview(min64(invocation.MaxOutputBytes, maxResultBytes))
 	var finalErr error
 	switch {
 	case stream.failure() != nil:
@@ -92,7 +92,7 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 	if err := writeImmutable(filepath.Join(directory, "result.json"), resultContent, 0o600); err != nil {
 		return reviewcontract.Execution{}, err
 	}
-	return reviewcontract.Execution{Result: result, SessionID: sessionID, Usage: usage}, nil
+	return reviewcontract.Execution{Result: result, SessionID: sessionID}, nil
 }
 
 func validateReviewFixture(content []byte) error {

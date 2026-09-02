@@ -1,12 +1,13 @@
 # xgoal 技术 SPEC
 
 > **项目**：xgoal — Evidence-Closed Multi-Agent Coding Orchestrator  
-> **版本**：v0.1 Draft  
+> **版本**：v0.1
 > **日期**：2026-08-26  
 > **作者**：monshunter  
 > **实现语言**：Go  
 > **目标平台**：macOS、Linux  
 > **配套文档**：《xgoal 产品设计 SPEC v0.1》
+> **状态**：v0.1 技术实现与发布验收完成；真实三组 Provider Benchmark 待显式运行
 
 ---
 
@@ -25,7 +26,7 @@
 1. **新建独立 Go 项目**，不在 AutoGo 中嵌入运行时，也不直接 Fork LoopX。
 2. 采用 **Native Agent Execution, External Orchestration**：Codex/Claude Code 负责有界回合中的推理和编码，xgoal 负责跨 Agent 生命周期。
 3. 不实现 Manager LLM、模型路由推理链或自有工具调用循环；所有 Agent 均通过 CLI Adapter 启动。
-4. 使用 **确定性 Orchestration Kernel** 管理 Goal、Work Graph、Lease、Gate、Budget、Evidence、Reconcile 和 Completion。
+4. 使用 **确定性 Orchestration Kernel** 管理 Goal、Work Graph、Lease、Gate、Evidence、Reconcile 和 Completion。
 5. 使用 **SQLite 当前状态 + 同事务追加事件**；不是纯文件状态，也不是完整 Event Sourcing。
 6. 每个 Attempt 使用独立 **Git worktree**；Agent 工作区不被直接信任，补丁在干净验证工作区重放后再晋升。
 7. v0.1 默认 `max_parallel = 1`；状态、恢复和闭环正确后再开放安全并行。
@@ -84,7 +85,7 @@ CLI ── Local API/Unix Socket ── xgoal Daemon/Kernel
 | 安全性 | 默认最小权限；除受信 Agent Profile 的 Provider Transport/CLI 登录态外，项目网络与 Secret、远端写和生产操作默认禁止；能力不足时明确降级。 |
 | 可替换性 | Kernel 不依赖 Codex/Claude 私有数据结构；通过规范化 Adapter 协议接入。 |
 | 可测试性 | 核心状态机和 Effect Interpreter 可使用 Fake Adapter、Fake Clock、Fake Process 测试。 |
-| 可观测性 | 结构化事件、日志、状态快照、预算和最近实质进展均可查询。 |
+| 可观测性 | 结构化事件、日志、状态快照和最近实质进展均可查询。 |
 | 简洁性 | v0.1 不引入分布式一致性、消息队列、Kubernetes、插件市场或复杂角色社会。 |
 
 ---
@@ -112,7 +113,7 @@ CLI ── Local API/Unix Socket ── xgoal Daemon/Kernel
 - 分配 Lease、创建 Attempt 和 Workspace。
 - 选择 Agent Profile，构建 Invocation 并监督进程。
 - 读取外部事实、运行 Validator、记录 Evidence。
-- 执行 Reconcile、Gate、Budget 和 Promotion。
+- 执行 Reconcile、Gate 和 Promotion。
 - 根据确定性 Completion Predicate 结束 Goal。
 
 ### 3.4 Project Tooling
@@ -187,7 +188,6 @@ flowchart LR
 | Review Coordinator | 创建 Reviewer Work Packet，保存 Finding | Reviewer 通过 Adapter |
 | Reconcile Engine | 根据状态和证据决定修复、重试、重规划或 Gate | 否 |
 | Policy/Gate Engine | 权限、风险、授权范围和过期控制 | 否 |
-| Budget Manager | Attempt、时长、token、费用和并发上限 | 否 |
 | Promotion Manager | 干净重放、复验、集成 Commit 和最终锁 | 否 |
 | Evidence Store | Evidence 元数据、哈希、过期关系 | 否 |
 | Report Builder | Goal→Criteria→Evidence 的最终报告 | 否，可选 Agent 仅润色非事实部分 |
@@ -287,7 +287,6 @@ xgoal/
 │   ├── review/                 # Review Packet/Finding
 │   ├── reconcile/              # Failure Fingerprint/决策
 │   ├── policy/                 # 权限、Scope、Gate
-│   ├── budget/                 # 配额与资源使用
 │   ├── promotion/              # 干净重放与串行集成
 │   ├── report/                 # Markdown/JSON 报告
 │   └── observability/          # slog、metrics、redaction
@@ -329,7 +328,6 @@ Git 操作使用系统 `git` CLI，而不是在 v0.1 使用纯 Go Git 实现，�
 | Evidence | id, kind, subject, producer, authority, tree_hash, payload_hash, state | 不可静默覆盖；过期状态显式记录 |
 | ReviewFinding | id, review_attempt_id, severity, status, location, evidence_ref | Blocker 未关闭时阻止 Promotion/Completion |
 | Gate | id, scope, reason, state, options, decision, expires_at | 授权必须限制动作、对象和有效期 |
-| Budget | goal_id, limits, consumed | 预算阻止新调度，不替代完成验证 |
 | Effect | id, key, type, state, request, observation | 同一 Effect Key 不重复产生不可控副作用 |
 | Event | id, aggregate, sequence, type, actor, payload_hash, created_at | 追加写；同一 Aggregate Sequence 唯一 |
 
@@ -438,7 +436,7 @@ stateDiagram-v2
     [*] --> DRAFT
     DRAFT --> READY: Goal Revision 冻结且可验收
     READY --> RUNNING: Plan 激活并开始调度
-    RUNNING --> WAITING: Gate/Budget/环境/无进展阻塞
+    RUNNING --> WAITING: Gate/策略/环境/无进展阻塞
     WAITING --> RUNNING: 阻塞解除
     RUNNING --> VERIFYING: Required Work 全部完成
     VERIFYING --> RUNNING: 最终验证失败并可修复
@@ -472,7 +470,7 @@ stateDiagram-v2
     VERIFYING --> COMPLETED: 验证、Review、Promotion 通过
     VERIFYING --> RECONCILING: 验证/Review/Promotion 失败
     RECONCILING --> READY: 允许新 Attempt
-    RECONCILING --> WAITING: Gate/预算/无进展
+    RECONCILING --> WAITING: Gate/策略/无进展
     WAITING --> READY: 阻塞解除
     PENDING --> CANCELLED
     READY --> CANCELLED
@@ -585,6 +583,7 @@ Planner 输出：
 - 系统计算已有 Work Item、进行中 Attempt 和 Evidence 的影响。
 - 已完成工作只有在新 Goal/Plan 仍覆盖且证据未过期时才可继承。
 - 不能删除正在运行节点；必须先取消 Attempt 并释放 Lease。
+- 取消 Work Item 使用一个 SQLite 事务持久化 `Work=CANCELLED`、`Attempt=INTERRUPTED` 与 `Lease=REVOKED`，保留原记录；若被取消的是 Required Work，Goal 进入 `WAITING` 等待 replan 或显式取消。事务提交后才向对应运行中 Agent 发送取消信号。
 
 ---
 
@@ -610,7 +609,7 @@ for {
         continue
     }
 
-    if !budgetAllows(candidate) || !policyAllows(candidate) {
+    if !policyAllows(candidate) {
         createOrRefreshGateOrWaitingReason()
         continue
     }
@@ -632,7 +631,6 @@ Work Item 进入 Ready 必须同时满足：
 - 所有 Hard Dependency 均为 `COMPLETED`。
 - 所属 Goal 和 Plan Revision 当前有效。
 - 不存在未解决 Gate。
-- 未超过 Attempt/Budget 上限。
 - 没有活动 Lease。
 - 所需 Agent 能力、环境和 Validator 可用。
 - 并发模式下，与活动任务的写 Scope 不冲突。
@@ -680,12 +678,12 @@ state = ACTIVE|RELEASED|EXPIRED|REVOKED
 
 #### Provider Transport 与 Probe 分层
 
-`Provider Transport` 仅指 Codex/Claude CLI 与其模型供应商控制面的连接；`Project Network` 指 Agent 工具、项目命令、bootstrap、Validator 和服务访问网络。前者由受信 Agent Profile 决定并计入 Budget，后者由 Work Item Policy 决定且默认 `DENY`。任何 Agent 输出都不能把 Project Network 改写为 Provider Transport。
+`Provider Transport` 仅指 Codex/Claude CLI 与其模型供应商控制面的连接；`Project Network` 指 Agent 工具、项目命令、bootstrap、Validator 和服务访问网络。前者由受信 Agent Profile 决定，后者由 Work Item Policy 决定且默认 `DENY`。任何 Agent 输出都不能把 Project Network 改写为 Provider Transport。
 
 Probe 分为：
 
-- `PASSIVE`：只执行 binary lookup、`--version`、`--help`、静态配置/认证存在性检查和本地 fixture parser test；不得发起模型请求或产生供应商费用。`doctor` 默认只运行该级别。
-- `ACTIVE_CONTRACT`：执行一个最小真实结构化回合，验证认证、Provider Transport、事件、Schema、取消/超时和可选 Resume。只能由显式 `doctor --active`、验收命令或运行前必要检查触发，必须先通过 Profile Policy 与 Budget，并保存 Usage/Cost 为实际值或 `unknown`。
+- `PASSIVE`：只执行 binary lookup、`--version`、`--help`、静态配置/认证存在性检查和本地 fixture parser test；不得发起模型请求。`doctor` 默认只运行该级别。
+- `ACTIVE_CONTRACT`：执行一个最小真实结构化回合，验证认证、Provider Transport、事件、Schema、取消/超时和可选 Resume。只能由显式 `doctor --active`、验收命令或运行前必要检查触发，必须先通过 Profile Policy，在调用方给定的超时内结束，并保存独立 Evidence。
 
 Passive Pass 不得宣称真实模型回合可用；Active Probe 失败不得被静态 `--help` 结果覆盖。
 
@@ -712,14 +710,7 @@ type ProbeSpec struct {
     Mode              ProbeMode
     ProfileID         string
     ProviderTransport bool
-    Budget            ProbeBudget
     Timeout           time.Duration
-}
-
-type ProbeBudget struct {
-    MaxWallTime   time.Duration
-    MaxTokens     int64 // 0 表示未知/未由供应商支持，不表示无限
-    MaxCostMicros int64 // 货币与估算口径来自 Agent Profile
 }
 
 type Capabilities struct {
@@ -727,8 +718,6 @@ type Capabilities struct {
     StructuredOutput    bool
     StreamingEvents     bool
     ResumeSession       bool
-    UsageReporting      bool
-    CostReporting       bool
     SandboxModes        []string
     ToolAllowlist       bool
     ApprovalModes       []string
@@ -770,13 +759,12 @@ type Invocation struct {
 
 ```go
 type AgentEvent struct {
-    Type       string // session, turn, command, file_change, message, usage, result
+    Type       string // session, turn, command, file_change, message, result
     At         time.Time
     SessionID  string
     Summary    string
     Command    *CommandClaim
     FileChange *FileChangeClaim
-    Usage      *Usage
     RawRef     string // 脱敏后的原始事件文件引用
 }
 ```
@@ -825,7 +813,7 @@ codex exec
 
 Adapter 必须：
 
-- 默认 `Probe(PASSIVE)` 只执行本地无费用检查；`Probe(ACTIVE_CONTRACT)` 才执行最小真实协议回合，并记录 Provider/Budget Evidence。
+- 默认 `Probe(PASSIVE)` 只执行本地检查；`Probe(ACTIVE_CONTRACT)` 才执行最小真实协议回合，并记录 Provider/timeout Evidence。
 - 对未知 Event Type 保留原始记录但不崩溃。
 - 结构化结果缺失、Schema 不匹配或 JSONL 截断时返回 `INVALID_OUTPUT`。
 - 不以进程退出码 0 代替结果校验。
@@ -1281,7 +1269,7 @@ OPEN → RESOLVED_BY_PATCH
 - Goal/Plan/Work Item 当前版本。
 - Attempt Result、Agent Events、Patch Manifest。
 - Validator Runs、Review Findings、Environment Evidence。
-- Lease、Budget、Policy 和历史 Failure Fingerprint。
+- Lease、Policy 和历史 Failure Fingerprint。
 
 ### 18.2 Failure Class
 
@@ -1299,7 +1287,6 @@ VALIDATOR_UNAVAILABLE
 REVIEW_BLOCKED
 GOAL_AMBIGUOUS
 POLICY_BLOCKED
-BUDGET_EXHAUSTED
 NO_MATERIAL_PROGRESS
 INTERNAL_INVARIANT_VIOLATION
 ```
@@ -1339,7 +1326,7 @@ Agent 新增解释文本、重复相同 Patch 或产生同一失败输出不算�
 
 | 条件 | 默认动作 |
 |---|---|
-| Agent 协议瞬时错误，未产生副作用，未超预算 | 新 Attempt；可切换 Adapter/Profile |
+| Agent 协议瞬时错误，未产生副作用 | 新 Attempt；可切换 Adapter/Profile |
 | 环境缺少受信依赖 | 运行受信 bootstrap；仍失败则 Gate |
 | Scope Violation | Quarantine；把违规路径和策略反馈给新 Fix Attempt |
 | Validator Failed 且有新 Patch/新失败事实 | 创建 Fix Attempt，附失败 Evidence |
@@ -1347,7 +1334,6 @@ Agent 新增解释文本、重复相同 Patch 或产生同一失败输出不算�
 | Reviewer Blocker | 创建 Fix Work Item 或 Human Waiver Gate |
 | Patch 与最新 Integration 冲突 | 创建 Rebase/Fix Attempt，不直接覆盖 |
 | Goal/Acceptance 歧义 | Goal Revision Gate |
-| Budget 耗尽 | `WAITING(BUDGET)`；人类扩额、降范围或取消 |
 | 内部不变量破坏 | 停止项目写循环，生成高优先级系统 Gate 与诊断包 |
 
 ### 18.6 Replan
@@ -1404,7 +1390,7 @@ ALLOW | DENY | REQUIRE_GATE
 | 修改 Validator | Propose only | Gate | Propose only | 按批准配置执行 |
 | 生产操作 | Deny | Deny | Deny | v0.1 Deny |
 
-`Provider Transport` 的 Allow 只允许已配置 CLI 到其供应商控制面，并计入 Agent Budget；不能借此为 Bash、项目依赖下载、测试或服务开放网络。`cli-session` Credential 不视为 Agent 可读 Secret；显式 API Key 注入仍需要 Secret Provider、有限 Gate 和脱敏。
+`Provider Transport` 的 Allow 只允许已配置 CLI 到其供应商控制面；不能借此为 Bash、项目依赖下载、测试或服务开放网络。`cli-session` Credential 不视为 Agent 可读 Secret；显式 API Key 注入仍需要 Secret Provider、有限 Gate 和脱敏。
 
 ### 19.3 Gate 数据
 
@@ -1449,28 +1435,9 @@ Gate Decision 必须绑定：
 
 ---
 
-## 20. Budget
+## 20. 运行安全边界
 
-### 20.1 预算维度
-
-- Goal 总 Attempt 数。
-- 单 Work Item Attempt 数。
-- Agent Turn/Session 数。
-- 墙钟时间。
-- 并发数。
-- token 使用量（供应商可提供时）。
-- 费用估算（供应商可提供且口径明确时）。
-- Validator 总时长和单次超时。
-- Workspace/日志磁盘占用。
-
-### 20.2 执行规则
-
-- 调度前检查硬预算。
-- Agent 结束后基于真实 Usage 更新消耗；未知值标记 `unknown`，不填 0。
-- 达到 Soft Limit 时生成 Attention Event；达到 Hard Limit 时不启动新 Attempt。
-- 已在执行的 Attempt 是否取消由 Budget Policy 决定。
-- 增加预算走 Human Gate，并记录增量和原因。
-- 预算只限制资源，不能让未通过验证的任务被标记完成。
+xgoal 不承担模型 token、费用、余额或账单的采集、估算、限额与归因；这些属于原生 Agent、模型供应商或其外层系统。xgoal 只保留防止本地执行失控所需的超时、输出字节上限、进程取消、并发策略与无进展判定，这些安全边界不产生计费语义，也不进入 Completion Predicate。
 
 ---
 
@@ -1589,6 +1556,7 @@ GET    /v1/goals/{id}/gates
 POST   /v1/gates/{id}/decisions
 GET    /v1/attempts/{id}/logs
 POST   /v1/work-items/{id}/retry
+POST   /v1/work-items/{id}/cancel
 GET    /v1/goals/{id}/report
 POST   /v1/projects/{id}/clean
 ```
@@ -1719,14 +1687,6 @@ policy:
   destructiveCommands: human-gate
   expandScope: human-gate
 
-budget:
-  maxAttemptsPerWorkItem: 3
-  maxAttemptsPerGoal: 40
-  maxWallTime: 8h
-  maxValidatorTime: 3h
-  maxCostUSD: 25
-  onUnknownCost: allow-with-attention
-
 report:
   formats: [markdown, json]
   includeAgentRawLogs: false
@@ -1776,7 +1736,7 @@ report:
 
 - v0.1 必须要求 `trustedRepository: true`。
 - `xgoal doctor` 显示 `isolation=L0` 和限制。
-- `doctor` 分别显示 Provider Transport、Credential Status、Project/Tool Network 与 Credential Isolation；Passive Probe 不产生模型调用，Active Contract Probe 必须显式触发并计入预算。
+- `doctor` 分别显示 Provider Transport、Credential Status、Project/Tool Network 与 Credential Isolation；Passive Probe 不产生模型调用，Active Contract Probe 必须显式触发并接受正超时边界。
 - 对不可信仓库、未知 Hook、可执行安装脚本生成警告或 Gate。
 - 强安全场景必须等待 v0.2 Container Provider，不以文档声明替代 OS 隔离。
 
@@ -1830,7 +1790,6 @@ InvariantViolation / RecoveryAction
 - Validator 通过率、Flaky 重跑次数。
 - Human Gate 和等待时间。
 - 恢复动作、过期 Lease、迟到结果。
-- token/费用（可用时）。
 
 ---
 
@@ -1838,7 +1797,7 @@ InvariantViolation / RecoveryAction
 
 ### 27.1 测试金字塔
 
-1. **领域单元测试**：状态机、Completion Predicate、Scope、Budget、Failure Fingerprint。
+1. **领域单元测试**：状态机、Completion Predicate、Scope、Failure Fingerprint。
 2. **属性/模型测试**：随机事件序列下不出现非法状态、重复 Lease 和终态回退。
 3. **Store 测试**：事务、CAS、迁移、WAL、并发读写、数据库损坏处理。
 4. **Fake Adapter 集成测试**：可脚本化输出、超时、截断 JSON、迟到事件和崩溃。
@@ -1880,7 +1839,7 @@ InvariantViolation / RecoveryAction
 
 - CI 默认使用录制的脱敏 Event Fixtures 和 Stub CLI，不要求真实账号。
 - 可选 Nightly/Manual Job 使用真实 Codex、Claude CLI 做兼容性验证。
-- Passive Probe 测试必须证明不会启动真实模型回合；Active Contract Probe 测试必须显式启用、归因 Usage/Cost 并在认证或网络缺失时 Fail Closed。
+- Passive Probe 测试必须证明不会启动真实模型回合；Active Contract Probe 测试必须显式启用、受控超时、记录能力 Evidence，并在认证或网络缺失时 Fail Closed。供应商返回的 Usage/Cost 字段不进入 xgoal 状态或报告。
 - Probe 结果保存版本；未通过兼容测试的版本显示 `unsupported` 或 `degraded`。
 - 解析器对未知字段前向兼容，对缺少关键字段 Fail Closed。
 
@@ -1924,7 +1883,7 @@ adapter fixture contract tests
 ### 28.3 公平性
 
 - 固定初始 Commit、工具版本和验收脚本。
-- 相同墙钟、token/费用或 Attempt 上限。
+- 相同的逐任务超时边界。
 - 对照组同样不能看隐藏验收答案。
 - 每个任务多次运行，记录方差。
 - 失败和人工介入不能静默排除。
@@ -1940,8 +1899,6 @@ human_interventions
 recovery_success
 no_progress_attempt_ratio
 wall_time
-token_usage
-estimated_cost
 ```
 
 简历和 README 只引用实际采集、可复现的结果。
@@ -1989,7 +1946,7 @@ estimated_cost
 
 **门禁**：Codex 实现/Claude Review 和 Claude 实现/Codex Review 两条路径通过。
 
-### M5：Reconcile、Gate、Budget、Daemon
+### M5：Reconcile、Gate 与 Daemon
 
 - Failure Fingerprint、No-Progress、Replan。
 - Human Gate 与有限授权。
@@ -2067,48 +2024,48 @@ estimated_cost
 
 ### 32.1 状态与恢复
 
-- [ ] Goal、Work、Attempt、Lease、Gate、Evidence 状态机有单元和属性测试。
-- [ ] 同一 Work Item 不存在两个 Active Lease。
-- [ ] 任一 Effect 边界崩溃后可恢复为确定状态。
-- [ ] 迟到 Worker 无法用旧 Generation 覆盖状态。
-- [ ] SQLite 迁移失败时 Fail Closed，并保留备份。
+- [x] Goal、Work、Attempt、Lease、Gate、Evidence 状态机有单元和属性测试。
+- [x] 同一 Work Item 不存在两个 Active Lease。
+- [x] 任一 Effect 边界崩溃后可恢复为确定状态。
+- [x] 迟到 Worker 无法用旧 Generation 覆盖状态。
+- [x] SQLite 迁移失败时 Fail Closed，并保留备份。
 
 ### 32.2 Agent Adapter
 
-- [ ] Codex 与 Claude Adapter 均支持 Probe、Start、Wait、Cancel 和安全 Resume。
-- [ ] Passive Probe 不产生模型调用；显式 Active Contract Probe 才使用 Provider Transport/认证/预算并保存 Evidence。
-- [ ] Provider Transport、CLI Credential 与 Project/Tool Network/Secret 权限分离，凭据不进入 Packet、项目命令、Validator 或未脱敏日志。
-- [ ] 结构化输出 Schema 错误会进入 `INVALID_OUTPUT`。
-- [ ] 未知事件前向兼容且保留原始记录。
-- [ ] Agent exit 0 不会绕过 Patch 捕获与 Validator。
-- [ ] 角色权限和工作目录由 xgoal 设置，不能由 Agent 输出覆盖。
+- [x] Codex 与 Claude Adapter 均支持 Probe、Start、Wait、Cancel 和安全 Resume。
+- [x] Passive Probe 不产生模型调用；显式 Active Contract Probe 才使用 Provider Transport/认证，在正超时边界内完成并保存 Evidence。
+- [x] Provider Transport、CLI Credential 与 Project/Tool Network/Secret 权限分离，凭据不进入 Packet、项目命令、Validator 或未脱敏日志。
+- [x] 结构化输出 Schema 错误会进入 `INVALID_OUTPUT`。
+- [x] 未知事件前向兼容且保留原始记录。
+- [x] Agent exit 0 不会绕过 Patch 捕获与 Validator。
+- [x] 角色权限和工作目录由 xgoal 设置，不能由 Agent 输出覆盖。
 
 ### 32.3 Git 与环境
 
-- [ ] 每个 Attempt 独立 worktree。
-- [ ] tracked/untracked/binary/rename/symlink 变化均能归因。
-- [ ] Patch Bundle 对 tracked/untracked/binary/rename/mode/symlink/delete 使用不可变 Object 与 Canonical Manifest，缺失或哈希不符时 Fail Closed。
-- [ ] `.git`、范围外路径和软链接逃逸被拒绝。
-- [ ] Agent Commit 不被直接信任。
-- [ ] Patch 在最新 Integration Tree 干净重放并复验。
-- [ ] Promotion 崩溃不会重复 Commit。
+- [x] 每个 Attempt 独立 worktree。
+- [x] tracked/untracked/binary/rename/symlink 变化均能归因。
+- [x] Patch Bundle 对 tracked/untracked/binary/rename/mode/symlink/delete 使用不可变 Object 与 Canonical Manifest，缺失或哈希不符时 Fail Closed。
+- [x] `.git`、范围外路径和软链接逃逸被拒绝。
+- [x] Agent Commit 不被直接信任。
+- [x] Patch 在最新 Integration Tree 干净重放并复验。
+- [x] Promotion 崩溃不会重复 Commit。
 
 ### 32.4 验证与完成
 
-- [ ] Canonical Hash 与 Scope Pattern 在 macOS/Linux、map 顺序、Unicode/大小写、symlink 和逃逸输入上具有稳定 Golden Test。
-- [ ] Required Validator 只来自受信配置。
-- [ ] Evidence 绑定 Goal Revision、Config Hash、Validator Hash 和 Tree。
-- [ ] Tree 或 Validator 变化使旧 Evidence 过期。
-- [ ] Blocker、Gate、Unknown Criterion 阻止完成。
-- [ ] Final Validation 在最终 Integration Tree 上执行。
-- [ ] Final Report 可逐条追溯 Criteria→Evidence。
+- [x] Canonical Hash 与 Scope Pattern 在 macOS/Linux、map 顺序、Unicode/大小写、symlink 和逃逸输入上具有稳定 Golden Test。
+- [x] Required Validator 只来自受信配置。
+- [x] Evidence 绑定 Goal Revision、Config Hash、Validator Hash 和 Tree。
+- [x] Tree 或 Validator 变化使旧 Evidence 过期。
+- [x] Blocker、Gate、Unknown Criterion 阻止完成。
+- [x] Final Validation 在最终 Integration Tree 上执行。
+- [x] Final Report 可逐条追溯 Criteria→Evidence。
 
 ### 32.5 安全与透明
 
-- [ ] 默认禁止 push、生产、发布、Project Secret 和未授权 Project/Tool Network；Provider Transport/CLI Credential 边界被单独披露和验证。
-- [ ] `doctor/status/report` 显示真实隔离等级。
-- [ ] 日志和环境信息经过脱敏，文件权限正确。
-- [ ] 不可信仓库不会被错误标记为强隔离可安全执行。
+- [x] 默认禁止 push、生产、发布、Project Secret 和未授权 Project/Tool Network；Provider Transport/CLI Credential 边界被单独披露和验证。
+- [x] `doctor/status/report` 显示真实隔离等级。
+- [x] 日志和环境信息经过脱敏，文件权限正确。
+- [x] 不可信仓库不会被错误标记为强隔离可安全执行。
 
 ---
 

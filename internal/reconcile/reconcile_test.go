@@ -55,7 +55,7 @@ func TestSameFingerprintWithoutProgressNeverRetriesSameStrategy(t *testing.T) {
 	failure := validFailure()
 	decision, err := reconcile.Decide(reconcile.Input{
 		Failure: failure, Previous: reconcile.Snapshot{PlanRevision: 1}, Current: reconcile.Snapshot{PlanRevision: 1},
-		SameFingerprintStrategy: 1, BudgetAvailable: true,
+		SameFingerprintStrategy: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,21 +65,21 @@ func TestSameFingerprintWithoutProgressNeverRetriesSameStrategy(t *testing.T) {
 	}
 }
 
-func TestAgentFailureMayRetryOnlyWithoutSideEffectsAndWithBudget(t *testing.T) {
+func TestAgentFailureMayRetryOnlyWithoutSideEffects(t *testing.T) {
 	failure := validFailure()
 	failure.Class = reconcile.AgentProtocolInvalid
-	decision, err := reconcile.Decide(reconcile.Input{Failure: failure, Current: reconcile.Snapshot{PlanRevision: 2}, BudgetAvailable: true})
+	decision, err := reconcile.Decide(reconcile.Input{Failure: failure, Current: reconcile.Snapshot{PlanRevision: 2}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if decision.Action != reconcile.RetryNewAttempt {
 		t.Fatalf("action = %s, want retry", decision.Action)
 	}
-	decision, err = reconcile.Decide(reconcile.Input{Failure: failure, Current: reconcile.Snapshot{PlanRevision: 2}, BudgetAvailable: false})
+	decision, err = reconcile.Decide(reconcile.Input{Failure: failure, Current: reconcile.Snapshot{PlanRevision: 2}, SideEffectsObserved: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Action != reconcile.WaitBudget {
-		t.Fatalf("action = %s, want wait budget", decision.Action)
+	if decision.Action != reconcile.Diagnose {
+		t.Fatalf("action = %s, want diagnose", decision.Action)
 	}
 }

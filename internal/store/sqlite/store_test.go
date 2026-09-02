@@ -52,6 +52,13 @@ func TestOpenCreatesPrivateWALStoreAndReopens(t *testing.T) {
 	if migrationCount != len(migrations) {
 		t.Fatalf("migration count = %d, want %d", migrationCount, len(migrations))
 	}
+	var removedTables int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('budget_limits', 'budget_usage')`).Scan(&removedTables); err != nil {
+		t.Fatalf("inspect removed accounting tables: %v", err)
+	}
+	if removedTables != 0 {
+		t.Fatalf("removed accounting tables still exist: %d", removedTables)
+	}
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)

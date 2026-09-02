@@ -40,7 +40,6 @@ type Invocation struct {
 type Execution struct {
 	Result    protocol.ReviewResult
 	SessionID string
-	Usage     *protocol.Usage
 }
 
 type Adapter interface {
@@ -82,9 +81,9 @@ func NewCoordinator(runtimeRoot string) (*Coordinator, error) {
 
 func (coordinator *Coordinator) Prepare(input PrepareInput) (PacketArtifact, error) {
 	if !component(input.ID) || !component(input.WorkItemID) || !component(input.ImplementationAttemptID) ||
-		!component(input.ImplementationProfileID) || !component(input.ReviewerProfileID) || input.ImplementationProfileID == input.ReviewerProfileID ||
+		!component(input.ImplementationProfileID) || !component(input.ReviewerProfileID) ||
 		input.ImplementationSessionID == "" || input.CandidateTree == "" || len(input.ValidatorRunIDs) == 0 {
-		return PacketArtifact{}, errors.New("review preparation identity and independent profiles are required")
+		return PacketArtifact{}, errors.New("review preparation identity and reviewer profile are required")
 	}
 	marker, err := workspace.ReadMarkerSnapshot(input.ValidationWorkspace.MarkerPath)
 	if err != nil || marker.ID != input.ValidationWorkspace.ID || marker.Kind != workspace.Validation || marker.AttemptID != input.ImplementationAttemptID || marker.Path != input.ValidationWorkspace.Path {
@@ -127,7 +126,7 @@ func (coordinator *Coordinator) Prepare(input PrepareInput) (PacketArtifact, err
 
 func ValidateInvocation(invocation Invocation) (protocol.ReviewPacket, error) {
 	if !component(invocation.InvocationID) || !component(invocation.ReviewID) || !component(invocation.ReviewerProfileID) ||
-		!component(invocation.ImplementationProfileID) || invocation.ReviewerProfileID == invocation.ImplementationProfileID ||
+		!component(invocation.ImplementationProfileID) ||
 		invocation.ImplementationSessionID == "" || invocation.GoalRevisionHash == "" || invocation.PlanRevisionHash == "" ||
 		invocation.BaseTree == "" || invocation.CandidateTree == "" || invocation.PacketHash == "" ||
 		!cleanAbsolute(invocation.WorkDir) || !cleanAbsolute(invocation.PacketPath) || strings.TrimSpace(invocation.Prompt) == "" ||

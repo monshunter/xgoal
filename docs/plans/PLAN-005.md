@@ -6,7 +6,7 @@
 
 ## 范围
 
-包括 Claude Passive/Active Probe、Print Mode/Stream JSON/JSON Schema、角色工具权限、取消和安全 Resume；Review Packet/Result/Finding 契约与不可变制品、SQLite 迁移和状态转换；独立 Reviewer Session；两条跨 Provider 真实 smoke。完整 Reconcile/Gate/Budget、Daemon/API、最终报告与 Benchmark 属于 M5–M6。
+包括 Claude Passive/Active Probe、Print Mode/Stream JSON/JSON Schema、角色工具权限、取消和安全 Resume；Review Packet/Result/Finding 契约与不可变制品、SQLite 迁移和状态转换；独立 Reviewer Session；两条跨 Provider 真实 smoke。完整 Reconcile/Gate、Daemon/API、最终报告与 Benchmark 属于 M5–M6。
 
 ## Phase 1：冻结 Claude 与 Review 合同
 
@@ -17,9 +17,9 @@
 
 ## Phase 2：实现 Claude Adapter
 
-- [x] 2.1 实现 Stream JSON 未知事件兼容、限长脱敏制品、Usage/Cost 与严格 Agent Result 解析
+- [x] 2.1 实现 Stream JSON 未知事件兼容、限长脱敏制品、供应商模型核算字段丢弃与严格 Agent Result 解析
 - [x] 2.2 实现 `Start/Wait/Cancel`、角色最小工具集、`dontAsk`、stdin Prompt、只读 Packet 和进程组回收
-- [x] 2.3 实现 Passive/Active Probe、显式预算和 Session provenance 安全 Resume
+- [x] 2.3 实现 Passive/Active Probe、显式正超时和 Session provenance 安全 Resume
 - [x] 2.4 通过 fake Claude executable 的合同、失败注入、权限和跨进程恢复测试
 
 ## Phase 3：实现独立 Review 与 Finding

@@ -113,8 +113,8 @@ func (definition Definition) Validate() error {
 	default:
 		return fmt.Errorf("unsupported validator type %q", definition.Type)
 	}
-	if definition.Type == "command" && len(definition.Argv) == 0 {
-		return errors.New("command validator requires argv")
+	if len(definition.Argv) == 0 {
+		return errors.New("deterministic validator requires argv")
 	}
 	if !sortedUniqueStrings(definition.Phases) || !sortedUniqueStrings(definition.EnvironmentAllowlist) {
 		return errors.New("validator phases and environment names must be uniquely sorted")
@@ -180,7 +180,7 @@ func buildDefinition(ctx context.Context, repository *gitrepo.Repository, baseCo
 		ExpectedExitCodes: expected, EnvironmentAllowlist: environment,
 		Required: configured.Required, Flaky: configured.Flaky.Enabled,
 	}
-	if configured.Type == "command" && strings.Contains(configured.Argv[0], "/") {
+	if strings.Contains(configured.Argv[0], "/") {
 		if !strings.HasPrefix(configured.Argv[0], "./") {
 			return Definition{}, errors.New("repository executable must use a ./ relative path")
 		}

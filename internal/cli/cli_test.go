@@ -16,8 +16,8 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
 	}
-	if got := strings.TrimSpace(stdout.String()); got != "xgoal dev" {
-		t.Fatalf("stdout = %q, want %q", got, "xgoal dev")
+	if got := strings.TrimSpace(stdout.String()); got != "xgoal v0.1.0" {
+		t.Fatalf("stdout = %q, want %q", got, "xgoal v0.1.0")
 	}
 }
 

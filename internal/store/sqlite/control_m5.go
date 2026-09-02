@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monshunter/xgoal/internal/budget"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/policy"
 	"github.com/monshunter/xgoal/internal/reconcile"
@@ -180,160 +179,6 @@ func (s *Store) RevokeGate(ctx context.Context, id string, expectedVersion int64
 		return nil
 	})
 	return result, err
-}
-
-type BudgetSnapshot struct {
-	GoalID     string       `json:"goal_id"`
-	WorkItemID string       `json:"work_item_id,omitempty"`
-	Limit      budget.Limit `json:"limit"`
-	Usage      budget.Usage `json:"usage"`
-	Version    int64        `json:"version"`
-}
-
-func (s *Store) CreateBudget(ctx context.Context, goalID, workItemID string, limit budget.Limit, known bool, event EventInput) (BudgetSnapshot, error) {
-	if !validIdempotencyLabel(goalID) || (workItemID != "" && !validIdempotencyLabel(workItemID)) {
-		return BudgetSnapshot{}, errors.New("invalid budget scope")
-	}
-	if err := budget.ValidateLimit(limit); err != nil {
-		return BudgetSnapshot{}, err
-	}
-	prepared, err := prepareEvent(event)
-	if err != nil {
-		return BudgetSnapshot{}, err
-	}
-	result := BudgetSnapshot{GoalID: goalID, WorkItemID: workItemID, Limit: limit, Usage: budget.Usage{Dimension: limit.Dimension, Known: known}, Version: 1}
-	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
-		if _, err := readGoal(ctx, tx, goalID); err != nil {
-			return err
-		}
-		if workItemID != "" {
-			if _, err := readWorkItem(ctx, tx, workItemID); err != nil {
-				return err
-			}
-		}
-		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO budget_limits(goal_id, work_item_id, dimension, soft_limit, hard_limit, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, goalID, workItemID, limit.Dimension, limit.Soft, limit.Hard, now, now); err != nil {
-			return fmt.Errorf("insert budget limit: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO budget_usage(goal_id, work_item_id, dimension, known, consumed, version, updated_at) VALUES (?, ?, ?, ?, 0, 1, ?)`, goalID, workItemID, limit.Dimension, boolInteger(known), now); err != nil {
-			return fmt.Errorf("insert budget usage: %w", err)
-		}
-		return s.appendEvent(ctx, tx, "goal", goalID, prepared)
-	})
-	return result, err
-}
-
-func (s *Store) Budget(ctx context.Context, goalID, workItemID string, dimension budget.Dimension) (BudgetSnapshot, error) {
-	var result BudgetSnapshot
-	var known int
-	err := s.db.QueryRowContext(ctx, `
-SELECT l.goal_id, l.work_item_id, l.dimension, l.soft_limit, l.hard_limit,
-       u.known, u.consumed, u.version
-FROM budget_limits l
-JOIN budget_usage u USING(goal_id, work_item_id, dimension)
-WHERE l.goal_id = ? AND l.work_item_id = ? AND l.dimension = ?`, goalID, workItemID, dimension).Scan(
-		&result.GoalID, &result.WorkItemID, &result.Limit.Dimension, &result.Limit.Soft, &result.Limit.Hard,
-		&known, &result.Usage.Consumed, &result.Version,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return BudgetSnapshot{}, fmt.Errorf("budget %s/%s/%s: %w", goalID, workItemID, dimension, basestore.ErrNotFound)
-	}
-	if err != nil {
-		return BudgetSnapshot{}, fmt.Errorf("read budget: %w", err)
-	}
-	result.Usage.Dimension = result.Limit.Dimension
-	result.Usage.Known = known == 1
-	return result, nil
-}
-
-// ConsumeBudget atomically preflights and accounts a known request.
-func (s *Store) ConsumeBudget(ctx context.Context, goalID, workItemID string, request budget.Request, event EventInput) (budget.Result, error) {
-	prepared, err := prepareEvent(event)
-	if err != nil {
-		return budget.Result{}, err
-	}
-	var result budget.Result
-	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
-		var limit budget.Limit
-		var usage budget.Usage
-		var known int
-		var version int64
-		err := tx.QueryRowContext(ctx, `SELECT l.dimension, l.soft_limit, l.hard_limit, u.known, u.consumed, u.version FROM budget_limits l JOIN budget_usage u USING(goal_id, work_item_id, dimension) WHERE l.goal_id = ? AND l.work_item_id = ? AND l.dimension = ?`, goalID, workItemID, request.Dimension).Scan(&limit.Dimension, &limit.Soft, &limit.Hard, &known, &usage.Consumed, &version)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("budget %s/%s/%s: %w", goalID, workItemID, request.Dimension, basestore.ErrNotFound)
-		}
-		if err != nil {
-			return fmt.Errorf("read budget for consumption: %w", err)
-		}
-		usage.Dimension, usage.Known = limit.Dimension, known == 1
-		result, err = budget.Preflight(limit, usage, request)
-		if err != nil {
-			return err
-		}
-		if result.Decision == budget.HardBlock || result.Decision == budget.RequireUsage {
-			return fmt.Errorf("budget %s/%s/%s decision %s: %w", goalID, workItemID, request.Dimension, result.Decision, basestore.ErrBudgetExceeded)
-		}
-		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		updated, err := tx.ExecContext(ctx, `UPDATE budget_usage SET consumed = ?, version = version + 1, updated_at = ? WHERE goal_id = ? AND work_item_id = ? AND dimension = ? AND version = ?`, result.After.Consumed, now, goalID, workItemID, request.Dimension, version)
-		if err != nil {
-			return fmt.Errorf("consume budget: %w", err)
-		}
-		affected, _ := updated.RowsAffected()
-		if affected != 1 {
-			return fmt.Errorf("budget %s/%s/%s: %w", goalID, workItemID, request.Dimension, basestore.ErrConflict)
-		}
-		return s.appendEvent(ctx, tx, "goal", goalID, prepared)
-	})
-	return result, err
-}
-
-// ObserveBudget accounts actual usage; an unknown observation makes the cumulative value unknown.
-func (s *Store) ObserveBudget(ctx context.Context, goalID, workItemID string, observed budget.Usage, event EventInput) (BudgetSnapshot, error) {
-	prepared, err := prepareEvent(event)
-	if err != nil {
-		return BudgetSnapshot{}, err
-	}
-	var result BudgetSnapshot
-	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
-		current, err := readBudgetTx(ctx, tx, goalID, workItemID, observed.Dimension)
-		if err != nil {
-			return err
-		}
-		next, err := budget.Observe(current.Usage, observed)
-		if err != nil {
-			return err
-		}
-		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		updated, err := tx.ExecContext(ctx, `UPDATE budget_usage SET known = ?, consumed = ?, version = version + 1, updated_at = ? WHERE goal_id = ? AND work_item_id = ? AND dimension = ? AND version = ?`, boolInteger(next.Known), next.Consumed, now, goalID, workItemID, observed.Dimension, current.Version)
-		if err != nil {
-			return fmt.Errorf("observe budget: %w", err)
-		}
-		affected, _ := updated.RowsAffected()
-		if affected != 1 {
-			return fmt.Errorf("budget %s/%s/%s: %w", goalID, workItemID, observed.Dimension, basestore.ErrConflict)
-		}
-		if err := s.appendEvent(ctx, tx, "goal", goalID, prepared); err != nil {
-			return err
-		}
-		current.Usage, current.Version = next, current.Version+1
-		result = current
-		return nil
-	})
-	return result, err
-}
-
-func readBudgetTx(ctx context.Context, tx *sql.Tx, goalID, workItemID string, dimension budget.Dimension) (BudgetSnapshot, error) {
-	var result BudgetSnapshot
-	var known int
-	err := tx.QueryRowContext(ctx, `SELECT l.goal_id, l.work_item_id, l.dimension, l.soft_limit, l.hard_limit, u.known, u.consumed, u.version FROM budget_limits l JOIN budget_usage u USING(goal_id, work_item_id, dimension) WHERE l.goal_id = ? AND l.work_item_id = ? AND l.dimension = ?`, goalID, workItemID, dimension).Scan(&result.GoalID, &result.WorkItemID, &result.Limit.Dimension, &result.Limit.Soft, &result.Limit.Hard, &known, &result.Usage.Consumed, &result.Version)
-	if errors.Is(err, sql.ErrNoRows) {
-		return BudgetSnapshot{}, fmt.Errorf("budget %s/%s/%s: %w", goalID, workItemID, dimension, basestore.ErrNotFound)
-	}
-	if err != nil {
-		return BudgetSnapshot{}, err
-	}
-	result.Usage.Dimension, result.Usage.Known = result.Limit.Dimension, known == 1
-	return result, nil
 }
 
 type FailureDraft struct {
@@ -570,9 +415,31 @@ func (s *Store) ActivateReplan(ctx context.Context, id string, expectedPlanVersi
 		if goal.Version != expectedGoalVersion || goal.ActiveRevisionID != revision.ID || (goal.State != domain.GoalRunning && goal.State != domain.GoalWaiting) {
 			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
 		}
+		var activeLeases int
+		if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM leases lease
+JOIN work_items work ON work.id = lease.work_item_id
+JOIN plan_revisions active_plan ON active_plan.id = work.plan_revision_id
+WHERE active_plan.goal_revision_id = ? AND active_plan.status = ? AND lease.state = ?`,
+			revision.ID, domain.PlanActive, domain.LeaseActive,
+		).Scan(&activeLeases); err != nil {
+			return fmt.Errorf("check active plan leases: %w", err)
+		}
+		if activeLeases != 0 {
+			return fmt.Errorf("goal %q has active work: %w", goal.ID, basestore.ErrActiveLease)
+		}
 		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `UPDATE plan_revisions SET status = ?, version = version + 1, updated_at = ? WHERE goal_revision_id = ? AND status = ?`, domain.PlanSuperseded, now, revision.ID, domain.PlanActive); err != nil {
+		superseded, err := tx.ExecContext(ctx, `UPDATE plan_revisions SET status = ?, version = version + 1, updated_at = ? WHERE goal_revision_id = ? AND status = ?`, domain.PlanSuperseded, now, revision.ID, domain.PlanActive)
+		if err != nil {
 			return fmt.Errorf("supersede active plan: %w", err)
+		}
+		supersededCount, err := superseded.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("read superseded plan result: %w", err)
+		}
+		if supersededCount != 1 {
+			return fmt.Errorf("goal %q active plan: %w", goal.ID, basestore.ErrConflict)
 		}
 		updated, err := tx.ExecContext(ctx, `UPDATE plan_revisions SET status = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND status = ?`, domain.PlanActive, now, id, expectedPlanVersion, domain.PlanDraft)
 		if err != nil {
@@ -582,10 +449,16 @@ func (s *Store) ActivateReplan(ctx context.Context, id string, expectedPlanVersi
 		if affected != 1 {
 			return fmt.Errorf("plan revision %q: %w", id, basestore.ErrConflict)
 		}
-		if goal.State == domain.GoalWaiting {
-			if _, err := tx.ExecContext(ctx, `UPDATE goals SET state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`, domain.GoalRunning, now, goal.ID, expectedGoalVersion); err != nil {
-				return fmt.Errorf("resume replanned goal: %w", err)
-			}
+		updatedGoal, err := tx.ExecContext(ctx, `UPDATE goals SET state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`, domain.GoalRunning, now, goal.ID, expectedGoalVersion)
+		if err != nil {
+			return fmt.Errorf("advance replanned goal: %w", err)
+		}
+		updatedGoalCount, err := updatedGoal.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("read replanned goal result: %w", err)
+		}
+		if updatedGoalCount != 1 {
+			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
 		}
 		if err := s.appendEvent(ctx, tx, "plan", id, prepared); err != nil {
 			return err

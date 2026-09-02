@@ -26,6 +26,10 @@ func TestPromotionJournalPreflightAndEffectObservation(t *testing.T) {
 	if err != nil || !created || record.State != promotion.Requested {
 		t.Fatalf("Ensure() = %+v, %v, %v", record, created, err)
 	}
+	recoverable, err := store.RecoverablePromotions(ctx)
+	if err != nil || len(recoverable) != 1 || recoverable[0].ID != request.ID {
+		t.Fatalf("RecoverablePromotions() = %+v, %v", recoverable, err)
+	}
 	if err := store.Preflight(ctx, request); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -48,6 +52,9 @@ func TestPromotionJournalPreflightAndEffectObservation(t *testing.T) {
 	record, err = store.Observe(ctx, request.ID, observation)
 	if err != nil || record.State != promotion.Observed {
 		t.Fatalf("Observe() = %+v, %v", record, err)
+	}
+	if recoverable, err := store.RecoverablePromotions(ctx); err != nil || len(recoverable) != 0 {
+		t.Fatalf("terminal promotion remained recoverable = %+v, %v", recoverable, err)
 	}
 	effect, err := store.Effect(ctx, request.EffectID)
 	if err != nil || effect.State != domain.EffectSucceeded || effect.ObservationHash == "" {

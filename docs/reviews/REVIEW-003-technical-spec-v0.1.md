@@ -29,7 +29,7 @@
 
 设计一方面要求 Codex/Claude CLI 调用远端模型，另一方面把 Planner、Implementer、Reviewer 的 `ACCESS_NETWORK` 全部默认设为 `DENY`，并以 `runtime.network: deny` 表达默认策略。若它包含 CLI 的供应商连接，核心 Goal 编译和 Attempt 无法运行；若它只指 Agent 在项目内发起的网络工具调用，当前 Policy Action、配置和 Evidence 又无法表达两者差异。
 
-修复方向：明确区分受信的 Provider Control Plane Transport 与 Agent/Project Tool Network。前者按 Agent Profile 和用户已有认证调用、计入预算且不得向 Work Packet 暴露凭据；后者继续默认拒绝并只能有限 Gate。状态、doctor 和报告必须分别展示两种能力。
+修复方向：明确区分受信的 Provider Control Plane Transport 与 Agent/Project Tool Network。前者按 Agent Profile 和用户已有认证调用且不得向 Work Packet 暴露凭据；后者继续默认拒绝并只能有限 Gate。状态、doctor 和报告必须分别展示两种能力。
 
 ### High：Provider 认证与 `USE_SECRET=DENY` 的边界未定义
 
@@ -39,9 +39,9 @@ CLI 需要读取自身登录态、Keychain 或受控 API Key 才能调用模型�
 
 ### High：Probe 的被动诊断与付费主动协议测试没有分层
 
-Codex Adapter 要求 `Probe` 执行“最小无副作用协议测试”，但真实模型回合会使用供应商网络、账号配额、token 和可能的费用。普通 `doctor` 不应在没有明确提示和预算归因时自动产生该副作用。
+Codex Adapter 要求 `Probe` 执行“最小无副作用协议测试”，但真实模型回合会使用供应商网络与认证。普通 `doctor` 不应在没有明确提示时自动产生该副作用。
 
-修复方向：定义 Passive Probe（binary/version/help/config/auth presence）与 Active Contract Probe（真实最小回合）两级；Active 仅由显式参数、适用 Gate/预算与 Evidence 触发。
+修复方向：定义 Passive Probe（binary/version/help/config/auth presence）与 Active Contract Probe（真实最小回合）两级；Active 仅由显式参数、适用 Policy、正超时与 Evidence 触发。
 
 ### High：安全哈希与写 Scope 缺少规范算法
 

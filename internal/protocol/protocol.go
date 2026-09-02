@@ -232,7 +232,6 @@ type AgentEvent struct {
 	Summary         string           `json:"summary,omitempty"`
 	Command         *CommandClaim    `json:"command,omitempty"`
 	FileChange      *FileChangeClaim `json:"file_change,omitempty"`
-	Usage           *Usage           `json:"usage,omitempty"`
 	RawRef          string           `json:"raw_ref,omitempty"`
 }
 
@@ -246,13 +245,6 @@ type FileChangeClaim struct {
 	Kind string `json:"kind"`
 }
 
-type Usage struct {
-	InputTokens  *int64 `json:"input_tokens,omitempty"`
-	OutputTokens *int64 `json:"output_tokens,omitempty"`
-	CostMicros   *int64 `json:"cost_micros,omitempty"`
-	Currency     string `json:"currency,omitempty"`
-}
-
 func (event AgentEvent) Validate() error {
 	if event.ProtocolVersion != AgentEventVersion || strings.TrimSpace(event.Type) == "" || event.At.IsZero() {
 		return fmt.Errorf("agent event protocol_version, type, and at are required")
@@ -263,13 +255,8 @@ func (event AgentEvent) Validate() error {
 	if event.FileChange != nil && (strings.TrimSpace(event.FileChange.Path) == "" || strings.TrimSpace(event.FileChange.Kind) == "") {
 		return fmt.Errorf("agent event file_change path and kind are required")
 	}
-	if event.Usage != nil && (negative(event.Usage.InputTokens) || negative(event.Usage.OutputTokens) || negative(event.Usage.CostMicros)) {
-		return fmt.Errorf("agent event usage values must be non-negative")
-	}
 	return nil
 }
-
-func negative(value *int64) bool { return value != nil && *value < 0 }
 
 type Evidence struct {
 	ProtocolVersion  string               `json:"protocol_version"`

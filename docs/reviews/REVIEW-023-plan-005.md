@@ -17,7 +17,7 @@
 - Claude 实现与 Reviewer 权限分开：Implementer 只获得明确写工具，Reviewer 不获得 Edit/Write/Bash；未允许动作由 `dontAsk` 直接拒绝。
 - Finding 保持概率性 `INFERENCE`，不能覆盖 M2 确定性 Evidence；Blocker/High 只通过受信 Store 状态参与后续 M5 Promotion/Completion。
 - 两条真实路径都要求实际 Patch/Validator 输入和独立 Session，不以 Agent 摘要、Review approved 或退出码替代确定性结果。
-- M5–M6 的 Reconcile/Gate/Budget、Daemon/API、Final Report 与 Benchmark 没有混入本 Plan。
+- M5–M6 的 Reconcile/Gate、Daemon/API、Final Report 与 Benchmark 没有混入本 Plan。
 
 ## 下一路由
 

@@ -29,7 +29,6 @@ const (
 	ReviewBlocked              FailureClass = "REVIEW_BLOCKED"
 	GoalAmbiguous              FailureClass = "GOAL_AMBIGUOUS"
 	PolicyBlocked              FailureClass = "POLICY_BLOCKED"
-	BudgetExhausted            FailureClass = "BUDGET_EXHAUSTED"
 	NoMaterialProgress         FailureClass = "NO_MATERIAL_PROGRESS"
 	InternalInvariantViolation FailureClass = "INTERNAL_INVARIANT_VIOLATION"
 )
@@ -38,7 +37,7 @@ var failureClasses = map[FailureClass]struct{}{
 	AgentUnavailable: {}, AgentProtocolInvalid: {}, AgentTimeout: {}, AgentInterrupted: {},
 	EnvironmentPrepFailed: {}, ScopeViolation: {}, PatchEmpty: {}, PatchConflict: {},
 	ValidatorFailed: {}, ValidatorUnavailable: {}, ReviewBlocked: {}, GoalAmbiguous: {},
-	PolicyBlocked: {}, BudgetExhausted: {}, NoMaterialProgress: {}, InternalInvariantViolation: {},
+	PolicyBlocked: {}, NoMaterialProgress: {}, InternalInvariantViolation: {},
 }
 
 func (class FailureClass) Valid() bool {
@@ -149,7 +148,6 @@ const (
 	SwitchStrategy  Action = "SWITCH_STRATEGY"
 	Replan          Action = "REPLAN"
 	WaitGate        Action = "WAIT_GATE"
-	WaitBudget      Action = "WAIT_BUDGET"
 	Quarantine      Action = "QUARANTINE"
 	StopInvariant   Action = "STOP_INVARIANT"
 )
@@ -160,7 +158,6 @@ type Input struct {
 	Current                 Snapshot
 	SameFingerprintStrategy int64
 	SideEffectsObserved     bool
-	BudgetAvailable         bool
 }
 
 type Decision struct {
@@ -177,15 +174,12 @@ func Decide(input Input) (Decision, error) {
 	if input.SameFingerprintStrategy > 0 && !progress {
 		return Decision{Action: Diagnose, Reason: "same fingerprint and strategy produced no material progress"}, nil
 	}
-	if !input.BudgetAvailable || input.Failure.Class == BudgetExhausted {
-		return Decision{Action: WaitBudget, Reason: "hard budget does not permit a new attempt"}, nil
-	}
 	switch input.Failure.Class {
 	case AgentUnavailable, AgentProtocolInvalid, AgentTimeout, AgentInterrupted:
 		if input.SideEffectsObserved {
 			return Decision{Action: Diagnose, Reason: "agent failure may have produced side effects"}, nil
 		}
-		return Decision{Action: RetryNewAttempt, Reason: "agent failure is isolated and budget remains"}, nil
+		return Decision{Action: RetryNewAttempt, Reason: "agent failure is isolated and a new strategy attempt is allowed"}, nil
 	case EnvironmentPrepFailed:
 		return Decision{Action: WaitGate, Reason: "trusted environment preparation did not recover dependency"}, nil
 	case ScopeViolation:

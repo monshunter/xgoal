@@ -62,7 +62,7 @@ func TestPassiveProbeAndFixtureContract(t *testing.T) {
 	mu.Lock()
 	capturedEvents := append([]protocol.AgentEvent(nil), events...)
 	mu.Unlock()
-	if !eventTypesInclude(capturedEvents, "session", "turn", "unknown", "command", "file_change", "message", "usage", "result") {
+	if !eventTypesInclude(capturedEvents, "session", "turn", "unknown", "command", "file_change", "message", "result") {
 		t.Fatalf("normalized events = %+v", capturedEvents)
 	}
 	if prompt := mustRead(t, fixture.stdinPath); prompt != invocation.Prompt {
@@ -82,6 +82,9 @@ func TestPassiveProbeAndFixtureContract(t *testing.T) {
 		}
 	}
 	allArtifacts := readTree(t, invocationDir)
+	if strings.Contains(allArtifacts, `"usage"`) || strings.Contains(allArtifacts, "input_tokens") {
+		t.Fatalf("persisted Codex artifacts retained Provider model accounting: %s", allArtifacts)
+	}
 	for _, secret := range []string{"super-secret-value", "fixture-api-value"} {
 		if strings.Contains(allArtifacts, secret) {
 			t.Fatalf("persisted Codex artifacts contain %q", secret)
@@ -89,7 +92,7 @@ func TestPassiveProbeAndFixtureContract(t *testing.T) {
 	}
 }
 
-func TestActiveProbeRequiresBudgetAndPersistsObservedUsage(t *testing.T) {
+func TestActiveProbeRequiresProviderTransportAndPersistsEvidence(t *testing.T) {
 	t.Parallel()
 
 	fixture := newFixture(t, "valid")
@@ -97,44 +100,22 @@ func TestActiveProbeRequiresBudgetAndPersistsObservedUsage(t *testing.T) {
 	if _, err := runtime.Probe(context.Background(), adapter.ProbeSpec{
 		Mode: adapter.ProbeActiveContract, ProfileID: "codex-fixture", Timeout: 30 * time.Second,
 	}); err == nil {
-		t.Fatal("active probe accepted missing provider transport and wall-time budget")
-	}
-	if _, err := runtime.Probe(context.Background(), adapter.ProbeSpec{
-		Mode: adapter.ProbeActiveContract, ProfileID: "codex-fixture", ProviderTransport: true,
-		Timeout: 30 * time.Second, Budget: adapter.ProbeBudget{MaxWallTime: 30 * time.Second, MaxTokens: -1},
-	}); err == nil {
-		t.Fatal("active probe accepted a negative token budget")
+		t.Fatal("active probe accepted missing provider transport")
 	}
 	capabilities, err := runtime.Probe(context.Background(), adapter.ProbeSpec{
 		Mode: adapter.ProbeActiveContract, ProfileID: "codex-fixture", ProviderTransport: true,
-		Timeout: 30 * time.Second, Budget: adapter.ProbeBudget{MaxWallTime: 30 * time.Second, MaxTokens: 20},
+		Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capabilities.ProbeMode != adapter.ProbeActiveContract || capabilities.ProviderTransport != "available" ||
-		capabilities.Usage == nil || capabilities.Usage.InputTokens == nil || *capabilities.Usage.InputTokens != 7 ||
-		capabilities.CostReporting || capabilities.ProbeRef == "" {
+	if capabilities.ProbeMode != adapter.ProbeActiveContract || capabilities.ProviderTransport != "available" || capabilities.ProbeRef == "" {
 		t.Fatalf("active capabilities = %+v", capabilities)
 	}
 	probePath := filepath.Join(fixture.runtimeRoot, "adapters", "codex", filepath.FromSlash(capabilities.ProbeRef))
 	info, err := os.Lstat(probePath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		t.Fatalf("probe artifact = %v, %v", info, err)
-	}
-}
-
-func TestActiveProbeEnforcesReportedCostBudget(t *testing.T) {
-	t.Parallel()
-
-	fixture := newFixture(t, "cost")
-	runtime := fixture.adapter(t)
-	_, err := runtime.Probe(context.Background(), adapter.ProbeSpec{
-		Mode: adapter.ProbeActiveContract, ProfileID: "codex-fixture", ProviderTransport: true,
-		Timeout: 30 * time.Second, Budget: adapter.ProbeBudget{MaxWallTime: 30 * time.Second, MaxCostMicros: 5},
-	})
-	if err == nil || !strings.Contains(err.Error(), "cost 10 micros exceeded budget 5") {
-		t.Fatalf("active probe cost error = %v", err)
 	}
 }
 
@@ -475,12 +456,10 @@ if [ "$XGOAL_FIXTURE_MODE" = "invalid-result" ]; then
 else
   printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"protocol_version\":\"xgoal.agent-result/v1alpha1\",\"status\":\"completed\",\"summary\":\"fixture done\",\"changed_files_claimed\":[\"result.txt\"],\"checks_claimed\":[],\"blockers\":[],\"assumptions\":[],\"recommended_next_action\":\"validate\"}"}}'
 fi
-if [ "$XGOAL_FIXTURE_MODE" = "cost" ]; then
-  printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3,"cost_micros":10,"currency":"USD"}}'
-elif [ "$XGOAL_FIXTURE_MODE" = "truncated" ]; then
-  printf '%s' '{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3}}'
+if [ "$XGOAL_FIXTURE_MODE" = "truncated" ]; then
+  printf '%s' '{"type":"turn.completed"'
 else
-  printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3}}'
+  printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":101,"output_tokens":17}}'
 fi
 printf '%s\n' 'Authorization: Bearer super-secret-value' >&2
 if [ "$XGOAL_FIXTURE_MODE" = "exit-nonzero" ]; then

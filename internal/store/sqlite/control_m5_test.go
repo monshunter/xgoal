@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/monshunter/xgoal/internal/budget"
 	"github.com/monshunter/xgoal/internal/clock"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/reconcile"
@@ -99,7 +98,7 @@ func TestExpiredAuthorizationFailsClosedAndPersistsExpiry(t *testing.T) {
 	}
 }
 
-func TestBudgetAndFailureRecordsSurviveRestart(t *testing.T) {
+func TestFailureRecordsSurviveRestart(t *testing.T) {
 	ctx := context.Background()
 	projectDir := filepath.Join(t.TempDir(), "project")
 	source := clock.NewFake(time.Date(2026, 9, 2, 21, 0, 0, 0, time.UTC))
@@ -107,17 +106,7 @@ func TestBudgetAndFailureRecordsSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goal, _ := seedReadyWork(t, store, "work_budget")
-	if _, err := store.CreateBudget(ctx, goal.ID, "", budget.Limit{Dimension: budget.GoalAttempts, Soft: 2, Hard: 3}, true, EventInput{Type: "BudgetConfigured", ActorType: "kernel", Payload: map[string]any{}}); err != nil {
-		t.Fatal(err)
-	}
-	result, err := store.ConsumeBudget(ctx, goal.ID, "", budget.Request{Dimension: budget.GoalAttempts, Known: true, Amount: 2}, EventInput{Type: "BudgetConsumed", ActorType: "kernel", Payload: map[string]any{}})
-	if err != nil || result.Decision != budget.SoftAttention {
-		t.Fatalf("consume = %+v, err=%v", result, err)
-	}
-	if _, err := store.ConsumeBudget(ctx, goal.ID, "", budget.Request{Dimension: budget.GoalAttempts, Known: true, Amount: 2}, EventInput{Type: "BudgetConsumed", ActorType: "kernel", Payload: map[string]any{}}); !errors.Is(err, basestore.ErrBudgetExceeded) {
-		t.Fatalf("hard budget error = %v", err)
-	}
+	goal, _ := seedReadyWork(t, store, "work_failure_restart")
 	failure := reconcile.Failure{Class: reconcile.ValidatorFailed, PrimaryError: "exit 1 at 2026-09-02T21:00:00Z", ValidatorDefinitionHash: "validator", BaseTree: "base", ResultTree: "result", GoalRevisionHash: "goalhash", RelevantConfigHash: "config"}
 	first, err := store.RecordFailure(ctx, FailureDraft{ID: "failure_1", GoalID: goal.ID, Failure: failure, Strategy: "codex", Current: reconcile.Snapshot{PlanRevision: 1}}, EventInput{Type: "FailureRecorded", ActorType: "kernel", Payload: map[string]any{}})
 	if err != nil || first.RepeatCount != 1 {
@@ -127,7 +116,7 @@ func TestBudgetAndFailureRecordsSurviveRestart(t *testing.T) {
 	if err != nil || second.RepeatCount != 2 || second.MaterialProgress {
 		t.Fatalf("second failure = %+v err=%v", second, err)
 	}
-	decision, err := reconcile.Decide(reconcile.Input{Failure: failure, Previous: second.Previous, Current: second.Current, SameFingerprintStrategy: second.RepeatCount - 1, BudgetAvailable: true})
+	decision, err := reconcile.Decide(reconcile.Input{Failure: failure, Previous: second.Previous, Current: second.Current, SameFingerprintStrategy: second.RepeatCount - 1})
 	if err != nil || decision.Action == reconcile.RetryNewAttempt {
 		t.Fatalf("decision = %+v err=%v", decision, err)
 	}
@@ -151,9 +140,9 @@ func TestBudgetAndFailureRecordsSurviveRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	snapshot, err := reopened.Budget(ctx, goal.ID, "", budget.GoalAttempts)
-	if err != nil || !snapshot.Usage.Known || snapshot.Usage.Consumed != 2 {
-		t.Fatalf("reopened budget = %+v err=%v", snapshot, err)
+	records, err := reopened.goalFailures(ctx, goal.ID)
+	if err != nil || len(records) != 2 || records[0].RepeatCount != 2 {
+		t.Fatalf("reopened failures = %+v err=%v", records, err)
 	}
 }
 
@@ -202,7 +191,17 @@ func TestGoalStatusProjectsActiveRuntimeFactsWithoutNestedQueryDeadlock(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.WorkItems) != 1 || status.WorkItems[0].ID != work.ID || len(status.Gates) != 1 || status.Authority["gates"] != domain.AuthorityDecision {
+	if len(status.WorkItems) != 1 || status.WorkItems[0].ID != work.ID || len(status.Gates) != 1 || status.Authority["gates"] != domain.AuthorityDecision || status.GoalRevision == nil || status.GoalRevision.Revision != 1 || status.GoalRevision.StartedAt.IsZero() || len(status.LatestProgressHash) != 64 {
 		t.Fatalf("status = %+v", status)
+	}
+	if _, err := store.DecideGate(ctx, "gate_status", status.Gates[0].Version, domain.GateDeny, "human", "keep scope frozen", EventInput{Type: "GateDecided", ActorType: "human", Payload: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.GoalStatus(ctx, goal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LatestProgressHash == status.LatestProgressHash {
+		t.Fatal("material progress hash did not change after a human gate decision")
 	}
 }

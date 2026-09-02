@@ -21,8 +21,8 @@ import (
 	"github.com/monshunter/xgoal/internal/workpacket"
 )
 
-// TestM4RealCrossProviderReview is opt-in because it spends both installed CLI
-// provider budgets. It proves two real implementation/review directions while
+// TestM4RealCrossProviderReview is opt-in because it invokes both installed
+// provider CLIs. It proves two real implementation/review directions while
 // deterministic file/tree checks remain the acceptance authority.
 func TestM4RealCrossProviderReview(t *testing.T) {
 	if os.Getenv("XGOAL_RUN_CROSS_REVIEW_SMOKE") != "1" {

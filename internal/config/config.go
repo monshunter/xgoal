@@ -33,7 +33,6 @@ type Config struct {
 	Validators    []Validator   `yaml:"validators" json:"validators"`
 	Review        Review        `yaml:"review,omitempty" json:"review,omitempty"`
 	Policy        Policy        `yaml:"policy,omitempty" json:"policy,omitempty"`
-	Budget        Budget        `yaml:"budget,omitempty" json:"budget,omitempty"`
 	Report        Report        `yaml:"report,omitempty" json:"report,omitempty"`
 }
 
@@ -140,15 +139,6 @@ type Policy struct {
 	Production          string `yaml:"production,omitempty" json:"production,omitempty"`
 	DestructiveCommands string `yaml:"destructiveCommands,omitempty" json:"destructiveCommands,omitempty"`
 	ExpandScope         string `yaml:"expandScope,omitempty" json:"expandScope,omitempty"`
-}
-
-type Budget struct {
-	MaxAttemptsPerWorkItem int      `yaml:"maxAttemptsPerWorkItem,omitempty" json:"maxAttemptsPerWorkItem,omitempty"`
-	MaxAttemptsPerGoal     int      `yaml:"maxAttemptsPerGoal,omitempty" json:"maxAttemptsPerGoal,omitempty"`
-	MaxWallTime            Duration `yaml:"maxWallTime,omitempty" json:"maxWallTime,omitempty"`
-	MaxValidatorTime       Duration `yaml:"maxValidatorTime,omitempty" json:"maxValidatorTime,omitempty"`
-	MaxCostUSD             int64    `yaml:"maxCostUSD,omitempty" json:"maxCostUSD,omitempty"`
-	OnUnknownCost          string   `yaml:"onUnknownCost,omitempty" json:"onUnknownCost,omitempty"`
 }
 
 type Report struct {
@@ -287,9 +277,6 @@ func (c Config) Validate() error {
 	if err := validatePolicy(c.Policy); err != nil {
 		return err
 	}
-	if err := validateBudget(c.Budget); err != nil {
-		return err
-	}
 	return validateReport(c.Report)
 }
 
@@ -368,8 +355,8 @@ func validateValidators(validators []Validator) error {
 		if err := validateNames(prefix+".phases", validator.Phases, func(value string) bool { return oneOf(value, "change", "final") }); err != nil {
 			return err
 		}
-		if validator.Type == "command" && (len(validator.Argv) == 0 || strings.TrimSpace(validator.Argv[0]) == "") {
-			return fmt.Errorf("%s.argv is required for command validators", prefix)
+		if len(validator.Argv) == 0 || strings.TrimSpace(validator.Argv[0]) == "" {
+			return fmt.Errorf("%s.argv is required for deterministic validators", prefix)
 		}
 		if validator.Timeout.Duration <= 0 {
 			return fmt.Errorf("%s.timeout must be positive", prefix)
@@ -444,16 +431,6 @@ func validatePolicy(policy Policy) error {
 	}
 	if policy.ExpandScope != "" && !oneOf(policy.ExpandScope, "deny", "human-gate") {
 		return fmt.Errorf("policy.expandScope must be deny or human-gate")
-	}
-	return nil
-}
-
-func validateBudget(budget Budget) error {
-	if budget.MaxAttemptsPerWorkItem < 0 || budget.MaxAttemptsPerGoal < 0 || budget.MaxWallTime.Duration < 0 || budget.MaxValidatorTime.Duration < 0 || budget.MaxCostUSD < 0 {
-		return fmt.Errorf("budget limits must be non-negative")
-	}
-	if budget.OnUnknownCost != "" && !oneOf(budget.OnUnknownCost, "deny", "require-gate", "allow-with-attention") {
-		return fmt.Errorf("budget.onUnknownCost is unsupported")
 	}
 	return nil
 }

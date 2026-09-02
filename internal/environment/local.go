@@ -168,7 +168,9 @@ func (local *Local) Snapshot(ctx context.Context, handle Handle) (protocol.Envir
 	}
 	toolVersions := make(map[string]string, len(probes))
 	for _, probe := range probes {
-		version, err := local.runVersion(ctx, managed.handle.Worktree, probe.Argv, environment)
+		probeContext, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		version, err := local.runVersion(probeContext, managed.handle.Worktree, probe.Argv, environment)
+		cancel()
 		if err != nil {
 			if probe.Required {
 				return protocol.EnvironmentSnapshot{}, fmt.Errorf("probe required tool %q: %w", probe.Name, err)

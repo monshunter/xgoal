@@ -6,7 +6,7 @@
 
 ## 范围
 
-包括可信本地 Git 仓库、Integration Branch/Worktree、Patch/Scope、Local Environment Provider、Supervisor、Validator Registry/Receipt、Evidence Staleness 与 Promotion；不包括真实 Codex/Claude Adapter、Daemon/API、完整 Reconcile/Gate/Budget、Final Report 和 Benchmark。
+包括可信本地 Git 仓库、Integration Branch/Worktree、Patch/Scope、Local Environment Provider、Supervisor、Validator Registry/Receipt、Evidence Staleness 与 Promotion；不包括真实 Codex/Claude Adapter、Daemon/API、完整 Reconcile/Gate、Final Report 和 Benchmark。
 
 ## Phase 1：冻结 M2 契约与设计
 

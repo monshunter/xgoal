@@ -20,7 +20,7 @@
 
 ## Notes
 
-- 实现时必须以真实 Claude Stream JSON 事件确认 `structured_output`、Session、Usage/Cost 字段；fixture 不能替代 Active Probe。
+- 实现时必须以真实 Claude Stream JSON 事件确认 `structured_output` 与 Session，并确认供应商模型核算字段不会进入 xgoal 状态；fixture 不能替代 Active Probe。
 - 如果当前 Codex/Claude 对公开 Review Schema 有不同 Strict 子集，转换只能缩窄 Provider 输出并在返回后重新用公开 Schema 校验，不能维护两个语义合同。
 - Completion Projection 的 Finding count 更新必须在 Review 写入/状态转换同一事务内，并有重启/重复请求测试。
 

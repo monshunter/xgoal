@@ -51,7 +51,7 @@ set -eu
 printf '%s\n' "$*" > "$ARGS_PATH"
 cat >/dev/null
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"claude-review-session"}'
-printf '%s\n' '{"type":"result","is_error":false,"session_id":"claude-review-session","usage":{"input_tokens":5,"output_tokens":2},"total_cost_usd":0.000007,"structured_output":` + resultJSON + `}'
+printf '%s\n' '{"type":"result","is_error":false,"session_id":"claude-review-session","structured_output":` + resultJSON + `}'
 `
 			} else {
 				script = `#!/bin/sh

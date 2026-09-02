@@ -24,7 +24,7 @@ make m4-real-smoke
 make verify-m4
 ```
 
-真实 smoke 是 opt-in；普通 `go test ./...` 不消耗模型配额。
+真实 smoke 是 opt-in；普通 `go test ./...` 不调用 Provider。
 
 ## 2026-09-02 当前 Evidence
 

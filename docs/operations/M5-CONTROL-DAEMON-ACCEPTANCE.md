@@ -1,14 +1,14 @@
-# M5 Reconcile、Gate、Budget 与 Daemon 验收记录
+# M5 Reconcile、Gate 与 Daemon 验收记录
 
 ## 范围
 
-本记录对应 `PLAN-006` 与 `DESIGN-004`，只证明 M5 确定性控制面、有限授权、预算、Local API、Daemon 和恢复能力；M4 已完成的真实 Codex/Claude 双向 Agent/Review 不在本记录重复消耗模型费用，最终报告与 Benchmark 留给 M6。
+本记录对应 `PLAN-006` 与 `DESIGN-004`，只证明 M5 确定性控制面、有限授权、Local API、Daemon 和恢复能力；M4 已完成的真实 Codex/Claude 双向 Agent/Review 不在本记录重复调用，最终报告与 Benchmark 留给 M6。
 
 ## 当前运行事实
 
 - 分支：`feat/xgoal-v0.1`。
 - Go：`go.mod` 固定 Go 1.25 / toolchain 1.25.13。
-- SQLite：运行时 `3.53.3`，WAL、foreign keys、`synchronous=FULL`、busy timeout 5000 ms，Schema Version 4。
+- SQLite：运行时 `3.53.3`，WAL、foreign keys、`synchronous=FULL`、busy timeout 5000 ms；当前迁移会删除早期草案曾创建、但已移出产品边界的计量表。
 - 本机：darwin/arm64；Passive Doctor 读取到 Git `2.39.2`、Codex CLI `0.145.0`、Claude Code `2.1.235`。
 - Doctor 没有发起模型回合；Provider Transport、Credential Status、Project Network 与 L0 隔离分别展示。
 
@@ -17,7 +17,7 @@
 ```bash
 make m5-safety
 make m5-cross-build
-go test -race ./internal/reconcile ./internal/policy ./internal/budget ./internal/store/sqlite ./internal/api ./internal/control ./internal/daemon ./internal/recovery ./internal/app
+go test -race ./internal/reconcile ./internal/policy ./internal/store/sqlite ./internal/api ./internal/control ./internal/daemon ./internal/recovery ./internal/app
 ```
 
 完整回归入口：
@@ -26,7 +26,7 @@ go test -race ./internal/reconcile ./internal/policy ./internal/budget ./interna
 make verify-m5
 ```
 
-`verify-m5` 不重跑 M3/M4 真实模型 smoke，避免在协议、Fixture 与既有真实 Evidence 没有变化时产生重复费用；它仍会运行两代 Adapter/Review 合同测试。
+`verify-m5` 不重跑 M3/M4 真实模型 smoke；它仍会运行两代 Adapter/Review 合同测试。
 
 ## 故障与安全矩阵
 
@@ -37,8 +37,7 @@ make verify-m5
 | Gate Scope/Goal/Work/Attempt/Action 不匹配 | Gate Store 单测 | `ErrAuthorizationDenied`，不增加使用次数 |
 | Gate 最后一次授权并发消费 | 8 个并发消费者 | 只有一个成功，`used == max_uses` |
 | Gate 过期 | Fake Clock 边界测试 | 原子持久化 `EXPIRED` 和 Event，再向调用方返回 expired |
-| Budget soft/hard | Budget + Store 单测 | Soft 产生 Attention 决策；Hard 阻止消费且不改账 |
-| token/费用 Usage unknown | Budget 单测 | 保持 unknown，不把 0 当真实消耗，不允许按零预检 |
+| 旧计量 Schema | Store 迁移测试 | 最新 Schema 不保留早期草案的计量表，重启与迁移历史校验仍成立 |
 | API 写请求无 key/相同 key 重放 | Handler 与真实 Unix API 集成测试 | 缺 key 为 400；同请求只写一次并重放原响应 |
 | Event Stream 断线续传 | NDJSON 单测 | 从最后完整 Event ID 后返回，不重复前一 Event |
 | 双 Daemon 竞争 | 文件锁集成测试与真实第二进程 | 第二实例 fail closed：`xgoal daemon is already running` |

@@ -5,7 +5,7 @@
 - Plan：`PLAN-006`
 - Design：`DESIGN-004`
 - Revision：M5 当前工作树
-- 范围：Reconcile、Policy/Gate、Budget、SQLite v4、Local API、Daemon、Recovery、CLI 与 M5 验收入口
+- 范围：Reconcile、Policy/Gate、SQLite 控制面、Local API、Daemon、Recovery、CLI 与 M5 验收入口
 
 ## Verdict
 
@@ -22,10 +22,9 @@
 ## 审查结论
 
 - Failure Class 与技术 SPEC 枚举一致；Fingerprint 使用 canonical hash，并只归一化时间、随机 loopback 端口、临时路径、空白和重复行。Material Progress 只使用规范六字段。
-- Reconcile 决策表在相同 Fingerprint + Strategy 且无实质进展时先返回 Diagnose，不能落入相同策略 Retry；Budget、Scope、冲突、Review 与内部不变量分别 fail closed。
+- Reconcile 决策表在相同 Fingerprint + Strategy 且无实质进展时先返回 Diagnose，不能落入相同策略 Retry；Scope、冲突、Review 与内部不变量分别 fail closed。
 - Provider Transport、Project Network 和 Credential 被不同 Policy Action 管理；Gate 授权消费精确绑定 Goal/Work/Attempt/Action/Scope/expiry/max uses，最后一次并发消费只有一个成功。
-- Budget 使用整数最小单位和显式 `Known`，unknown 不会伪装为 0；soft/hard 预检、消费与实际 Observation 由 SQLite 事务和 Event 绑定。
-- API 已注册技术 SPEC 主要 Endpoint，严格 JSON，写请求经过持久 Idempotency；同 key 不同请求返回 409，相同请求重放原响应。Goal status 投影 Work/Attempt/Lease/Workspace/Gate/Budget/Failure/Tree，并标明 Authority。
+- API 已注册技术 SPEC 主要 Endpoint，严格 JSON，写请求经过持久 Idempotency；同 key 不同请求返回 409，相同请求重放原响应。Goal status 投影 Work/Attempt/Lease/Workspace/Gate/Failure/Tree，并标明 Authority。
 - Daemon 在恢复后才监听，持有进程级单写锁；run dir `0700`、Socket `0600`，Darwin/Linux peer UID 必须与当前 UID 一致。Worker 只有 PID/PGID/启动身份全匹配才被终止，所有权与状态随后事务收敛。
 - `doctor` 只做本地 Passive Probe，展示 OS/Arch、Git、Agent CLI、Store、Provider Transport、Credential Status、Project Network 与 L0 边界，没有触发模型调用。
 

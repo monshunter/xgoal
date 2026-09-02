@@ -13,7 +13,7 @@
 ## 发现处置
 
 - Provider Control Plane、Project/Tool Network、CLI Credential 与 Project Secret 已成为独立 Policy Action 和配置事实，核心 Agent 调用不再与默认网络 Deny 自相矛盾。
-- Passive Probe 与显式 Active Contract Probe 已分层；真实模型调用的认证、网络、预算和 Evidence 边界明确。
+- Passive Probe 与显式 Active Contract Probe 已分层；真实模型调用的认证、网络、超时和 Evidence 边界明确。
 - RFC 8785 Canonical Encoding、域分隔 Hash 与 Scope Pattern v1 已冻结，并要求跨平台 Golden Test。
 - 内容寻址 Patch Bundle 已覆盖 tracked/untracked/binary/rename/mode/symlink/delete，文本 diff 仅作为 Review 投影。
 - 技术验收已增加 Provider/Probe、Canonical/Scope 和 Patch Bundle 门禁。

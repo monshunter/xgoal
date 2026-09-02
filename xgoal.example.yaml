@@ -103,14 +103,6 @@ policy:
   destructiveCommands: human-gate
   expandScope: human-gate
 
-budget:
-  maxAttemptsPerWorkItem: 3
-  maxAttemptsPerGoal: 40
-  maxWallTime: 8h
-  maxValidatorTime: 3h
-  maxCostUSD: 25
-  onUnknownCost: allow-with-attention
-
 report:
   formats: [markdown, json]
   includeAgentRawLogs: false

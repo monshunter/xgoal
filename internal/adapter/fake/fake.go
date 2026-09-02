@@ -46,8 +46,6 @@ func (a *Adapter) Probe(_ context.Context, spec adapter.ProbeSpec) (adapter.Capa
 		StructuredOutput:  true,
 		StreamingEvents:   true,
 		ResumeSession:     true,
-		UsageReporting:    true,
-		CostReporting:     true,
 		SandboxModes:      []string{"read-only", "workspace-write"},
 		ToolAllowlist:     true,
 		ApprovalModes:     []string{"never"},

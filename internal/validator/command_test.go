@@ -36,12 +36,16 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	definitions := registry.Definitions()
-	if len(definitions) != 5 || definitions[0].ID != "expected-nonzero" || definitions[4].ID != "trusted-script" {
+	if len(definitions) != 9 || definitions[0].ID != "expected-nonzero" || definitions[8].ID != "trusted-script" {
 		t.Fatalf("Definitions() = %+v", definitions)
 	}
 	trusted, exists := registry.Definition("trusted-script")
 	if !exists || trusted.TrustedExecutableHash == "" || trusted.TrustedExecutablePath != "scripts/trusted.sh" {
 		t.Fatalf("trusted definition = %+v, exists=%v", trusted, exists)
+	}
+	flaky, exists := registry.Definition("go-version")
+	if !exists || !flaky.Flaky {
+		t.Fatalf("flaky validator definition = %+v, exists=%v", flaky, exists)
 	}
 
 	runtimeRoot := filepath.Join(t.TempDir(), "runtime")
@@ -95,6 +99,10 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 		want protocol.CommandResult
 	}{
 		{id: "go-version", want: protocol.CommandPassed},
+		{id: "scope-check", want: protocol.CommandPassed},
+		{id: "file-check", want: protocol.CommandPassed},
+		{id: "runtime-check", want: protocol.CommandPassed},
+		{id: "git-check", want: protocol.CommandPassed},
 		{id: "go-fail", want: protocol.CommandFailed},
 		{id: "expected-nonzero", want: protocol.CommandPassed},
 		{id: "timeout", want: protocol.CommandTimedOut},
@@ -221,12 +229,37 @@ runtime:
   projectNetwork: deny
   projectSecrets: deny
 validators:
+  - id: scope-check
+    type: scope
+    phases: [change, final]
+    argv: [go, version]
+    timeout: 5s
+    required: true
+  - id: file-check
+    type: file_assertion
+    phases: [change, final]
+    argv: [go, version]
+    timeout: 5s
+    required: true
+  - id: runtime-check
+    type: runtime_probe
+    phases: [change, final]
+    argv: [go, version]
+    timeout: 5s
+    required: true
+  - id: git-check
+    type: git_assertion
+    phases: [change, final]
+    argv: [go, version]
+    timeout: 5s
+    required: true
   - id: go-version
     type: command
     phases: [change, final]
     argv: [go, version]
     timeout: 5s
     required: true
+    flaky: {enabled: true}
   - id: go-fail
     type: command
     phases: [change]

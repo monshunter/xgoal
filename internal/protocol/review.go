@@ -53,8 +53,8 @@ func (packet ReviewPacket) Validate() error {
 		!validLabel(packet.ImplementationProfileID) || !validLabel(packet.ImplementationSessionID) || !validGitObjectID(packet.BaseTree) ||
 		!validGitObjectID(packet.CandidateTree) || packet.BaseTree == packet.CandidateTree || !validSHA256(packet.ConfigHash) ||
 		!cleanAbsolute(packet.Workspace) || !cleanAbsolute(packet.PatchBundlePath) || !validSHA256(packet.PatchBundleHash) ||
-		!validLabel(packet.ReviewerProfileID) || packet.ReviewerProfileID == packet.ImplementationProfileID {
-		return errors.New("review packet identity, revisions, workspace, patch, and independent profiles are required")
+		!validLabel(packet.ReviewerProfileID) {
+		return errors.New("review packet identity, revisions, workspace, patch, and reviewer profile are required")
 	}
 	if len(packet.ValidatorReceipts) == 0 || len(packet.RequiredChecks) == 0 {
 		return errors.New("review packet requires validator receipts and review checks")

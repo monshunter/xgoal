@@ -178,6 +178,10 @@ func route(request *http.Request) (Operation, bool, bool) {
 		operation.Name = "doctor"
 		return operation, false, true
 	}
+	if len(parts) == 3 && parts[0] == "v1" && parts[1] == "doctor" && parts[2] == "active-probes" && request.Method == http.MethodPost {
+		operation.Name = "doctor.active-probe"
+		return operation, true, true
+	}
 	if len(parts) == 3 && parts[0] == "v1" && parts[1] == "goals" && request.Method == http.MethodGet {
 		operation.Name, operation.ResourceID = "goal.get", parts[2]
 		return operation, false, true
@@ -185,7 +189,7 @@ func route(request *http.Request) (Operation, bool, bool) {
 	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "goals" {
 		operation.ResourceID = parts[2]
 		switch parts[3] {
-		case "pause", "resume", "cancel", "replan":
+		case "pause", "resume", "cancel", "replan", "finalize":
 			if request.Method == http.MethodPost {
 				operation.Name = "goal." + parts[3]
 				return operation, true, true
@@ -205,9 +209,12 @@ func route(request *http.Request) (Operation, bool, bool) {
 		operation.Name, operation.ResourceID = "attempt.logs", parts[2]
 		return operation, false, true
 	}
-	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "work-items" && parts[3] == "retry" && request.Method == http.MethodPost {
-		operation.Name, operation.ResourceID = "work.retry", parts[2]
-		return operation, true, true
+	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "work-items" && request.Method == http.MethodPost {
+		switch parts[3] {
+		case "retry", "cancel":
+			operation.Name, operation.ResourceID = "work."+parts[3], parts[2]
+			return operation, true, true
+		}
 	}
 	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "projects" && parts[3] == "clean" && request.Method == http.MethodPost {
 		operation.Name, operation.ResourceID = "project.clean", parts[2]
@@ -294,8 +301,6 @@ func ErrorResponse(err error) (int, any) {
 		return http.StatusNotFound, errorEnvelope("NOT_FOUND", err.Error())
 	case errors.Is(err, basestore.ErrAuthorizationDenied):
 		return http.StatusForbidden, errorEnvelope("POLICY_DENIED", err.Error())
-	case errors.Is(err, basestore.ErrBudgetExceeded):
-		return http.StatusTooManyRequests, errorEnvelope("BUDGET_EXHAUSTED", err.Error())
 	case errors.Is(err, basestore.ErrExpired):
 		return http.StatusGone, errorEnvelope("EXPIRED", err.Error())
 	}

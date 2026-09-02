@@ -65,17 +65,16 @@ type execution struct {
 	result    protocol.AgentResult
 	err       error
 	sessionID string
-	usage     *protocol.Usage
 	canceled  bool
 	once      sync.Once
 }
 
 type boundedStderr struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
-	budget *outputBudget
-	cancel func()
-	err    error
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	limiter *outputLimiter
+	cancel  func()
+	err     error
 }
 
 func New(configuration Config) (*Adapter, error) {
@@ -107,7 +106,7 @@ func New(configuration Config) (*Adapter, error) {
 		return nil, err
 	}
 	root := filepath.Join(runtimeRoot, "adapters", "codex")
-	for _, directory := range []string{root, filepath.Join(root, "invocations"), filepath.Join(root, "reviews"), filepath.Join(root, "sessions"), filepath.Join(root, "probes")} {
+	for _, directory := range []string{root, filepath.Join(root, "invocations"), filepath.Join(root, "plans"), filepath.Join(root, "reviews"), filepath.Join(root, "sessions"), filepath.Join(root, "probes")} {
 		if err := ensurePrivateDirectory(directory); err != nil {
 			return nil, err
 		}
@@ -141,13 +140,10 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 	if spec.Mode == adapter.ProbePassive {
 		return passive, nil
 	}
-	if !spec.ProviderTransport || spec.Budget.MaxWallTime <= 0 || spec.Budget.MaxTokens < 0 || spec.Budget.MaxCostMicros < 0 {
-		return adapter.Capabilities{}, errors.New("active Codex probe requires provider transport and positive wall-time budget")
+	if !spec.ProviderTransport || spec.Timeout <= 0 {
+		return adapter.Capabilities{}, errors.New("active Codex probe requires provider transport and a positive timeout")
 	}
-	timeout := spec.Budget.MaxWallTime
-	if spec.Timeout > 0 && spec.Timeout < timeout {
-		timeout = spec.Timeout
-	}
+	timeout := spec.Timeout
 	probeID, err := randomID("probe")
 	if err != nil {
 		return adapter.Capabilities{}, err
@@ -203,31 +199,12 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 	if result.Status != protocol.ResultCompleted {
 		return adapter.Capabilities{}, fmt.Errorf("active Codex probe returned status %q", result.Status)
 	}
-	executed, err := runtime.execution(handle)
+	sessionID, err := runtime.SessionID(handle)
 	if err != nil {
 		return adapter.Capabilities{}, err
 	}
-	sessionID, usage := executed.observation()
-	if usage != nil && spec.Budget.MaxTokens > 0 {
-		var used int64
-		if usage.InputTokens != nil {
-			used += *usage.InputTokens
-		}
-		if usage.OutputTokens != nil {
-			used += *usage.OutputTokens
-		}
-		if used > spec.Budget.MaxTokens {
-			return adapter.Capabilities{}, fmt.Errorf("active Codex probe used %d tokens, budget was %d", used, spec.Budget.MaxTokens)
-		}
-	}
-	if usage != nil && usage.CostMicros != nil && spec.Budget.MaxCostMicros > 0 && *usage.CostMicros > spec.Budget.MaxCostMicros {
-		return adapter.Capabilities{}, fmt.Errorf("active Codex probe cost %d micros exceeded budget %d", *usage.CostMicros, spec.Budget.MaxCostMicros)
-	}
 	passive.ProbeMode = adapter.ProbeActiveContract
 	passive.ProviderTransport = "available"
-	passive.Usage = usage
-	passive.UsageReporting = usage != nil && (usage.InputTokens != nil || usage.OutputTokens != nil)
-	passive.CostReporting = usage != nil && usage.CostMicros != nil
 	passive.ProbeRef = filepath.ToSlash(filepath.Join("probes", probeID+".json"))
 	probe := probeArtifact{
 		ProtocolVersion: probeArtifactVersion, ID: probeID, ProfileID: spec.ProfileID,
@@ -303,9 +280,9 @@ func (runtime *Adapter) start(ctx context.Context, invocation adapter.Invocation
 		return adapter.Handle{}, err
 	}
 	runContext, cancel := context.WithTimeout(ctx, invocation.Timeout)
-	budget := &outputBudget{remaining: invocation.MaxOutputBytes}
-	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("invocations", invocation.InvocationID)), sink, runtime.clock, budget, cancel)
-	stderr := &boundedStderr{budget: budget, cancel: cancel}
+	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
+	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("invocations", invocation.InvocationID)), sink, runtime.clock, limiter, cancel)
+	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
 	arguments := runtime.arguments(invocation, schemaPath, resumeSessionID)
 	running, err := supervisor.Start(supervisor.Command{
 		Argv: arguments, Dir: validated.workDir, Env: validated.environment,
@@ -322,7 +299,7 @@ func (runtime *Adapter) start(ctx context.Context, invocation adapter.Invocation
 	runtime.mu.Unlock()
 
 	go runtime.observeExecution(runContext, executed, stream, stderr, invocation.MaxOutputBytes)
-	return adapter.Handle{ID: invocation.InvocationID}, nil
+	return adapter.Handle{ID: invocation.InvocationID, PID: running.PID()}, nil
 }
 
 func (runtime *Adapter) Cancel(_ context.Context, handle adapter.Handle) error {
@@ -404,7 +381,7 @@ func (runtime *Adapter) observeExecution(runContext context.Context, executed *e
 	contextErr := runContext.Err()
 	executed.cancel()
 	stderrErr := stderr.persist(filepath.Join(runtime.root, "invocations", executed.metadata.InvocationID, "stderr.log"))
-	result, sessionID, usage, resultErr := stream.Finalize(min64(maxOutputBytes, maxResultBytes))
+	result, sessionID, resultErr := stream.Finalize(min64(maxOutputBytes, maxResultBytes))
 	streamErr := stream.failure()
 	if resultErr == nil && contextErr == nil && stderrErr == nil && processErr == nil && process.ExitCode == 0 && sessionID != "" && stream.resumable() {
 		binding, err := newSessionBinding(sessionID, executed.metadata)
@@ -430,10 +407,10 @@ func (runtime *Adapter) observeExecution(runContext context.Context, executed *e
 	case process.ExitCode != 0:
 		finalErr = fmt.Errorf("Codex CLI exited %d", process.ExitCode)
 	}
-	executed.finish(result, sessionID, usage, finalErr)
+	executed.finish(result, sessionID, finalErr)
 }
 
-func (executed *execution) finish(result protocol.AgentResult, sessionID string, usage *protocol.Usage, err error) {
+func (executed *execution) finish(result protocol.AgentResult, sessionID string, err error) {
 	executed.once.Do(func() {
 		executed.mu.Lock()
 		if executed.canceled && err == nil {
@@ -442,16 +419,9 @@ func (executed *execution) finish(result protocol.AgentResult, sessionID string,
 		executed.result = result
 		executed.err = err
 		executed.sessionID = sessionID
-		executed.usage = cloneUsage(usage)
 		executed.mu.Unlock()
 		close(executed.done)
 	})
-}
-
-func (executed *execution) observation() (string, *protocol.Usage) {
-	executed.mu.RLock()
-	defer executed.mu.RUnlock()
-	return executed.sessionID, cloneUsage(executed.usage)
 }
 
 func (stderr *boundedStderr) Write(value []byte) (int, error) {
@@ -460,7 +430,7 @@ func (stderr *boundedStderr) Write(value []byte) (int, error) {
 	if stderr.err != nil {
 		return len(value), stderr.err
 	}
-	if err := stderr.budget.consume(len(value)); err != nil {
+	if err := stderr.limiter.consume(len(value)); err != nil {
 		stderr.err = err
 		stderr.cancel()
 		return len(value), err
@@ -566,7 +536,7 @@ func (runtime *Adapter) passiveProbe(ctx context.Context, spec adapter.ProbeSpec
 	}
 	return adapter.Capabilities{
 		Version: strings.TrimSpace(version), StructuredOutput: true, StreamingEvents: true, ResumeSession: true,
-		UsageReporting: true, CostReporting: false, SandboxModes: []string{"read-only", "workspace-write"},
+		SandboxModes:  []string{"read-only", "workspace-write"},
 		ToolAllowlist: false, ApprovalModes: []string{"never"}, ProbeMode: spec.Mode,
 		ProviderTransport: "unknown", CredentialStatus: credentialStatus,
 	}, nil

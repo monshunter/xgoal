@@ -4,7 +4,7 @@
 
 `accepted`
 
-本设计实现 PLAN-004，只覆盖 Codex CLI 的 Passive/Active Probe、非交互执行、JSONL、结构化 Agent Result、角色 Sandbox、取消和安全 Resume，并把真实输出交给 M2 Workspace/Patch/Validator 独立验收。Claude Adapter、Reviewer、完整 Kernel Reconcile/Gate/Budget、Daemon/API 与 Final Report 属于 M4–M6。
+本设计实现 PLAN-004，只覆盖 Codex CLI 的 Passive/Active Probe、非交互执行、JSONL、结构化 Agent Result、角色 Sandbox、取消和安全 Resume，并把真实输出交给 M2 Workspace/Patch/Validator 独立验收。Claude Adapter、Reviewer、完整 Kernel Reconcile/Gate、Daemon/API 与 Final Report 属于 M4–M6。
 
 ## 当前 CLI 合同
 
@@ -72,7 +72,7 @@ Cancel 取消 execution context；Supervisor 向独立进程组发送 TERM、等
 
 ## JSONL 与结果合同
 
-- `thread.started` 提取受信 Session ID 并生成 `session` Event；`turn.*`、`item.*`、`error`、Usage 映射到规范类型。
+- `thread.started` 提取受信 Session ID 并生成 `session` Event；`turn.*`、`item.*` 和 `error` 映射到规范类型。
 - Command/File Change 只是 Claim；无法无损表达 argv 的供应商 command 字符串保留为 Summary，不伪造已执行事实。
 - 未知 Event Type 仍保存脱敏 raw ref，并产生可审计 `unknown` Event，不使 parser 崩溃。
 - 非 JSON、单行/总量超限、EOF 前未换行、没有 `thread.started`、缺失最终 `item.completed/agent_message`、Agent Result Schema 不匹配，统一返回 `INVALID_OUTPUT`；退出码 0 不能覆盖这些错误。
@@ -82,7 +82,7 @@ Cancel 取消 execution context；Supervisor 向独立进程组发送 TERM、等
 ## Probe 分层
 
 - Passive：只执行 binary lookup、`--version`、`exec --help`、`exec resume --help` 和 `login status`；Provider Transport 为 `unknown`，不会创建 Agent Invocation。
-- Active Contract：必须显式 `ProviderTransport=true` 且有正 MaxWallTime；运行最小 read-only 结构化回合，保存 Session、Usage（供应商提供多少记录多少）及 `cost=unknown`。超时、认证、JSONL 或 Schema 失败不能被 Passive 结果覆盖。
+- Active Contract：必须显式 `ProviderTransport=true` 且有正 Timeout；运行最小 read-only 结构化回合并保存 Session 与独立 Evidence。超时、认证、JSONL 或 Schema 失败不能被 Passive 结果覆盖。
 
 ## Session 安全绑定
 
@@ -97,7 +97,7 @@ Session Binding 使用 Canonical Hash 绑定 Adapter/Profile、Work、Attempt、
 
 ## M3 验收
 
-- fixture executable 覆盖命令参数、stdin、已知/未知 JSONL、Usage、结构化结果、截断、退出码 0 但结果无效、取消进程组及新 Adapter 实例 Resume。
+- fixture executable 覆盖命令参数、stdin、已知/未知 JSONL、结构化结果、截断、退出码 0 但结果无效、取消进程组及新 Adapter 实例 Resume。
 - 真实 CLI smoke 首先运行 Active Contract 与 Resume，再在临时真实 Git 仓库执行一个有界 Fast 文件修改和一个 Standard Implementer 修改。
 - 两个写路径都由 M2 从冻结 Base Tree 捕获 Patch、检查 Scope、在干净 validation worktree 重放并运行受信 Validator；Agent Claim 或 CLI 退出码不作为完成判据。
 
@@ -112,4 +112,4 @@ Session Binding 使用 Canonical Hash 绑定 Adapter/Profile、Work、Attempt、
 | 输出超限或超时 | 回收进程组，返回明确错误与有限日志 |
 | 未知事件 | 保存并标为 unknown，继续读取已知合同 |
 
-M3 不声明 Codex 提供成本金额，也不声明 L0 可阻止模型生成工具访问主机；实际限制由 Codex Sandbox 与项目可信边界共同提供，并在 Capability/Report 中披露。
+M3 不声明 L0 可阻止模型生成工具访问主机；实际限制由 Codex Sandbox 与项目可信边界共同提供，并在 Capability/Report 中披露。

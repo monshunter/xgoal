@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xgoal.local/schema/planner-proposal-v1alpha1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "contract", "plan", "ambiguities"],
+  "properties": {
+    "protocol_version": {"const": "xgoal.planner-proposal/v1alpha1"},
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "rationale", "in_scope", "out_of_scope", "constraints", "acceptance_criteria", "quality_attributes", "human_gates", "completion_policy"],
+      "properties": {
+        "summary": {"type": "string"},
+        "rationale": {"type": "string"},
+        "in_scope": {"type": "array", "items": {"type": "string"}},
+        "out_of_scope": {"type": "array", "items": {"type": "string"}},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "acceptance_criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "statement", "validators", "human_acceptance"],
+            "properties": {
+              "id": {"type": "string"},
+              "statement": {"type": "string"},
+              "validators": {"type": "array", "items": {"type": "string"}},
+              "human_acceptance": {"type": "boolean"}
+            }
+          }
+        },
+        "quality_attributes": {"type": "array", "items": {"type": "string"}},
+        "human_gates": {"type": "array", "items": {"type": "string"}},
+        "completion_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["require_all_required_items", "require_no_blocking_findings", "require_final_validation"],
+          "properties": {
+            "require_all_required_items": {"type": "boolean"},
+            "require_no_blocking_findings": {"type": "boolean"},
+            "require_final_validation": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "work_items"],
+      "properties": {
+        "summary": {"type": "string"},
+        "work_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["client_key", "title", "objective", "depends_on", "read_scope", "write_scope", "acceptance_criteria", "validators", "recommended_role", "required"],
+            "properties": {
+              "client_key": {"type": "string"},
+              "title": {"type": "string"},
+              "objective": {"type": "string"},
+              "depends_on": {"type": "array", "items": {"type": "string"}},
+              "read_scope": {"type": "array", "items": {"type": "string"}},
+              "write_scope": {"type": "array", "items": {"type": "string"}},
+              "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+              "validators": {"type": "array", "items": {"type": "string"}},
+              "recommended_role": {"enum": ["implementer"]},
+              "required": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "ambiguities": {"type": "array", "items": {"type": "string"}}
+  }
+}

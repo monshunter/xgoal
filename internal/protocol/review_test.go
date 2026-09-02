@@ -26,8 +26,8 @@ func TestReviewPacketAndResultContracts(t *testing.T) {
 		t.Fatalf("ReviewPacket.Hash() = %q, %v", hash, err)
 	}
 	packet.ReviewerProfileID = packet.ImplementationProfileID
-	if err := packet.Validate(); err == nil {
-		t.Fatal("ReviewPacket accepted the implementation profile as reviewer")
+	if err := packet.Validate(); err != nil {
+		t.Fatalf("ReviewPacket rejected a shared runtime profile with an independently enforced session: %v", err)
 	}
 
 	result := protocol.ReviewResult{

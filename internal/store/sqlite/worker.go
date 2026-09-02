@@ -75,6 +75,47 @@ func (s *Store) RecoverableWorkers(ctx context.Context) ([]WorkerProcess, error)
 	return result, rows.Err()
 }
 
+// MarkWorkerExited records the normal child-process observation without
+// changing Attempt, Work, or Lease ownership; the engine performs those state
+// transitions only after it has parsed the immutable result.
+func (s *Store) MarkWorkerExited(ctx context.Context, attemptID string, expectedVersion int64, event EventInput) (WorkerProcess, error) {
+	if !validIdempotencyLabel(attemptID) || expectedVersion <= 0 {
+		return WorkerProcess{}, errors.New("invalid worker exit observation")
+	}
+	prepared, err := prepareEvent(event)
+	if err != nil {
+		return WorkerProcess{}, err
+	}
+	var result WorkerProcess
+	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
+		worker, err := readWorker(ctx, tx, attemptID)
+		if err != nil {
+			return err
+		}
+		if worker.Version != expectedVersion || worker.State != WorkerRunning {
+			return fmt.Errorf("worker %q: %w", attemptID, basestore.ErrConflict)
+		}
+		now := s.source.Now().UTC()
+		updated, err := tx.ExecContext(ctx, `UPDATE worker_processes SET state = ?, version = version + 1, updated_at = ? WHERE attempt_id = ? AND version = ? AND state = ?`, WorkerExited, now.Format(time.RFC3339Nano), attemptID, expectedVersion, WorkerRunning)
+		if err != nil {
+			return err
+		}
+		affected, err := updated.RowsAffected()
+		if err != nil || affected != 1 {
+			return fmt.Errorf("worker %q exit CAS: %w", attemptID, basestore.ErrConflict)
+		}
+		if err := s.appendEvent(ctx, tx, "attempt", attemptID, prepared); err != nil {
+			return err
+		}
+		worker.State = WorkerExited
+		worker.Version++
+		worker.UpdatedAt = now
+		result = worker
+		return nil
+	})
+	return result, err
+}
+
 // ResolveWorkerRecovery terminates ownership and moves unfinished work to deterministic Reconcile.
 func (s *Store) ResolveWorkerRecovery(ctx context.Context, attemptID string, expectedVersion int64, state WorkerState, reason string, event EventInput) (WorkerProcess, error) {
 	if !validIdempotencyLabel(attemptID) || expectedVersion <= 0 || !state.terminal() || reason == "" {

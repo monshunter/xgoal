@@ -53,6 +53,7 @@ func TestAllSpecifiedEndpointsAreRouted(t *testing.T) {
 		{http.MethodPost, "/v1/projects/init", "project.init", true},
 		{http.MethodPost, "/v1/goals", "goal.create", true},
 		{http.MethodGet, "/v1/doctor", "doctor", false},
+		{http.MethodPost, "/v1/doctor/active-probes", "doctor.active-probe", true},
 		{http.MethodGet, "/v1/goals/g1", "goal.get", false},
 		{http.MethodPost, "/v1/goals/g1/pause", "goal.pause", true},
 		{http.MethodPost, "/v1/goals/g1/resume", "goal.resume", true},
@@ -64,7 +65,9 @@ func TestAllSpecifiedEndpointsAreRouted(t *testing.T) {
 		{http.MethodPost, "/v1/gates/gate1/decisions", "gate.decide", true},
 		{http.MethodGet, "/v1/attempts/a1/logs", "attempt.logs", false},
 		{http.MethodPost, "/v1/work-items/w1/retry", "work.retry", true},
+		{http.MethodPost, "/v1/work-items/w1/cancel", "work.cancel", true},
 		{http.MethodGet, "/v1/goals/g1/report", "goal.report", false},
+		{http.MethodPost, "/v1/goals/g1/finalize", "goal.finalize", true},
 		{http.MethodPost, "/v1/projects/p1/clean", "project.clean", true},
 	}
 	for _, test := range tests {

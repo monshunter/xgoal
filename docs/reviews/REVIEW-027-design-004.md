@@ -15,7 +15,7 @@
 
 - Failure、Progress 与决策均为确定性输入输出，重复指纹 + 无实质进展明确禁止相同 Strategy 重试，没有把调度裁决交给 Agent 文本。
 - Policy 区分 Provider Transport、Project Network 与 Secret；Gate 消费绑定资源、Scope、时限和次数，并由 SQLite 事务保证最后一次授权不会并发超用。
-- Budget 保留 unknown，离散本地维度和供应商维度采用不同 fail-closed 规则；预算不会参与 Completion 成功判定。
+- 超时、输出上限、取消与 no-progress 只作为运行安全边界，不参与 Completion 成功判定。
 - API/Daemon 保持单写边界，复用既有 Idempotency/Event owner；NDJSON 以唯一 Event ID 对应的 `(created_at,id)` 游标续传。
 - 恢复基于持久状态、Lease Generation 与进程启动身份，不能确认归属时不误杀；迟到结果不推进状态。
 

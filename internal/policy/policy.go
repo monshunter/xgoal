@@ -54,7 +54,7 @@ func Evaluate(request Request) (Result, error) {
 		return Result{Decision: Allow, Reason: "local command remains subject to environment policy"}, nil
 	case domain.ActionConnectProvider:
 		if request.TrustedProfile {
-			return Result{Decision: Allow, Reason: "trusted profile may use provider transport within budget"}, nil
+			return Result{Decision: Allow, Reason: "trusted profile may use provider transport"}, nil
 		}
 		return Result{Decision: Deny, Reason: "provider transport requires a trusted profile"}, nil
 	case domain.ActionUseProviderCredential:

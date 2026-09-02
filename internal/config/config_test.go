@@ -61,6 +61,13 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRemovedBudgetConfiguration(t *testing.T) {
+	_, err := config.Load(strings.NewReader(validConfig + "budget: {maxAttemptsPerGoal: 10}\n"))
+	if err == nil || !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("Load() error = %v, want removed budget field error", err)
+	}
+}
+
 func TestLoadRejectsDuplicateKey(t *testing.T) {
 	input := strings.Replace(validConfig, "kind: Project", "kind: Project\nkind: Other", 1)
 	_, err := config.Load(strings.NewReader(input))
@@ -88,7 +95,6 @@ func TestLoadRejectsUnsafeV01Configuration(t *testing.T) {
 		{name: "validator timeout", old: "validators: []", new: "validators: [{id: test, type: command, phases: [final], argv: [go, test], required: true}]", wantErr: "validators[0].timeout"},
 		{name: "validator phase value", old: "validators: []", new: "validators: [{id: test, type: command, phases: [whenever], argv: [go, test], timeout: 1m, required: true}]", wantErr: "validators[0].phases"},
 		{name: "policy", old: "runtime:\n", new: "policy: {gitPush: allow}\nruntime:\n", wantErr: "policy.gitPush"},
-		{name: "negative budget", old: "runtime:\n", new: "budget: {maxAttemptsPerGoal: -1}\nruntime:\n", wantErr: "budget"},
 		{name: "report format", old: "runtime:\n", new: "report: {formats: [html]}\nruntime:\n", wantErr: "report.formats"},
 	}
 
