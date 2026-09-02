@@ -307,10 +307,13 @@ var schemaFiles embed.FS
 
 func Schema(name string) ([]byte, error) {
 	file, ok := map[string]string{
-		SchemaWorkPacket:  "schema/work-packet-v1alpha1.json",
-		SchemaAgentResult: "schema/agent-result-v1alpha1.json",
-		SchemaAgentEvent:  "schema/agent-event-v1alpha1.json",
-		SchemaEvidence:    "schema/evidence-v1alpha1.json",
+		SchemaWorkPacket:          "schema/work-packet-v1alpha1.json",
+		SchemaAgentResult:         "schema/agent-result-v1alpha1.json",
+		SchemaAgentEvent:          "schema/agent-event-v1alpha1.json",
+		SchemaEvidence:            "schema/evidence-v1alpha1.json",
+		SchemaPatchBundle:         "schema/patch-bundle-v1alpha1.json",
+		SchemaCommandReceipt:      "schema/command-receipt-v1alpha1.json",
+		SchemaEnvironmentSnapshot: "schema/environment-snapshot-v1alpha1.json",
 	}[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown schema %q", name)

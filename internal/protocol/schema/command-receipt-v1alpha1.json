@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xgoal.dev/schema/xgoal.command-receipt/v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "id", "validator_id", "definition_hash", "goal_revision_hash", "config_hash", "tree_hash", "argv", "cwd", "environment_hash", "started_at", "finished_at", "exit_code", "stdout_ref", "stderr_ref", "output_hash", "result"],
+  "properties": {
+    "protocol_version": {"const": "xgoal.command-receipt/v1alpha1"},
+    "id": {"type": "string", "minLength": 1},
+    "validator_id": {"type": "string", "minLength": 1},
+    "definition_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "goal_revision_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "config_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tree_hash": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
+    "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "cwd": {"type": "string", "minLength": 1},
+    "environment_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "exit_code": {"type": "integer"},
+    "stdout_ref": {"type": "string", "minLength": 1},
+    "stderr_ref": {"type": "string", "minLength": 1},
+    "output_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "result": {"enum": ["PASSED", "FAILED", "TIMED_OUT", "UNAVAILABLE"]}
+  }
+}

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/monshunter/xgoal/internal/canonical"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -204,6 +205,13 @@ func LoadFile(path string) (Config, error) {
 	}
 	defer file.Close()
 	return Load(file)
+}
+
+func (c Config) Hash() (string, error) {
+	if err := c.Validate(); err != nil {
+		return "", err
+	}
+	return canonical.Hash("project-config", APIVersion, c)
 }
 
 func (c Config) Validate() error {

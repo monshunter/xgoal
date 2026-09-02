@@ -15,4 +15,11 @@
 | REVIEW-010-technical-spec-claimed-recovery | REVIEW-010：技术 SPEC CLAIMED 恢复转换定向复审 | [REVIEW-010-technical-spec-claimed-recovery.md](REVIEW-010-technical-spec-claimed-recovery.md) |
 | REVIEW-011-plan-002-change | REVIEW-011：PLAN-002 M1 Change Review | [REVIEW-011-plan-002-change.md](REVIEW-011-plan-002-change.md) |
 | REVIEW-012-plan-002-change-r2 | REVIEW-012：PLAN-002 M1 Change Review 修订复审 | [REVIEW-012-plan-002-change-r2.md](REVIEW-012-plan-002-change-r2.md) |
+| REVIEW-013-plan-003 | REVIEW-013：PLAN-003 初始 Plan Review | [REVIEW-013-plan-003.md](REVIEW-013-plan-003.md) |
+| REVIEW-014-design-001 | REVIEW-014：DESIGN-001 M2 Git、环境与验证闭环 | [REVIEW-014-design-001.md](REVIEW-014-design-001.md) |
+| REVIEW-015-plan-003-change | REVIEW-015：PLAN-003 M2 Change Review | [REVIEW-015-plan-003-change.md](REVIEW-015-plan-003-change.md) |
+| REVIEW-016-plan-003-r2 | REVIEW-016：PLAN-003 制品持久化补充复审 | [REVIEW-016-plan-003-r2.md](REVIEW-016-plan-003-r2.md) |
+| REVIEW-017-plan-003-change-r2 | REVIEW-017：PLAN-003 M2 Change Review 修订复审 | [REVIEW-017-plan-003-change-r2.md](REVIEW-017-plan-003-change-r2.md) |
+| REVIEW-018-plan-003-change-r3 | REVIEW-018：PLAN-003 M2 Change Review 第二次修订复审 | [REVIEW-018-plan-003-change-r3.md](REVIEW-018-plan-003-change-r3.md) |
+| REVIEW-019-plan-003-change-r4 | REVIEW-019：PLAN-003 M2 Change Review 最终复审 | [REVIEW-019-plan-003-change-r4.md](REVIEW-019-plan-003-change-r4.md) |
 <!-- AGENT-HARNESS:END INDEX -->

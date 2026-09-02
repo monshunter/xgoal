@@ -6,7 +6,7 @@
 
 ## 当前实现状态
 
-当前代码已完成 M0 契约骨架和 M1 持久状态与控制循环：
+当前代码已完成 M0 契约骨架、M1 持久状态与控制循环，以及 M2 Git、环境与验证闭环：
 
 - Go CLI 入口，以及严格的 `xgoal.yaml` 解析和校验；
 - Goal、Work、Attempt、Effect 与 Evidence 状态类型；
@@ -19,8 +19,15 @@
 - 当前状态与 Event 同事务提交、Version CAS、项目级单活 Lease、Generation/TTL/Heartbeat 和迟到写回隔离；
 - 依赖与 Required Gate 驱动的持久 Ready 调度，以及重读事实后原子提交的 Completion Predicate；
 - 非终态 Effect 扫描与 `Request → Execute → Read Back → Observe` 跨进程恢复路径。
+- 可信本地 Git 仓库、私有 Integration Ref，以及 detached Attempt/Validation Worktree 生命周期；
+- 基于冻结 Base Tree 与实际文件系统的内容寻址 Patch Bundle，覆盖 tracked/untracked/binary/rename/mode/symlink/delete 和文件/目录拓扑转换；
+- NFC/Unicode 大小写碰撞、根锚定 Scope、deny 优先、Symlink 逃逸和 Git 元数据防护；
+- 明示 L0 能力的 Local Environment Provider、进程组监督、服务健康探针、白名单环境和可清理生命周期；
+- 从冻结 Base Commit 加载的 Validator Registry、不可变日志与 Command Receipt，以及绑定 Goal/Config/Definition/Environment/Tree 的 Evidence；
+- Workspace marker、Patch manifest/object、Environment Snapshot、Validator Definition/Run/Receipt 的 SQLite 关联、跨重启严格读回和篡改拒绝；
+- 项目内串行 Promotion、xgoal Commit Trailer、Git Ref CAS、Effect Read Back 和 Commit 后崩溃幂等恢复。
 
-当前尚不能运行真实 Goal。Git worktree/Patch/Promotion、真实 Codex/Claude Adapter、Daemon/API、完整 Reconcile/Policy、报告和 Benchmark 将在后续里程碑实现。M1 的恢复测试使用真实子进程和 SQLite 文件，但仍不构成真实 Agent、Git 或用户旅程验收。
+当前尚不能运行完整真实 Goal。真实 Codex/Claude Adapter、Daemon/API、完整 Reconcile/Policy、报告和 Benchmark 将在后续里程碑实现。M2 使用真实系统 Git、detached worktree、SQLite 文件与本地子进程验证确定性链路，但不宣称已完成真实模型回合或完整用户旅程。
 
 ## M0 使用与验收
 
@@ -41,6 +48,15 @@ make verify-m1
 ```
 
 `make verify-m1` 在 M0 基础上增加全仓 20 次乱序执行、真实子进程重启/Effect Read Back 恢复场景，以及 `CGO_ENABLED=0` 的 Darwin arm64、Linux amd64 SQLite 测试包交叉构建。通过只证明 M1 持久状态与控制不变量成立，不代表 M2–M6 或完整 v0.1 已交付。
+
+## M2 使用与验收
+
+```bash
+make m2-failure-matrix
+make verify-m2
+```
+
+`m2-failure-matrix` 明确运行 Agent 自建 Commit、Scope/Symlink 逃逸、Patch 冲突、Evidence 过期和 Promotion Commit 后崩溃恢复门禁。`verify-m2` 还执行全仓格式、单元/集成测试、20 次乱序、Race Detector、`go vet`、CLI smoke，以及 SQLite 与全仓 Linux 无 CGO 编译检查。通过只证明受信本地仓库上的 M2 确定性链路成立；L0 不隔离主机文件或网络，且 M3–M6 仍未交付。
 
 当前可用命令：
 

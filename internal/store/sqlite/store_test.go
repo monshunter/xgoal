@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/monshunter/xgoal/internal/clock"
+	"github.com/monshunter/xgoal/internal/domain"
 )
 
 func TestOpenCreatesPrivateWALStoreAndReopens(t *testing.T) {
@@ -17,6 +18,10 @@ func TestOpenCreatesPrivateWALStoreAndReopens(t *testing.T) {
 
 	ctx := context.Background()
 	projectDir := filepath.Join(t.TempDir(), "project")
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := Open(ctx, projectDir, clock.NewFake(time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -32,8 +37,8 @@ func TestOpenCreatesPrivateWALStoreAndReopens(t *testing.T) {
 	if info.JournalMode != "wal" || !info.ForeignKeys || info.Synchronous != 2 || info.BusyTimeout != 5000 {
 		t.Fatalf("unexpected runtime info: %+v", info)
 	}
-	if info.SchemaVersion != 1 {
-		t.Fatalf("SchemaVersion = %d, want 1", info.SchemaVersion)
+	if info.SchemaVersion != len(migrations) {
+		t.Fatalf("SchemaVersion = %d, want %d", info.SchemaVersion, len(migrations))
 	}
 
 	assertPermissions(t, projectDir, 0o700)
@@ -44,8 +49,8 @@ func TestOpenCreatesPrivateWALStoreAndReopens(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("migration count = %d, want 1", migrationCount)
+	if migrationCount != len(migrations) {
+		t.Fatalf("migration count = %d, want %d", migrationCount, len(migrations))
 	}
 
 	if err := store.Close(); err != nil {
@@ -57,14 +62,14 @@ func TestOpenCreatesPrivateWALStoreAndReopens(t *testing.T) {
 		t.Fatalf("reopen error = %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if reopened.Info().SchemaVersion != 1 {
-		t.Fatalf("reopened SchemaVersion = %d, want 1", reopened.Info().SchemaVersion)
+	if reopened.Info().SchemaVersion != len(migrations) {
+		t.Fatalf("reopened SchemaVersion = %d, want %d", reopened.Info().SchemaVersion, len(migrations))
 	}
 	if err := reopened.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count reopened migrations: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("reopened migration count = %d, want 1", migrationCount)
+	if migrationCount != len(migrations) {
+		t.Fatalf("reopened migration count = %d, want %d", migrationCount, len(migrations))
 	}
 }
 
@@ -131,7 +136,8 @@ func TestUpgradeCreatesValidatedBackupOnce(t *testing.T) {
 		t.Fatalf("initial Close() error = %v", err)
 	}
 
-	upgraded := append(append([]Migration(nil), migrations...), newMigration(2, "upgrade_marker", `
+	upgradeVersion := len(migrations) + 1
+	upgraded := append(append([]Migration(nil), migrations...), newMigration(upgradeVersion, "upgrade_marker", `
 CREATE TABLE upgrade_marker (
     id INTEGER PRIMARY KEY,
     value TEXT NOT NULL
@@ -140,8 +146,8 @@ CREATE TABLE upgrade_marker (
 	if err != nil {
 		t.Fatalf("upgrade open error = %v", err)
 	}
-	if store.Info().SchemaVersion != 2 {
-		t.Fatalf("upgraded SchemaVersion = %d, want 2", store.Info().SchemaVersion)
+	if store.Info().SchemaVersion != upgradeVersion {
+		t.Fatalf("upgraded SchemaVersion = %d, want %d", store.Info().SchemaVersion, upgradeVersion)
 	}
 	var backupRecords int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM migration_backups`).Scan(&backupRecords); err != nil {
@@ -168,8 +174,8 @@ CREATE TABLE upgrade_marker (
 	if err := backupDB.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read backup version: %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("backup user_version = %d, want 1", version)
+	if version != len(migrations) {
+		t.Fatalf("backup user_version = %d, want %d", version, len(migrations))
 	}
 	var quickCheck string
 	if err := backupDB.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&quickCheck); err != nil {
@@ -191,6 +197,69 @@ CREATE TABLE upgrade_marker (
 	}
 }
 
+func TestM2MigrationUpgradesM1StoreAndPreservesStateWithBackup(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	projectDir := filepath.Join(t.TempDir(), "project")
+	source := clock.NewFake(time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC))
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 2 {
+		t.Fatal("M2 migration is missing")
+	}
+	m1, err := openWithMigrations(ctx, projectDir, source, migrations[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal := domain.Goal{ID: "goal_before_m2", State: domain.GoalDraft, Version: 1}
+	if err := m1.CreateGoal(ctx, goal, EventInput{Type: "GoalCreated", ActorType: "user", Payload: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m2, err := Open(ctx, projectDir, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.Info().SchemaVersion != len(migrations) {
+		t.Fatalf("M2 schema version = %d, want %d", m2.Info().SchemaVersion, len(migrations))
+	}
+	if persisted, err := m2.Goal(ctx, goal.ID); err != nil || persisted.State != domain.GoalDraft {
+		t.Fatalf("goal after M2 migration = %+v, %v", persisted, err)
+	}
+	for _, table := range []string{"workspaces", "patch_bundles", "environment_snapshots", "validator_definitions", "validator_registrations", "validator_runs", "promotions"} {
+		var count int
+		if err := m2.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("M2 table %s count = %d, %v", table, count, err)
+		}
+	}
+	if err := m2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backups := completedBackups(t, filepath.Join(projectDir, "backups"))
+	if len(backups) != 1 {
+		t.Fatalf("M1 to M2 backups = %v, want one", backups)
+	}
+	backup, err := openReadOnlyDatabase(ctx, backups[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backup.Close()
+	var version int
+	if err := backup.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 1 {
+		t.Fatalf("M2 backup schema version = %d, %v", version, err)
+	}
+	var goalCount int
+	if err := backup.QueryRowContext(ctx, `SELECT COUNT(*) FROM goals WHERE id = ?`, goal.ID).Scan(&goalCount); err != nil || goalCount != 1 {
+		t.Fatalf("M2 backup goal count = %d, %v", goalCount, err)
+	}
+}
+
 func TestMigrationFailureRollsBackAndPreservesBackup(t *testing.T) {
 	t.Parallel()
 
@@ -208,7 +277,7 @@ func TestMigrationFailureRollsBackAndPreservesBackup(t *testing.T) {
 		t.Fatalf("initial Close() error = %v", err)
 	}
 
-	broken := append(append([]Migration(nil), migrations...), newMigration(2, "broken", `CREATE TABLE broken (`))
+	broken := append(append([]Migration(nil), migrations...), newMigration(len(migrations)+1, "broken", `CREATE TABLE broken (`))
 	if _, err := openWithMigrations(ctx, projectDir, clock.Real{}, broken); err == nil {
 		t.Fatal("broken migration unexpectedly succeeded")
 	}
@@ -221,8 +290,8 @@ func TestMigrationFailureRollsBackAndPreservesBackup(t *testing.T) {
 		t.Fatalf("reopen after failed migration: %v", err)
 	}
 	defer reopened.Close()
-	if reopened.Info().SchemaVersion != 1 {
-		t.Fatalf("schema version after failed migration = %d, want 1", reopened.Info().SchemaVersion)
+	if reopened.Info().SchemaVersion != len(migrations) {
+		t.Fatalf("schema version after failed migration = %d, want %d", reopened.Info().SchemaVersion, len(migrations))
 	}
 	var brokenTables int
 	if err := reopened.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'broken'`).Scan(&brokenTables); err != nil {
@@ -255,7 +324,7 @@ func TestOpenPreservesInterruptedBackupAndRejectsUnsafePaths(t *testing.T) {
 			t.Fatalf("write interrupted backup: %v", err)
 		}
 
-		upgraded := append(append([]Migration(nil), migrations...), newMigration(2, "upgrade_marker", `CREATE TABLE upgrade_marker (id INTEGER PRIMARY KEY);`))
+		upgraded := append(append([]Migration(nil), migrations...), newMigration(len(migrations)+1, "upgrade_marker", `CREATE TABLE upgrade_marker (id INTEGER PRIMARY KEY);`))
 		store, err = openWithMigrations(ctx, projectDir, clock.Real{}, upgraded)
 		if err != nil {
 			t.Fatalf("upgrade open error = %v", err)

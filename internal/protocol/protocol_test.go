@@ -130,6 +130,13 @@ func TestEmbeddedSchemasAreValidAndVersioned(t *testing.T) {
 		protocol.SchemaAgentResult: {version: protocol.AgentResultVersion, digest: "a71b93ea2850db6cac218d66564b8c94bc84f5552d2dc5594893e30edeca8303"},
 		protocol.SchemaAgentEvent:  {version: protocol.AgentEventVersion, digest: "6428f7e181f5b1d8f034238680cb70d7c0b9267ee9c362d3c59d20f5ebf5ecc8"},
 		protocol.SchemaEvidence:    {version: protocol.EvidenceVersion, digest: "91cde100ace57970ae14e060496c886db3ad7549c3b673c03ed71390dc163663"},
+		protocol.SchemaPatchBundle: {version: protocol.PatchBundleVersion, digest: "837a5fd10ba619e549aebf1f5fb3b1995714113f027b575156655f50dfa1c485"},
+		protocol.SchemaCommandReceipt: {
+			version: protocol.CommandReceiptVersion, digest: "3e86182ea4662a7adca84224eac88fa9f0dbbfc8a9fa63aa4f161e8719b5bc07",
+		},
+		protocol.SchemaEnvironmentSnapshot: {
+			version: protocol.EnvironmentSnapshotVersion, digest: "f549c2e9f6704dbef91d1932caca27fde117764114d21ea1c0967f42f55a5983",
+		},
 	}
 	for name, expected := range want {
 		t.Run(name, func(t *testing.T) {
