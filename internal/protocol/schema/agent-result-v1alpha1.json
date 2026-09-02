@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xgoal.dev/schema/xgoal.agent-result/v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "status", "summary"],
+  "properties": {
+    "protocol_version": {"const": "xgoal.agent-result/v1alpha1"},
+    "status": {"enum": ["completed", "blocked", "failed"]},
+    "summary": {"type": "string", "minLength": 1},
+    "changed_files_claimed": {"type": "array", "items": {"type": "string"}},
+    "checks_claimed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {"name": {"type": "string"}, "status": {"type": "string"}}
+      }
+    },
+    "blockers": {"type": "array", "items": {"type": "string"}},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "recommended_next_action": {"type": "string"}
+  }
+}

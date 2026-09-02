@@ -1,0 +1,117 @@
+apiVersion: xgoal.dev/v1alpha1
+kind: Project
+
+metadata:
+  name: xgoal
+
+project:
+  baseBranch: main
+  trustedRepository: true
+  harness:
+    type: autogo
+    required: false
+
+orchestration:
+  defaultMode: standard
+  maxParallel: 1
+  leaseTTL: 90s
+  heartbeatInterval: 20s
+  noProgressLimit: 2
+  integrationBranchPrefix: xgoal/
+
+agents:
+  - id: codex-implementer
+    adapter: codex-cli
+    command: codex
+    roles: [implementer]
+    timeout: 45m
+    sandbox: workspace-write
+    providerTransport: allow
+    credentialSource: cli-session
+    activeProbe: explicit
+    environmentAllowlist: [PATH, HOME, TMPDIR, GOCACHE, GOMODCACHE]
+
+  - id: claude-reviewer
+    adapter: claude-cli
+    command: claude
+    roles: [planner, reviewer]
+    timeout: 30m
+    permissionMode: dontAsk
+    providerTransport: allow
+    credentialSource: cli-session
+    activeProbe: explicit
+    allowedTools: [Read, Glob, Grep, Bash]
+    environmentAllowlist: [PATH, HOME, TMPDIR]
+
+workspace:
+  provider: git-worktree
+  keepFailed: true
+  cleanupCompletedAfter: 168h
+
+runtime:
+  provider: local-process
+  isolationLevelRequired: L0
+  projectNetwork: deny
+  projectSecrets: deny
+
+scopePolicy:
+  deny:
+    - /.git/**
+    - /.env
+    - /**/credentials*
+  validatorChanges: human-gate
+
+bootstrap:
+  commands:
+    - id: go-download
+      argv: [go, mod, download]
+      timeout: 15m
+      network: require-gate
+
+validators:
+  - id: gofmt-check
+    type: command
+    phases: [change, final]
+    argv: [sh, scripts/xgoal/gofmt-check.sh]
+    timeout: 2m
+    required: true
+
+  - id: go-test-all
+    type: command
+    phases: [change, final]
+    argv: [go, test, ./...]
+    timeout: 20m
+    required: true
+
+  - id: go-race
+    type: command
+    phases: [final]
+    argv: [go, test, -race, ./...]
+    timeout: 40m
+    required: true
+
+review:
+  requiredInStandard: true
+  blockSeverities: [blocker, high]
+  requireIndependentSession: true
+  preferDifferentProvider: true
+
+policy:
+  gitPush: deny
+  publishArtifact: deny
+  production: deny
+  destructiveCommands: human-gate
+  expandScope: human-gate
+
+budget:
+  maxAttemptsPerWorkItem: 3
+  maxAttemptsPerGoal: 40
+  maxWallTime: 8h
+  maxValidatorTime: 3h
+  maxCostUSD: 25
+  onUnknownCost: allow-with-attention
+
+report:
+  formats: [markdown, json]
+  includeAgentRawLogs: false
+  includeReproductionCommands: true

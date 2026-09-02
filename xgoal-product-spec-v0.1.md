@@ -38,7 +38,7 @@
 3. **环境隔离化**：每次尝试使用独立 Git worktree、分支和运行目录，不允许多个 Agent 共享可写工作区。
 4. **验收外部化**：Agent 的“已完成”只是声明；Git diff、测试结果、运行探针和用户决策才是证据。
 5. **失败可恢复**：进程退出、上下文中断、配额耗尽、测试失败和合并冲突都被记录为状态转换，而不是丢失在聊天历史中。
-6. **高风险受控**：网络、密钥、破坏性操作、发布、生产变更、范围扩张等必须经过 Human Gate。
+6. **高风险受控**：除受信 Agent Profile 必需的模型 Provider Transport 与 CLI 自有登录态外，项目/工具网络、额外密钥、破坏性操作、发布、生产变更、范围扩张等必须经过 Human Gate。
 
 ### 1.3 不承诺绝对正确
 
@@ -62,7 +62,7 @@ Codex、Claude Code 等原生 Coding Agent 已能完成复杂的单轮或短周�
 - 测试命令由 Agent 临时决定，可能被弱化、跳过或替换成更容易通过的检查。
 - 失败后机械重试，消耗大量 token，却没有代码、证据或状态上的实质进展。
 - 环境依赖、工具链、缓存、服务和配置没有形成可复现快照。
-- 需要网络、密钥、付费资源或生产权限时，没有可靠的人类门禁。
+- 需要项目/工具网络、额外密钥、付费资源或生产权限时，没有可靠的人类门禁。
 
 ### 2.2 现有两个项目的责任边界
 
@@ -112,7 +112,7 @@ AutoGo 已回答“Agent 怎样遵守工程治理”，LoopX 展示了“长期�
 3. **跨模块重构**：以 Work Graph 管理依赖和写入范围，避免并发 Agent 相互覆盖。
 4. **工程环境建设**：创建开发环境、依赖配置、容器或测试服务，并通过可复现命令验收。
 5. **长期任务恢复**：终端关闭、Agent 配额耗尽或进程中断后，从持久状态和证据继续，而不是重新解释全部上下文。
-6. **高风险变更治理**：涉及网络、密钥、外部资源、发布和生产时暂停，并生成明确的 Human Gate。
+6. **高风险变更治理**：涉及项目/工具网络、额外密钥、外部资源、发布和生产时暂停，并生成明确的 Human Gate。
 
 ---
 
@@ -202,7 +202,9 @@ Agent 生成更多文字、重复相同失败、重新描述计划不算进展�
 
 ### P-010 高风险默认关闭
 
-网络、密钥、付费资源、破坏性命令、远端推送、发布、生产环境和范围扩张默认禁止，只有显式策略或 Human Gate 才能开启。
+项目命令或 Agent 工具访问网络、读取项目密钥、使用额外付费资源、执行破坏性命令、远端推送、发布、生产环境和范围扩张默认禁止，只有显式策略或 Human Gate 才能开启。
+
+Codex/Claude CLI 访问其模型供应商的控制面连接是 xgoal 核心执行通道，不等同于项目网络权限。它只能由受信 Agent Profile 开启、计入预算并使用 CLI 自有登录态；Provider Credential 不得进入 Work Packet、项目命令环境、Validator 环境或未脱敏日志。状态和报告必须分别展示 Provider Transport 与 Project/Tool Network，不能用“网络已禁止”掩盖模型连接事实。
 
 ### P-011 当前版本证据
 
@@ -317,7 +319,7 @@ goal_revision:
     - "不开发自有 Agent"
     - "默认无网络、无密钥、无远端推送"
   acceptance_criteria:
-    - id: AC-001
+    - id: AC-GOAL-001
       statement: "进程重启后可恢复 Goal、Work Item 和 Attempt 状态"
       validators: [recovery-integration-test]
   quality_attributes:
@@ -408,6 +410,7 @@ goal_revision:
 - 当前隔离等级、网络策略和权限风险。
 - Validator 命令、依赖文件和所需服务是否存在。
 - 不能满足的能力以及是否需要 Human Gate。
+- 默认只执行不产生模型调用费用的被动探测；真实最小 Agent 回合属于显式主动探测，必须展示 Provider Transport、认证、预算与可能费用并生成独立 Evidence。
 
 ### 10.2 目标录入与计划
 
@@ -437,6 +440,8 @@ goal_revision:
 - 结构化输出、事件流、恢复会话和权限模式能力。
 - 默认模型/配置、超时和环境变量白名单。
 - 当前可用状态与探测时间。
+- Provider Transport 与认证来源；v0.1 默认复用 CLI 自有登录态，不把凭据暴露给 Work Packet 或项目工具。
+- 被动能力探测与显式主动 Contract Probe 的支持状态。
 
 #### FR-021：有界分派
 
@@ -568,7 +573,7 @@ Agent 输出中的 `status: done` 不参与该布尔判定。
 
 - 目标、范围或验收存在实质歧义。
 - 需要扩大写入范围或修改冻结 Goal Revision。
-- 需要网络访问、密钥、身份、付费资源或外部系统写入。
+- 需要项目/工具网络访问、额外密钥、身份、付费资源或外部系统写入；受信 Profile 已声明的 Provider Transport 和 CLI 自有登录态除外。
 - 需要删除数据、重写历史、推送远端、发布或部署生产。
 - 受信 Validator 缺失、失效或被建议弱化。
 - 多次无进展、预算即将耗尽或不同证据冲突。
@@ -741,7 +746,7 @@ v0.1 发布硬门槛：
 - 默认 `max_parallel = 1`，先证明闭环正确性。
 - CLI 状态、日志、报告和清理。
 - Fake Agent Adapter 与故障注入测试。
-- 可选 AutoGo 集成。
+- 可选 AutoGo 运行时集成；发布 Benchmark 中的 AutoGo 对照组不使 xgoal 运行时依赖 AutoGo。
 
 ### 13.2 v0.2
 
@@ -837,36 +842,42 @@ v0.1 发布硬门槛：
 
 ## 17. v0.1 发布验收清单
 
-### 产品闭环
+本节是 xgoal v0.1 实现与 Final Report 的规范 AC 入口。`AC-FR-*` 与对应 Feature Requirement 一一绑定；`AC-NF-*` 覆盖跨功能发布不变量。AC ID 一经用于 Evidence 不得重编号，语义变化必须修订 SPEC 并使受影响 Evidence 过期。
 
-- [ ] 用户能创建、暂停、恢复、取消一个 Goal。
-- [ ] Goal Contract 可版本化，重大变更不会静默覆盖旧版本。
-- [ ] 至少能完成一个 Codex 实现 + Claude Review 的 Standard 流程，也能反向配置角色。
-- [ ] Agent 的文字声明不会直接触发 `Completed`。
-- [ ] 所有 Attempt 都具有唯一 Agent、Work Item、Workspace、输入、输出和 Evidence。
-- [ ] 最终验收在最终集成 Tree 上执行。
-- [ ] 打开的 Gate、Blocker 或过期 Evidence 会阻止完成。
+### 17.1 Feature Requirement 验收
 
-### 稳定性
+- [ ] **AC-FR-001**：在干净的可信本地 Git 仓库执行 `xgoal init`，能生成严格 `xgoal.yaml`、共享 worktree 的本地 Project ID 和权限受控运行目录，且不修改远端或生产资源。
+- [ ] **AC-FR-002**：`xgoal doctor` 能报告 Git/OS/Arch/Agent/Validator/隔离与策略事实；默认被动探测不发起模型回合，显式 Active Probe 才消耗 Provider 网络、认证和预算并保存 Evidence。
+- [ ] **AC-FR-010**：自然语言、文件和 stdin 目标均能生成并校验 Goal Contract；原始输入、Config Hash 和创建者可追溯，关键缺口进入 Gate 而非被 Agent 猜测。
+- [ ] **AC-FR-011**：Planner 输出能形成版本化 Work Graph；环路、缺失依赖、写 Scope 冲突、缺失 Validator 和无界 Work Item 会被确定性拒绝或转入 Finding/Gate。
+- [ ] **AC-FR-020**：Codex 与 Claude Agent Profile 均能做版本与能力协商，分别展示 Provider Transport/认证来源、Project Network 和隔离限制；不兼容版本 Fail Closed。
+- [ ] **AC-FR-021**：每个 Invocation 只绑定一个 Attempt、Work Item 和不可变 Work Packet，Kernel 能监督事件、限制输出、超时、取消和回收进程。
+- [ ] **AC-FR-022**：同一 Work Item 同时最多一个 Active Lease；获取、心跳、Generation、过期读回和幂等写回在竞争与重启测试中成立。
+- [ ] **AC-FR-030**：每个 Attempt 使用独立 worktree；基础 Commit/Tree、配置和环境可归因，tracked/untracked/binary/rename/mode/symlink/delete 变化均被捕获，范围外或逃逸变化进入 Quarantine。
+- [ ] **AC-FR-031**：受信 bootstrap、build、test、service 与健康探针可在 Local Provider 中准备、监督和清理；失败产生 Environment Evidence。
+- [ ] **AC-FR-040**：Validator 只从受版本管理的配置或受信脚本注册；Agent 输出不能注入或弱化 Required Validator，未知或缺失定义阻止完成。
+- [ ] **AC-FR-041**：Scope、Build、Test、Lint、Integration/E2E 和 Runtime Probe 按配置独立执行并生成 Command Receipt；最终 Required Validator 在最终 Integration Tree 上重跑。
+- [ ] **AC-FR-042**：事实冲突按 Goal/Human Decision、当前 Tree 确定性 Evidence、Git/文件事实、Reviewer、Agent Claim 的顺序裁决，低等级信息不能覆盖高等级事实。
+- [ ] **AC-FR-050**：Standard 流程使用独立 Reviewer 会话并生成结构化 Finding；Codex 实现/Claude Review 与 Claude 实现/Codex Review 两条真实路径均通过。
+- [ ] **AC-FR-051**：Agent、环境、Scope、Validator、Review、Patch、Goal、Policy 和 Budget 失败被归入稳定 Failure Class 并进入可解释 Reconcile。
+- [ ] **AC-FR-052**：相同 Failure Fingerprint 且无实质增量时不会用同一策略机械重试，而是诊断、拆分、切换、重规划或 Gate。
+- [ ] **AC-FR-060**：Kernel 不信任 Agent Commit；Patch Bundle 以不可变内容和 Manifest 捕获全部允许变化并可在干净 Tree 完整读回。
+- [ ] **AC-FR-061**：Patch 在最新 Integration Tree 上串行重放、复验并由 xgoal 创建带元数据 Trailer 的 Commit；冲突进入 Reconcile，崩溃恢复不重复 Promotion。
+- [ ] **AC-FR-062**：只有 Required Work、Criteria、Final Validator、Finding、Gate、Scope/Policy、Evidence、Report 和可选 Human Acceptance 全部满足时 Goal 才能 `Completed`；Agent `done` 或 exit 0 均不能绕过。
+- [ ] **AC-FR-070**：目标歧义、扩 Scope、项目网络、额外 Secret/费用、破坏性或外部写入、Validator 弱化、无进展与 Evidence 冲突按策略打开 Gate。
+- [ ] **AC-FR-071**：每个 Gate 含事实、未知项、2–3 个选项、推荐、动作/资源 Scope、次数、期限和恢复条件；过期或越界授权不生效。
+- [ ] **AC-FR-080**：`pause`、`resume`、`cancel`、`retry` 和 `replan` 均保持历史，Resume 不重建 Goal，Retry 不覆盖 Attempt，Replan 不静默覆盖旧 Revision。
+- [ ] **AC-FR-081**：在 Agent 启动前、运行中、Patch 捕获后、Validator 后、Promotion 前后和报告落盘边界注入崩溃，重启均得到确定的继续、验证、等待或取消状态。
+- [ ] **AC-FR-090**：`status`、`logs`、`gates` 及高级查询能展示 Goal/Work/Attempt/Lease/Workspace、最近实质进展、预算、失败和代码 Tree，并清楚区分 Fact、Claim、Inference、Decision。
+- [ ] **AC-FR-091**：Markdown/JSON Final Report 能逐条追溯 Goal Revision、Work/Attempt、最终 Commit/Tree、AC→Evidence、Validator 命令、Gate/Finding、资源、限制和复现方式。
 
-- [ ] 在 Agent 启动前、执行中、补丁捕获后、验证后、Promotion 前后注入崩溃，重启后均能得到确定状态。
-- [ ] 不出现重复有效 Lease、重复 Promotion 或部分状态写回。
-- [ ] 同一失败无实质进展时不会无限重试。
-- [ ] `clean` 不会删除仍被引用的 Workspace 或 Evidence。
+### 17.2 跨功能发布验收
 
-### 安全与透明度
-
-- [ ] 默认禁止远端推送、生产部署、密钥和未授权网络。
-- [ ] 状态输出明确展示当前隔离等级和安全限制。
-- [ ] 日志不保存未脱敏的密钥和完整敏感环境变量。
-- [ ] Final Report 明确列出未验证项和已知限制。
-
-### 基准与文档
-
-- [ ] 提供固定 Commit 的公开 Benchmark Suite。
-- [ ] 对比原生单 Agent、AutoGo 单 Agent 与 xgoal。
-- [ ] README 中的性能和正确性结论均能追溯到真实运行数据。
-- [ ] 提供架构、配置、威胁模型、恢复与 Agent Adapter 文档。
+- [ ] **AC-NF-001**：状态机、Completion Predicate、Store/CAS、Effect、Scope 和 Evidence Staleness 具有单元、属性/模型、集成与竞态测试；不存在重复有效 Lease、终态回退或迟到 Generation 推进状态。
+- [ ] **AC-NF-002**：默认禁止项目/Agent 工具的未授权网络、项目 Secret、远端 push、发布和生产操作；Provider Transport 与 CLI 自有认证单独受信、计入预算且不泄露到 Work Packet、项目命令、Validator 或日志。
+- [ ] **AC-NF-003**：`doctor`、`status` 和 `report` 展示实际 L0 隔离及限制；日志脱敏、Socket/DB/Packet/Patch/Report 权限符合合同，`clean` 不删除仍被 Workspace、Evidence 或 Report 引用的对象。
+- [ ] **AC-NF-004**：仓库内提供固定初始 Commit/fixture 与可复现 Benchmark Suite，对原生单 Agent、AutoGo 单 Agent 和 xgoal 使用同一验收与资源口径；没有外部发布授权时不自动公开或上传结果。
+- [ ] **AC-NF-005**：README 中的正确性、性能和成本结论只引用实际运行数据；架构、配置、威胁模型、恢复、Agent Adapter、操作与已知限制文档齐全。
 
 ---
 

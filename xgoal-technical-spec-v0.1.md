@@ -34,6 +34,7 @@
 10. Completion 是一个确定性谓词，只能在最终集成 Tree 上全部满足。
 11. 外部副作用采用 **Request → Execute → Read Back → Observe** 模型，支持崩溃恢复和幂等重放。
 12. v0.1 明确只支持**可信本地仓库**；本地进程 Provider 不声称具备容器级强隔离。
+13. **Provider Control Plane 与 Project/Tool Network 分离**：Codex/Claude CLI 访问模型供应商是受信 Agent Profile 的执行通道；Agent 工具、项目命令、bootstrap、Validator 和服务的网络仍默认拒绝。Provider Credential 不进入 Work Packet 或项目执行环境。
 
 ### 1.2 MVP 最小拓扑
 
@@ -80,7 +81,7 @@ CLI ── Local API/Unix Socket ── xgoal Daemon/Kernel
 | 可恢复性 | 任一外部 Effect 前后崩溃，重启后都能通过状态和外部读回决定下一步。 |
 | 幂等性 | 所有调度、Attempt、Validator Run、Promotion 和 Gate Decision 有幂等键。 |
 | 可审计性 | 每次决策能追溯 Goal Revision、代码 Tree、输入包、Agent、命令和 Evidence。 |
-| 安全性 | 默认最小权限；无网络、无密钥、无远端写、无生产操作；能力不足时明确降级。 |
+| 安全性 | 默认最小权限；除受信 Agent Profile 的 Provider Transport/CLI 登录态外，项目网络与 Secret、远端写和生产操作默认禁止；能力不足时明确降级。 |
 | 可替换性 | Kernel 不依赖 Codex/Claude 私有数据结构；通过规范化 Adapter 协议接入。 |
 | 可测试性 | 核心状态机和 Effect Interpreter 可使用 Fake Adapter、Fake Clock、Fake Process 测试。 |
 | 可观测性 | 结构化事件、日志、状态快照、预算和最近实质进展均可查询。 |
@@ -337,6 +338,25 @@ Git 操作使用系统 `git` CLI，而不是在 v0.1 使用纯 Go Git 实现，�
 - 所有可并发修改的 Aggregate 包含整数 `version`，更新使用 Compare-And-Swap。
 - API 写请求必须携带 `Idempotency-Key`；Daemon 将键、请求哈希和响应关联保存。
 
+### 7.3 Canonical Encoding 与 Hash
+
+所有跨进程、持久化或进入 Evidence 的 Canonical Hash 使用同一合同：
+
+1. 输入先按对应版本化 Schema 严格解析；拒绝重复 Key、未知字段、非 UTF-8、非有限数字和 Schema 外隐式类型。
+2. YAML 配置先转换为已验证的类型对象，再投影为 JSON 数据模型；不直接对 YAML 字节求哈希。
+3. JSON 使用 RFC 8785 JSON Canonicalization Scheme（JCS）编码；协议对象不得依赖未定义的 map 顺序、浮点格式或本地时区。
+4. Hash 输入带域分隔：
+
+```text
+canonical_hash = SHA256(
+  "xgoal-canonical/v1\n" + object_kind + "\n" + schema_version + "\n" + jcs_bytes
+)
+```
+
+5. 文件内容、命令输出和 Patch Object 对原始字节求 SHA-256；文本展示的换行或脱敏副本不能替代原始对象哈希。
+
+同一对象在 macOS/Linux、不同进程和 map 插入顺序下必须产生相同 Golden Hash。Canonical 合同变化需要新版本，不能静默改变旧 Evidence 的含义。
+
 ---
 
 ## 8. 状态存储与事件
@@ -525,7 +545,7 @@ Planner 输出：
       "depends_on": [],
       "read_scope": ["/**"],
       "write_scope": ["/internal/store/**", "/internal/event/**"],
-      "acceptance_criteria": ["AC-001"],
+      "acceptance_criteria": ["AC-GOAL-001"],
       "validators": ["go-test-store", "race-store"],
       "recommended_role": "implementer",
       "required": true
@@ -543,6 +563,17 @@ Planner 输出：
 - 无法证明不冲突的写范围按冲突处理。
 - Work Item 太大时给出 Plan Finding；不让 Kernel 自动凭主观判断任意拆分。
 - Validator ID 必须已注册，或创建“新增 Validator” Gate/工作项。
+
+#### Scope Pattern Contract v1
+
+- Scope Pattern 是以 `/` 开头的仓库根相对 POSIX 路径模式，不是宿主绝对路径；输入中的反斜杠、NUL、`.`/`..` 段、除前导根标记外的空段和非 UTF-8/非 NFC 路径 Fail Closed。
+- `*` 只匹配一个路径段内的零个或多个字符；`**` 只允许作为完整路径段并匹配零个或多个路径段；`/internal/**` 同时匹配 `internal` 目录及其后代，`/**` 表示全部仓库路径但仍受隐式 Deny 约束。
+- 匹配按 Unicode code point、大小写敏感执行；若底层文件系统产生仅大小写或 Unicode 规范形式不同的碰撞，初始化/捕获阶段拒绝该仓库状态，避免 macOS 与 Linux 结果分叉。
+- `.git` 文件、Git Common Dir、其他 worktree 元数据、运行目录和显式 Deny Path 永远不能被 Allow Scope 覆盖。
+- Scope Check 对 Git 记录的仓库相对路径和 `lstat` 结果执行，不跟随 symlink；symlink target 作为内容审查，绝对 target 或规范化后逃逸仓库根的 target 直接 Quarantine。
+- Allow 只在路径匹配且没有 Deny 命中时成立。多个无法解析或无法证明安全的模式按拒绝处理，不退化为全局允许。
+
+该合同使用跨平台 Golden Test 覆盖根目录、目录自身、嵌套路径、大小写/Unicode 碰撞、symlink 与逃逸输入。
 
 ### 10.3 Plan Revision
 
@@ -643,6 +674,17 @@ state = ACTIVE|RELEASED|EXPIRED|REVOKED
 - 将所有供应商输出标记为不可信输入。
 - 允许添加新的 CLI Agent，而不修改 Kernel 状态机。
 
+#### Provider Transport 与 Probe 分层
+
+`Provider Transport` 仅指 Codex/Claude CLI 与其模型供应商控制面的连接；`Project Network` 指 Agent 工具、项目命令、bootstrap、Validator 和服务访问网络。前者由受信 Agent Profile 决定并计入 Budget，后者由 Work Item Policy 决定且默认 `DENY`。任何 Agent 输出都不能把 Project Network 改写为 Provider Transport。
+
+Probe 分为：
+
+- `PASSIVE`：只执行 binary lookup、`--version`、`--help`、静态配置/认证存在性检查和本地 fixture parser test；不得发起模型请求或产生供应商费用。`doctor` 默认只运行该级别。
+- `ACTIVE_CONTRACT`：执行一个最小真实结构化回合，验证认证、Provider Transport、事件、Schema、取消/超时和可选 Resume。只能由显式 `doctor --active`、验收命令或运行前必要检查触发，必须先通过 Profile Policy 与 Budget，并保存 Usage/Cost 为实际值或 `unknown`。
+
+Passive Pass 不得宣称真实模型回合可用；Active Probe 失败不得被静态 `--help` 结果覆盖。
+
 ### 12.2 Go 接口
 
 ```go
@@ -655,6 +697,27 @@ type Adapter interface {
     Wait(ctx context.Context, handle Handle) (AgentResult, error)
 }
 
+type ProbeMode string
+
+const (
+    ProbePassive        ProbeMode = "PASSIVE"
+    ProbeActiveContract ProbeMode = "ACTIVE_CONTRACT"
+)
+
+type ProbeSpec struct {
+    Mode              ProbeMode
+    ProfileID         string
+    ProviderTransport bool
+    Budget            ProbeBudget
+    Timeout           time.Duration
+}
+
+type ProbeBudget struct {
+    MaxWallTime   time.Duration
+    MaxTokens     int64 // 0 表示未知/未由供应商支持，不表示无限
+    MaxCostMicros int64 // 货币与估算口径来自 Agent Profile
+}
+
 type Capabilities struct {
     Version             string
     StructuredOutput    bool
@@ -665,6 +728,9 @@ type Capabilities struct {
     SandboxModes        []string
     ToolAllowlist       bool
     ApprovalModes       []string
+    ProbeMode           ProbeMode
+    ProviderTransport   string // available|unavailable|unknown
+    CredentialStatus    string // available|missing|unknown；不包含凭据值
 }
 ```
 
@@ -755,7 +821,7 @@ codex exec
 
 Adapter 必须：
 
-- 在 `Probe` 中执行版本和最小无副作用协议测试。
+- 默认 `Probe(PASSIVE)` 只执行本地无费用检查；`Probe(ACTIVE_CONTRACT)` 才执行最小真实协议回合，并记录 Provider/Budget Evidence。
 - 对未知 Event Type 保留原始记录但不崩溃。
 - 结构化结果缺失、Schema 不匹配或 JSONL 截断时返回 `INVALID_OUTPUT`。
 - 不以进程退出码 0 代替结果校验。
@@ -794,6 +860,14 @@ Go 没有官方 Claude Agent SDK 时，v0.1 直接使用 CLI 子进程；不得�
 
 否则生成 Fresh Work Packet，并把历史压缩为持久事实、失败证据和明确下一动作，不直接拼接全部聊天记录。
 
+### 12.9 Provider Credential 边界
+
+- v0.1 默认 `credential_source = cli-session`：Kernel 不读取、复制或持久化 Token，由供应商 CLI 使用其自身登录态或 Keychain。
+- Agent Profile 只保存认证来源类型和可用状态，不保存 Credential 值。缺失认证时 Passive Probe 返回 `missing`，实际调度 Fail Closed 或创建登录 Gate。
+- 显式环境变量/API Key 来源必须由 Secret Provider 和有限 Gate 注入到 Agent CLI 顶层进程；不得写入 Work Packet、Prompt、事件、项目命令环境、Validator 环境或报告。
+- 日志在落盘前对 Token、Authorization Header、常见 Key Pattern 和供应商 CLI 诊断输出脱敏；原始未脱敏凭据不作为 Evidence 保存。
+- L0 无法证明供应商 CLI 进程与其启动的所有工具在 OS 级完全隔离，因此状态必须披露 `credential_isolation=L0`；强隔离留给容器 Provider。
+
 ---
 
 ## 13. Work Packet
@@ -828,8 +902,8 @@ Go 没有官方 Claude Agent SDK 时，v0.1 直接使用 CLI 子进程；不得�
   },
   "role": "implementer",
   "constraints": {
-    "network": "deny",
-    "secrets": "deny",
+    "project_network": "deny",
+    "project_secrets": "deny",
     "git_push": false,
     "production": false
   },
@@ -911,8 +985,18 @@ Agent 可能提交、reset、rebase 或修改索引，因此：
 
 ### 14.4 Patch Manifest
 
+Patch 的权威晋升单元是内容寻址的 `Patch Bundle v1`，不是 Agent Commit 或单一文本 diff：
+
+```text
+patches/<attempt-id>/
+├── manifest.json              # JCS 编码前的规范对象
+├── objects/sha256/<hash>      # 新内容或 symlink target 的原始字节
+└── review.diff                # 可选的人类可读投影，不参与重放真相
+```
+
 ```json
 {
+  "protocol_version": "xgoal.patch-bundle/v1alpha1",
   "attempt_id": "att_...",
   "base_commit": "...",
   "base_tree": "...",
@@ -922,18 +1006,30 @@ Agent 可能提交、reset、rebase 或修改索引，因此：
       "kind": "modified",
       "mode_before": "100644",
       "mode_after": "100644",
-      "content_hash": "..."
+      "content_hash_before": "...",
+      "content_hash_after": "...",
+      "object_ref": "objects/sha256/..."
     }
   ],
-  "patch_file": "patches/att_....patch",
-  "patch_hash": "..."
+  "manifest_hash": "...",
+  "bundle_hash": "..."
 }
 ```
+
+合同：
+
+- Manifest Entry 按规范化 path 排序；`kind` 为 `added|modified|deleted|renamed`。Rename 同时记录 `path_before`/`path`，重放时仍验证旧内容并以删除+新增的确定顺序应用。
+- Regular File 的新增/修改后完整原始字节进入 Object Store，文本与二进制一视同仁；删除只记录 before hash；空文件同样有对象哈希。
+- Mode 只接受 Git 支持的 `100644|100755|120000`。Symlink 使用 `120000`，其 target 原始字节作为对象；绝对或逃逸 target 在捕获阶段 Quarantine。
+- Untracked File 作为 `added`；Agent 自建 Commit、index 状态和 rename heuristic 只用于诊断，不改变由 Base Tree 与当前文件系统计算的 Bundle。
+- Bundle Hash 由协议版本、Canonical Manifest 和每个引用 Object 的 path/hash/length 计算；任一缺失、额外或哈希不符对象使 Bundle `INVALID`。
+- Object/Manifest 先写临时文件、`fsync` 后原子 rename，再记录 Effect Observation；恢复时按 Bundle Hash 读回。
+- v0.1 不保留 hardlink 语义，捕获为独立 Regular File；submodule gitlink、设备文件、FIFO、socket、Git 元数据和不支持的 mode Fail Closed。
 
 ### 14.5 干净重放
 
 - Validation Workspace 重置到当前 Integration HEAD。
-- 应用 Patch；任何冲突都形成 `PATCH_STALE_OR_CONFLICT`。
+- 按 Manifest 顺序验证每个 before path/mode/content hash，再从 Object Store 应用变化；任何前置不匹配都形成 `PATCH_STALE_OR_CONFLICT`，不做模糊三方合并。
 - 再次计算 Tree 和 Scope。
 - 仅在该干净 Tree 上运行受信 Validator。
 - Agent Workspace 的构建产物和未声明缓存不能作为最终通过依据。
@@ -1270,9 +1366,11 @@ Replan 可以由 Planner 提议，但 Kernel 必须：
 READ_FILE
 WRITE_FILE
 EXEC_COMMAND
-ACCESS_NETWORK
+CONNECT_PROVIDER
+ACCESS_PROJECT_NETWORK
 READ_ENV
-USE_SECRET
+USE_PROVIDER_CREDENTIAL
+USE_PROJECT_SECRET
 MODIFY_VALIDATOR
 MODIFY_GIT_HISTORY
 PUSH_REMOTE
@@ -1294,11 +1392,15 @@ ALLOW | DENY | REQUIRE_GATE
 |---|---|---|---|---|
 | 读取项目 | Allow | Allow | Allow | Allow |
 | 写业务工作区 | Deny | Scope 内 Allow | Deny | 仅验证/集成工作区 Allow |
-| 网络 | Deny | Deny | Deny | Deny；显式 Gate 后有限开放 |
-| 密钥 | Deny | Deny | Deny | 临时、最小范围且 Gate |
+| Provider Transport | 受信 Profile Allow | 受信 Profile Allow | 受信 Profile Allow | 不适用 |
+| Project/Tool Network | Deny | Deny | Deny | Deny；显式 Gate 后有限开放 |
+| CLI 自有 Provider Credential | 只允许 CLI 内部使用 | 只允许 CLI 内部使用 | 只允许 CLI 内部使用 | 不适用 |
+| Project Secret | Deny | Deny | Deny | 临时、最小范围且 Gate |
 | Git Push | Deny | Deny | Deny | v0.1 Deny |
 | 修改 Validator | Propose only | Gate | Propose only | 按批准配置执行 |
 | 生产操作 | Deny | Deny | Deny | v0.1 Deny |
+
+`Provider Transport` 的 Allow 只允许已配置 CLI 到其供应商控制面，并计入 Agent Budget；不能借此为 Bash、项目依赖下载、测试或服务开放网络。`cli-session` Credential 不视为 Agent 可读 Secret；显式 API Key 注入仍需要 Secret Provider、有限 Gate 和脱敏。
 
 ### 19.3 Gate 数据
 
@@ -1322,7 +1424,7 @@ ALLOW | DENY | REQUIRE_GATE
   ],
   "recommendation": "allow-once",
   "requested_capability": {
-    "action": "ACCESS_NETWORK",
+    "action": "ACCESS_PROJECT_NETWORK",
     "scope": ["proxy.golang.org"],
     "expires_in": "30m"
   }
@@ -1536,6 +1638,9 @@ agents:
     roles: [implementer]
     timeout: 45m
     sandbox: workspace-write
+    providerTransport: allow
+    credentialSource: cli-session
+    activeProbe: explicit
     environmentAllowlist: [PATH, HOME, TMPDIR, GOCACHE, GOMODCACHE]
 
   - id: claude-reviewer
@@ -1544,6 +1649,9 @@ agents:
     roles: [planner, reviewer]
     timeout: 30m
     permissionMode: dontAsk
+    providerTransport: allow
+    credentialSource: cli-session
+    activeProbe: explicit
     allowedTools: [Read, Glob, Grep, Bash]
     environmentAllowlist: [PATH, HOME, TMPDIR]
 
@@ -1555,8 +1663,8 @@ workspace:
 runtime:
   provider: local-process
   isolationLevelRequired: L0
-  network: deny
-  secrets: deny
+  projectNetwork: deny
+  projectSecrets: deny
 
 scopePolicy:
   deny:
@@ -1628,6 +1736,7 @@ report:
 - 路径全部相对项目 Root，并做 symlink/`..` 逃逸检查。
 - 命令使用 argv 数组；复杂 shell 逻辑放入受版本控制脚本。
 - Agent Profile 的环境变量仅按名称白名单传递；敏感值需要 Gate/Secret Provider。
+- `providerTransport`、`credentialSource` 和 `activeProbe` 只能来自受信 Project Config；Agent 输出不能覆盖。`cli-session` 不导出 Credential 值，显式 Secret 来源必须使用独立注入路径。
 - 运行中配置变化触发新 Config Revision，并评估对 Evidence 和 Attempt 的影响。
 
 ---
@@ -1652,6 +1761,7 @@ report:
 - Agent 工作区不直接晋升；必须干净重放和复验。
 - Lease Generation 防止迟到 Worker 写回。
 - 默认不传密钥；环境变量日志只记录名称或脱敏值。
+- Provider Transport 只允许受信 CLI 的模型控制面连接；Project/Tool Network 保持独立 Deny/Gate。CLI 自有登录态不复制到 Packet、项目命令或 Validator；显式 Provider Secret 使用最小范围 Gate。
 - 日志、Packet、Patch、DB 和 Socket 使用当前用户权限，默认文件模式 `0600`、目录 `0700`。
 - 远端 push、生产、发布和 destructive action 在 v0.1 硬禁止或 Gate。
 - Validator 由受信配置提供，不能由模型临时注入。
@@ -1662,6 +1772,7 @@ report:
 
 - v0.1 必须要求 `trustedRepository: true`。
 - `xgoal doctor` 显示 `isolation=L0` 和限制。
+- `doctor` 分别显示 Provider Transport、Credential Status、Project/Tool Network 与 Credential Isolation；Passive Probe 不产生模型调用，Active Contract Probe 必须显式触发并计入预算。
 - 对不可信仓库、未知 Hook、可执行安装脚本生成警告或 Gate。
 - 强安全场景必须等待 v0.2 Container Provider，不以文档声明替代 OS 隔离。
 
@@ -1702,6 +1813,8 @@ InvariantViolation / RecoveryAction
 ### 26.3 状态摘要
 
 `status` 的摘要由数据库事实计算，不由 LLM 生成。可选自然语言说明必须清楚标记为 Summary，并附事实链接。
+
+状态至少分别显示 `provider_transport`、`provider_credential_status`、`active_probe_evidence`、`project_network_policy` 与 `isolation_level`，避免把模型控制面可联网误报为“完全无网络”。
 
 ### 26.4 指标
 
@@ -1763,6 +1876,7 @@ InvariantViolation / RecoveryAction
 
 - CI 默认使用录制的脱敏 Event Fixtures 和 Stub CLI，不要求真实账号。
 - 可选 Nightly/Manual Job 使用真实 Codex、Claude CLI 做兼容性验证。
+- Passive Probe 测试必须证明不会启动真实模型回合；Active Contract Probe 测试必须显式启用、归因 Usage/Cost 并在认证或网络缺失时 Fail Closed。
 - Probe 结果保存版本；未通过兼容测试的版本显示 `unsupported` 或 `degraded`。
 - 解析器对未知字段前向兼容，对缺少关键字段 Fail Closed。
 
@@ -1958,6 +2072,8 @@ estimated_cost
 ### 32.2 Agent Adapter
 
 - [ ] Codex 与 Claude Adapter 均支持 Probe、Start、Wait、Cancel 和安全 Resume。
+- [ ] Passive Probe 不产生模型调用；显式 Active Contract Probe 才使用 Provider Transport/认证/预算并保存 Evidence。
+- [ ] Provider Transport、CLI Credential 与 Project/Tool Network/Secret 权限分离，凭据不进入 Packet、项目命令、Validator 或未脱敏日志。
 - [ ] 结构化输出 Schema 错误会进入 `INVALID_OUTPUT`。
 - [ ] 未知事件前向兼容且保留原始记录。
 - [ ] Agent exit 0 不会绕过 Patch 捕获与 Validator。
@@ -1967,6 +2083,7 @@ estimated_cost
 
 - [ ] 每个 Attempt 独立 worktree。
 - [ ] tracked/untracked/binary/rename/symlink 变化均能归因。
+- [ ] Patch Bundle 对 tracked/untracked/binary/rename/mode/symlink/delete 使用不可变 Object 与 Canonical Manifest，缺失或哈希不符时 Fail Closed。
 - [ ] `.git`、范围外路径和软链接逃逸被拒绝。
 - [ ] Agent Commit 不被直接信任。
 - [ ] Patch 在最新 Integration Tree 干净重放并复验。
@@ -1974,6 +2091,7 @@ estimated_cost
 
 ### 32.4 验证与完成
 
+- [ ] Canonical Hash 与 Scope Pattern 在 macOS/Linux、map 顺序、Unicode/大小写、symlink 和逃逸输入上具有稳定 Golden Test。
 - [ ] Required Validator 只来自受信配置。
 - [ ] Evidence 绑定 Goal Revision、Config Hash、Validator Hash 和 Tree。
 - [ ] Tree 或 Validator 变化使旧 Evidence 过期。
@@ -1983,7 +2101,7 @@ estimated_cost
 
 ### 32.5 安全与透明
 
-- [ ] 默认禁止 push、生产、发布、密钥和未授权网络。
+- [ ] 默认禁止 push、生产、发布、Project Secret 和未授权 Project/Tool Network；Provider Transport/CLI Credential 边界被单独披露和验证。
 - [ ] `doctor/status/report` 显示真实隔离等级。
 - [ ] 日志和环境信息经过脱敏，文件权限正确。
 - [ ] 不可信仓库不会被错误标记为强隔离可安全执行。

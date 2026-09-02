@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xgoal.dev/schema/xgoal.evidence/v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "id", "kind", "subject_id", "producer", "authority", "goal_revision_hash", "config_hash", "tree_hash", "payload_hash", "state", "created_at"],
+  "properties": {
+    "protocol_version": {"const": "xgoal.evidence/v1alpha1"},
+    "id": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "subject_id": {"type": "string", "minLength": 1},
+    "producer": {"type": "string", "minLength": 1},
+    "authority": {"enum": ["DECISION", "DETERMINISTIC", "FACT", "INFERENCE", "CLAIM"]},
+    "goal_revision_hash": {"type": "string", "minLength": 1},
+    "config_hash": {"type": "string", "minLength": 1},
+    "tree_hash": {"type": "string", "minLength": 1},
+    "payload_hash": {"type": "string", "minLength": 1},
+    "state": {"enum": ["CURRENT", "STALE", "SUPERSEDED", "INVALID"]},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

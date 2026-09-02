@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xgoal.dev/schema/xgoal.agent-event/v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "type", "at"],
+  "properties": {
+    "protocol_version": {"const": "xgoal.agent-event/v1alpha1"},
+    "type": {"type": "string", "minLength": 1},
+    "at": {"type": "string", "format": "date-time"},
+    "session_id": {"type": "string"},
+    "summary": {"type": "string"},
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv"],
+      "properties": {
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "exit_status": {"type": "integer"}
+      }
+    },
+    "file_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind"],
+      "properties": {
+        "path": {"type": "string"},
+        "kind": {"type": "string"}
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "cost_micros": {"type": "integer", "minimum": 0},
+        "currency": {"type": "string"}
+      }
+    },
+    "raw_ref": {"type": "string"}
+  }
+}
