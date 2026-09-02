@@ -22,4 +22,7 @@
 | REVIEW-017-plan-003-change-r2 | REVIEW-017：PLAN-003 M2 Change Review 修订复审 | [REVIEW-017-plan-003-change-r2.md](REVIEW-017-plan-003-change-r2.md) |
 | REVIEW-018-plan-003-change-r3 | REVIEW-018：PLAN-003 M2 Change Review 第二次修订复审 | [REVIEW-018-plan-003-change-r3.md](REVIEW-018-plan-003-change-r3.md) |
 | REVIEW-019-plan-003-change-r4 | REVIEW-019：PLAN-003 M2 Change Review 最终复审 | [REVIEW-019-plan-003-change-r4.md](REVIEW-019-plan-003-change-r4.md) |
+| REVIEW-020-plan-004 | REVIEW-020：PLAN-004 初始 Plan Review | [REVIEW-020-plan-004.md](REVIEW-020-plan-004.md) |
+| REVIEW-021-design-002 | REVIEW-021：DESIGN-002 M3 Codex CLI Adapter | [REVIEW-021-design-002.md](REVIEW-021-design-002.md) |
+| REVIEW-022-plan-004-change | REVIEW-022：PLAN-004 M3 Change Review | [REVIEW-022-plan-004-change.md](REVIEW-022-plan-004-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->

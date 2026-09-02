@@ -35,4 +35,5 @@ Plans:
 - [x] [PLAN-001：建立 v0.1 契约基线与 M0 可执行骨架](docs/plans/PLAN-001.md)
 - [x] [PLAN-002：实现 M1 持久状态与控制循环](docs/plans/PLAN-002.md)
 - [x] [PLAN-003：实现 M2 Git、环境与验证闭环](docs/plans/PLAN-003.md)
+- [x] [PLAN-004：实现 M3 Codex Adapter 与真实执行门禁](docs/plans/PLAN-004.md)
 ---

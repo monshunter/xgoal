@@ -2,10 +2,17 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/protocol"
+)
+
+var (
+	ErrInvalidOutput   = errors.New("agent adapter returned invalid output")
+	ErrUnavailable     = errors.New("agent adapter is unavailable")
+	ErrSessionMismatch = errors.New("agent session binding mismatch")
 )
 
 type ProbeMode string
@@ -30,34 +37,49 @@ type ProbeBudget struct {
 }
 
 type Capabilities struct {
-	Version           string
-	StructuredOutput  bool
-	StreamingEvents   bool
-	ResumeSession     bool
-	UsageReporting    bool
-	CostReporting     bool
-	SandboxModes      []string
-	ToolAllowlist     bool
-	ApprovalModes     []string
-	ProbeMode         ProbeMode
-	ProviderTransport string
-	CredentialStatus  string
+	Version           string          `json:"version"`
+	StructuredOutput  bool            `json:"structured_output"`
+	StreamingEvents   bool            `json:"streaming_events"`
+	ResumeSession     bool            `json:"resume_session"`
+	UsageReporting    bool            `json:"usage_reporting"`
+	CostReporting     bool            `json:"cost_reporting"`
+	SandboxModes      []string        `json:"sandbox_modes"`
+	ToolAllowlist     bool            `json:"tool_allowlist"`
+	ApprovalModes     []string        `json:"approval_modes"`
+	ProbeMode         ProbeMode       `json:"probe_mode"`
+	ProviderTransport string          `json:"provider_transport"`
+	CredentialStatus  string          `json:"credential_status"`
+	ProbeRef          string          `json:"probe_ref,omitempty"`
+	Usage             *protocol.Usage `json:"usage,omitempty"`
 }
 
+type SessionPolicy string
+
+const (
+	SessionFresh            SessionPolicy = "fresh"
+	SessionResumeCompatible SessionPolicy = "resume-compatible"
+)
+
 type Invocation struct {
-	InvocationID   string
-	AttemptID      string
-	Role           domain.Role
-	WorkDir        string
-	PacketPath     string
-	Prompt         string
-	OutputSchema   []byte
-	Environment    map[string]string
-	SandboxPolicy  string
-	ToolPolicy     []string
-	Timeout        time.Duration
-	MaxOutputBytes int64
-	SessionPolicy  string
+	InvocationID     string
+	AttemptID        string
+	WorkItemID       string
+	ProfileID        string
+	GoalRevisionHash string
+	PlanRevisionHash string
+	BaseTree         string
+	PacketHash       string
+	Role             domain.Role
+	WorkDir          string
+	PacketPath       string
+	Prompt           string
+	OutputSchema     []byte
+	Environment      map[string]string
+	SandboxPolicy    string
+	ToolPolicy       []string
+	Timeout          time.Duration
+	MaxOutputBytes   int64
+	SessionPolicy    SessionPolicy
 }
 
 type Handle struct {

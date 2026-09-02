@@ -6,7 +6,7 @@
 
 ## 当前实现状态
 
-当前代码已完成 M0 契约骨架、M1 持久状态与控制循环，以及 M2 Git、环境与验证闭环：
+当前代码已完成 M0 契约骨架、M1 持久状态与控制循环、M2 Git/环境/验证闭环，以及 M3 Codex Adapter：
 
 - Go CLI 入口，以及严格的 `xgoal.yaml` 解析和校验；
 - Goal、Work、Attempt、Effect 与 Evidence 状态类型；
@@ -26,8 +26,11 @@
 - 从冻结 Base Commit 加载的 Validator Registry、不可变日志与 Command Receipt，以及绑定 Goal/Config/Definition/Environment/Tree 的 Evidence；
 - Workspace marker、Patch manifest/object、Environment Snapshot、Validator Definition/Run/Receipt 的 SQLite 关联、跨重启严格读回和篡改拒绝；
 - 项目内串行 Promotion、xgoal Commit Trailer、Git Ref CAS、Effect Read Back 和 Commit 后崩溃幂等恢复。
+- Codex CLI Passive/Active Probe、非交互 `exec`、流式 JSONL、严格结构化结果、角色级 sandbox、进程组取消和持久 Session Resume 绑定；
+- 未知 Codex Event 的前向兼容、截断/缺失结果 Fail Closed、stdout/stderr 总量限制，以及递归脱敏后的不可变运行制品；
+- 内容寻址只读 Work Packet Store，以及由真实 Codex 完成、再经 M2 Patch/Scope/Validator 独立验收的 Fast Goal 与持久 Standard Implementer Attempt。
 
-当前尚不能运行完整真实 Goal。真实 Codex/Claude Adapter、Daemon/API、完整 Reconcile/Policy、报告和 Benchmark 将在后续里程碑实现。M2 使用真实系统 Git、detached worktree、SQLite 文件与本地子进程验证确定性链路，但不宣称已完成真实模型回合或完整用户旅程。
+当前尚不能通过用户 CLI 运行完整 Goal。Claude Adapter/独立 Reviewer、完整 Reconcile/Policy/Budget、Daemon/API、报告和 Benchmark 将在后续里程碑实现。M3 已完成真实 Codex 模型回合，但其 smoke 是 Adapter 发布门禁，不等同于 M4–M6 的完整用户旅程。
 
 ## M0 使用与验收
 
@@ -56,7 +59,19 @@ make m2-failure-matrix
 make verify-m2
 ```
 
-`m2-failure-matrix` 明确运行 Agent 自建 Commit、Scope/Symlink 逃逸、Patch 冲突、Evidence 过期和 Promotion Commit 后崩溃恢复门禁。`verify-m2` 还执行全仓格式、单元/集成测试、20 次乱序、Race Detector、`go vet`、CLI smoke，以及 SQLite 与全仓 Linux 无 CGO 编译检查。通过只证明受信本地仓库上的 M2 确定性链路成立；L0 不隔离主机文件或网络，且 M3–M6 仍未交付。
+`m2-failure-matrix` 明确运行 Agent 自建 Commit、Scope/Symlink 逃逸、Patch 冲突、Evidence 过期和 Promotion Commit 后崩溃恢复门禁。`verify-m2` 还执行全仓格式、单元/集成测试、20 次乱序、Race Detector、`go vet`、CLI smoke，以及 SQLite 与全仓 Linux 无 CGO 编译检查。通过只证明受信本地仓库上的 M2 确定性链路成立；L0 不隔离主机文件或网络，也不代表 M3–M6 的后续能力已验收。
+
+## M3 使用与验收
+
+```bash
+make m3-contract
+make m3-real-smoke
+make verify-m3
+```
+
+`m3-contract` 使用本地 fake executable 验证参数、stdin、JSONL、脱敏、错误、取消与 Resume，不发起模型请求。`m3-real-smoke` 是显式有费用的真实门禁：使用 Codex CLI 自有登录态和 Provider Transport，在临时 Git 仓库完成 Active Contract、Fast、Resume 与 Standard Implementer 回合，再从 worktree 独立捕获和重放 Patch、执行冻结 Validator，并重启 SQLite 读回 Standard 制品。`verify-m3` 先执行全部 M2 与 M3 无费用检查，最后执行该真实门禁。
+
+真实门禁不把 Agent 的 `AgentResult` 或文件变更事件当作完成证据。当前 Codex Profile 不承诺细粒度 Tool Allowlist 或成本金额报告；L0 也不能隔离主机文件或项目工具网络，因此只应在用户明确信任的仓库和主机登录态上运行。
 
 当前可用命令：
 
