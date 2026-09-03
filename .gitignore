@@ -1,0 +1,5 @@
+# Build outputs
+/bin/
+
+# Local xgoal runtime state
+/.xgoal/
