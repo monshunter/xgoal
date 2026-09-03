@@ -72,6 +72,19 @@ xgoal report <goal-id>
 xgoal clean [project-id] --dry-run
 ```
 
+所有 command 和 subcommand 都提供 Cobra 标准帮助与参数说明：
+
+```bash
+xgoal --help
+xgoal goal replan --help
+```
+
+可直接生成 Bash、Zsh、fish 或 PowerShell completion 脚本。例如当前 Zsh 会话可执行：
+
+```bash
+source <(xgoal completion zsh)
+```
+
 `run --wait` 持续读取 SQLite 权威状态，并在 Goal `Completed`、`Waiting`、`Cancelled` 时分别退出 0、3、4；不带 `--wait` 只表示 Goal 已被持久接收。
 
 ## 配置与安全

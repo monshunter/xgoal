@@ -10,4 +10,5 @@
 | PLAN-005 | PLAN-005：实现 M4 Claude Adapter 与独立 Review | [PLAN-005.md](PLAN-005.md) |
 | PLAN-006 | PLAN-006：实现 M5 Reconcile、Gate 与 Daemon | [PLAN-006.md](PLAN-006.md) |
 | PLAN-007 | PLAN-007：实现 M6 Final Report、Benchmark 与 v0.1 发布验收 | [PLAN-007.md](PLAN-007.md) |
+| PLAN-008 | PLAN-008：迁移并验收 Cobra CLI | [PLAN-008.md](PLAN-008.md) |
 <!-- AGENT-HARNESS:END INDEX -->

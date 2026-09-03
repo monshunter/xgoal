@@ -36,4 +36,8 @@
 | REVIEW-031-plan-007-r2 | REVIEW-031：PLAN-007 系统闭环补充 Plan Review | [REVIEW-031-plan-007-r2.md](REVIEW-031-plan-007-r2.md) |
 | REVIEW-032-scope-removal | REVIEW-032：v0.1 计量边界移除复审 | [REVIEW-032-scope-removal.md](REVIEW-032-scope-removal.md) |
 | REVIEW-033-plan-007-change | REVIEW-033：PLAN-007 M6 与 v0.1 Change Review | [REVIEW-033-plan-007-change.md](REVIEW-033-plan-007-change.md) |
+| REVIEW-034-plan-008 | REVIEW-034：PLAN-008 初始 Plan Review | [REVIEW-034-plan-008.md](REVIEW-034-plan-008.md) |
+| REVIEW-035-spec-001-cobra-cli | REVIEW-035：SPEC-001 Cobra CLI 行为规范 | [REVIEW-035-spec-001-cobra-cli.md](REVIEW-035-spec-001-cobra-cli.md) |
+| REVIEW-036-design-006-cobra-cli | REVIEW-036：DESIGN-006 Cobra CLI 迁移设计 | [REVIEW-036-design-006-cobra-cli.md](REVIEW-036-design-006-cobra-cli.md) |
+| REVIEW-037-plan-008-change | REVIEW-037：PLAN-008 Cobra CLI Change Review | [REVIEW-037-plan-008-change.md](REVIEW-037-plan-008-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->

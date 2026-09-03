@@ -40,3 +40,11 @@ Plans:
 - [x] [PLAN-006：实现 M5 Reconcile、Gate 与 Daemon](docs/plans/PLAN-006.md)
 - [x] [PLAN-007：实现 M6 Final Report、Benchmark 与 v0.1 发布验收](docs/plans/PLAN-007.md)
 ---
+
+---
+ID: OBJ-002
+Objective: 使用 Cobra 全面替换当前 CLI 实现模式并提供现代化 Command 体验
+Status: 已完成
+Plans:
+- [x] [PLAN-008：迁移并验收 Cobra CLI](docs/plans/PLAN-008.md)
+---

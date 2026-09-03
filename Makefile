@@ -30,8 +30,11 @@ vet:
 	go vet ./...
 
 cli-smoke:
+	go run ./cmd/xgoal --help >/dev/null
+	go run ./cmd/xgoal goal replan --help >/dev/null
 	go run ./cmd/xgoal version
 	go run ./cmd/xgoal config validate --file xgoal.example.yaml
+	for shell_name in bash zsh fish powershell; do go run ./cmd/xgoal completion "$$shell_name" >/dev/null; done
 
 sqlite-cross-build:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go test -c -o /dev/null ./internal/store/sqlite
