@@ -2,6 +2,7 @@ package projectinit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/monshunter/xgoal/internal/config"
+	"github.com/monshunter/xgoal/internal/project"
 )
 
 func TestInitializeCreatesStrictProjectAndSharedIDWithoutRemoteEffects(t *testing.T) {
@@ -62,6 +64,118 @@ func TestInitializeRejectsDirtyRepositoryBeforeWriting(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "xgoal.yaml")); !os.IsNotExist(err) {
 		t.Fatal("dirty failure wrote xgoal.yaml")
+	}
+}
+
+func TestInitializeUsesRepositoryRootFromSubdirectoryAndRespectsOwner(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	subdir := filepath.Join(root, "sub")
+	if err := os.Mkdir(subdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := project.Resolve(context.Background(), subdir, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := project.Acquire(context.Background(), paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Initialize(context.Background(), Options{ProjectRoot: subdir, AvailableCommands: map[string]string{"codex": "codex"}})
+	if !errors.Is(err, project.ErrAlreadyRunning) {
+		t.Fatalf("init did not respect project owner: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "xgoal.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed init wrote config")
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Initialize(context.Background(), Options{ProjectRoot: subdir, AvailableCommands: map[string]string{"codex": "codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ProjectRoot != paths.ProjectRoot || result.StateDir != paths.StateDir {
+		t.Fatalf("wrong initialization root: %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(subdir, "xgoal.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("created parallel subdirectory configuration")
+	}
+	if _, err := os.Stat(filepath.Join(result.StateDir, "state.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("init opened SQLite")
+	}
+}
+
+func TestInitializePersistsExplicitStateOverrideWithoutCreatingDefaultState(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	state := filepath.Join(t.TempDir(), "state")
+	result, err := Initialize(context.Background(), Options{ProjectRoot: root, StateDir: state, AvailableCommands: map[string]string{"codex": "codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := project.Resolve(context.Background(), root, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StateDir != resolved.StateDir {
+		t.Fatalf("override was not bound: %+v / %+v", result, resolved)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".xgoal")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("init created an unused default state directory")
+	}
+	assertMode(t, result.StateDir, 0700)
+}
+
+func TestInitializeRejectsLinkedEntryWithoutChangingRepository(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-q", "-b", "main")
+	runGitEnv(t, root, []string{"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@invalid", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@invalid"}, "commit", "--allow-empty", "-q", "-m", "initial")
+	linked := filepath.Join(t.TempDir(), "linked")
+	runGit(t, root, "worktree", "add", "-b", "other", linked)
+	before := runGitOutput(t, root, "worktree", "list", "--porcelain")
+	head := runGitOutput(t, root, "rev-parse", "HEAD")
+	linkedHead := runGitOutput(t, linked, "rev-parse", "HEAD")
+	indexes := map[string][]byte{}
+	indexExists := map[string]bool{}
+	for _, dir := range []string{root, linked} {
+		path := strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+		contents, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		indexes[path], indexExists[path] = contents, err == nil
+	}
+	config, err := os.ReadFile(filepath.Join(root, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Initialize(context.Background(), Options{ProjectRoot: linked, AvailableCommands: map[string]string{"codex": "codex"}}); err == nil || !strings.Contains(err.Error(), "linked worktree") {
+		t.Fatalf("linked init accepted: %v", err)
+	}
+	for _, dir := range []string{root, linked} {
+		for _, name := range []string{"xgoal.yaml", ".xgoalignore", ".gitignore", ".xgoal"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected init wrote %s", filepath.Join(dir, name))
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git", "xgoal")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("rejected init created ownership directory")
+	}
+	afterConfig, _ := os.ReadFile(filepath.Join(root, ".git", "config"))
+	if string(afterConfig) != string(config) || runGitOutput(t, root, "rev-parse", "HEAD") != head || runGitOutput(t, linked, "rev-parse", "HEAD") != linkedHead || runGitOutput(t, root, "worktree", "list", "--porcelain") != before {
+		t.Fatal("rejected init changed Git metadata")
+	}
+	for path, before := range indexes {
+		after, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if string(before) != string(after) || indexExists[path] != (err == nil) {
+			t.Fatalf("rejected init changed index %s", path)
+		}
 	}
 }
 

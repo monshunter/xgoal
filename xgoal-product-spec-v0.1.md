@@ -27,7 +27,7 @@
 
 ### 1.1 一句话定义
 
-`xgoal` 是一个**面向长期软件工程目标的本地多 Agent 编排与证据闭环系统**：用户只需要提交目标，系统把目标编译为可验收的 Goal Contract 和有依赖关系的 Work Graph，将有界任务分派给 Codex、Claude Code 等原生 Agent，在隔离工作区内执行，并通过 Git、构建、测试、运行探针和独立审查形成证据，只有最终集成版本满足全部验收条件时才进入 `Completed`。
+`xgoal` 是一个**面向长期软件工程目标的本地多 Agent 编排与证据闭环系统**：用户只需要提交目标，系统把目标编译为可验收的 Goal Contract 和有依赖关系的 Work Graph，将有界任务分派给 Codex、Claude Code 等原生 Agent，在当前 Git 主工作目录中串行执行，并通过 Git、构建、测试、运行探针和独立审查形成证据，只有最终集成版本满足全部验收条件时才进入 `Completed`。
 
 ### 1.2 产品核心
 
@@ -35,7 +35,7 @@
 
 1. **目标持久化**：目标不是一段会随对话漂移的 Prompt，而是带版本、范围、约束和验收标准的持久对象。
 2. **执行有界化**：每个 Agent 每次只处理一个可验证的 Work Item，不把整个项目和无限自主权一次性交给模型。
-3. **环境隔离化**：每次尝试使用独立 Git worktree、分支和运行目录，不允许多个 Agent 共享可写工作区。
+3. **执行归属明确**：一个 Git 项目只有一个 xgoal 实例，全部角色在当前主工作目录串行执行；不创建 Git worktree，快照与元数据保存于独立运行目录。
 4. **验收外部化**：Agent 的“已完成”只是声明；Git diff、测试结果、运行探针和用户决策才是证据。
 5. **失败可恢复**：进程退出、上下文中断、外部服务不可用、测试失败和合并冲突都被记录为状态转换，而不是丢失在聊天历史中。
 6. **高风险受控**：除受信 Agent Profile 必需的模型 Provider Transport 与 CLI 自有登录态外，项目/工具网络、额外密钥、破坏性操作、发布、生产变更、范围扩张等必须经过 Human Gate。
@@ -70,7 +70,7 @@ Codex、Claude Code 等原生 Coding Agent 已能完成复杂的单轮或短周�
 |---|---|---|---|
 | AutoGo | 安装治理规则、Skills、模板和工程协作约定 | Native Agent First、证据优先、Fast/Standard 流程、Human Gate | 不拥有运行时任务、Agent 进程、租约、隔离工作区和长期状态 |
 | LoopX | 持久目标、待办、证据、门禁、交接和恢复 | 长期控制状态、Agent 对等协作、跨轮次恢复 | 不聚焦软件工程的工作区、补丁、测试、构建、集成和最终代码晋升 |
-| xgoal | 软件工程专用的多 Agent 执行与验收编排 | 原生 Agent 适配、Git worktree、环境快照、验证证据、补丁晋升、恢复 | v0.1 聚焦本地可信仓库，不覆盖分布式执行和生产自治 |
+| xgoal | 软件工程专用的多 Agent 执行与验收编排 | 原生 Agent 适配、当前目录快照、环境观测、验证证据、补丁晋升、恢复 | v0.1 聚焦本地可信仓库，不覆盖分布式执行和生产自治 |
 
 ### 2.3 产品机会
 
@@ -125,7 +125,7 @@ AutoGo 已回答“Agent 怎样遵守工程治理”，LoopX 展示了“长期�
 | G-001 | 用户可以用自然语言提交工程目标，并得到结构化、可版本化、可验收的 Goal Contract。 |
 | G-002 | 系统可以把目标分解为有依赖关系、范围明确、可独立验证的 Work Graph。 |
 | G-003 | 直接编排至少 Codex CLI 与 Claude Code CLI，不实现自有模型、推理循环或工具调用框架。 |
-| G-004 | 每次 Agent 尝试都运行在独立工作区，并能准确归因到目标、任务、Agent、输入和代码差异。 |
+| G-004 | 每次 Agent 尝试独占当前工作目录，并能通过不可变快照准确归因到目标、任务、Agent、输入和代码差异。 |
 | G-005 | 使用受信验证器独立执行构建、测试、静态检查和运行探针，并将结果绑定到具体代码树。 |
 | G-006 | 支持 Planner、Implementer、Reviewer 的最小多 Agent 协作，同时避免角色和拓扑过度设计。 |
 | G-007 | 支持暂停、继续、取消、重试、重规划、Human Gate 和崩溃恢复。 |
@@ -182,7 +182,7 @@ Implementer 可以提供首轮自检，但不能批准自己的最终 Review；R
 
 ### P-007 写空间隔离，集成串行化
 
-任何两个 Agent 不共享可写工作区。并发尝试只发生在独立 worktree 中，所有补丁进入最终分支前必须串行重放、重新验证和晋升。
+同一项目不并发运行 Agent。一个验证阶段内的受管服务可为探针保持运行，禁止并发改源码并在阶段结束前回收。Planner、Implementer、Reviewer 与验证命令在当前主工作目录串行运行；不同项目可并行。Patch 通过 Git 对象重建候选 Tree，并与当前目录核对后验证和晋升；不创建第二份可执行代码目录。
 
 ### P-008 失败不是伪终态
 
@@ -229,7 +229,7 @@ MVP 只保留形成闭环所需的最小角色、状态和组件：Planner、Imp
 | Attempt | 某 Agent 对某 Work Item 的一次具体执行。 |
 | Agent Profile | Codex、Claude Code 等 Agent 运行时及其能力、角色和策略配置。 |
 | Lease | 对 Work Item 的有期限排他认领，防止重复执行。 |
-| Workspace | 为 Attempt 创建的独立 worktree、分支、运行目录和环境快照。 |
+| Workspace | 当前主工作目录的独占执行会话及其不可变基线、结果快照、运行目录和环境观测。 |
 | Validator | 从受信配置加载并由 `xgoal` 独立执行的确定性验证器。 |
 | Evidence | 与具体目标版本和代码树绑定的命令结果、Git 事实、运行探针、审查结论或人类决策。 |
 | Review Finding | Reviewer 产生的结构化问题，具有严重级别、证据位置和解决状态。 |
@@ -293,7 +293,7 @@ flowchart TD
 
 | 模式 | 适用条件 | 执行方式 | 不可省略项 |
 |---|---|---|---|
-| Fast | 目标清晰、局部、可逆、可快速验证，且无高风险权限 | 单 Work Item；通常一个 Implementer；按需省略独立 Reviewer | Goal Contract、隔离工作区、实际 diff、受信验证、证据和最终版本绑定 |
+| Fast | 目标清晰、局部、可逆、可快速验证，且无高风险权限 | 单 Work Item；通常一个 Implementer；按需省略独立 Reviewer | Goal Contract、当前目录独占与快照、实际 diff、受信验证、证据和最终版本绑定 |
 | Standard | 长期任务、多模块、环境复杂、难以逆转、需要多 Agent 或存在风险 | Planner → Work Graph → Implementer → Reviewer → Reconcile → Promotion → Final Validation | 全部阶段；高风险必须 Human Gate |
 
 只要无法同时确认“清晰、局部、可逆、可验证”，默认进入 Standard。
@@ -365,7 +365,7 @@ goal_revision:
 | 角色 | 责任 | 默认权限 | 禁止事项 |
 |---|---|---|---|
 | Planner | 把 Goal Contract 转换为 Work Graph；识别依赖、风险和验证需求 | 只读项目；输出结构化计划 | 不直接修改业务代码；不自行放宽目标；不把临时命令直接注册为受信验证器 |
-| Implementer | 在一个 Work Item 范围内修改代码并提供实现说明 | 指定 worktree 可写；受策略限制的命令 | 不写入范围外文件；不推送远端；不批准自己的最终 Review |
+| Implementer | 在一个 Work Item 范围内修改代码并提供实现说明 | 当前项目目录在 Scope 内可写；受策略限制的命令 | 不写入范围外文件；不推送远端；不批准自己的最终 Review |
 | Reviewer | 从正确性、回归、范围和验收缺口角度审查补丁 | 只读代码、diff、证据；输出结构化 Finding | 不直接重写实现，除非系统创建独立 Fix Work Item；不把“看起来没问题”作为完成证据 |
 
 说明：同一个底层 Agent Runtime 可以承担不同角色，但 Standard 模式下 Implementer 与 Reviewer 应使用独立会话；高风险项目可配置不同供应商以降低相关性错误。
@@ -424,7 +424,7 @@ goal_revision:
 
 #### FR-011：计划生成
 
-- Planner 根据冻结 Goal Revision 生成 Work Graph。
+- 初始 Planner 在同一 Proposal 中提议 Goal Contract 与 Work Graph；Kernel 校验后原子冻结 Goal Revision 并发布有效图。已有目标的 replan 基于当前冻结 Revision 生成新图。
 - 系统检查环路、缺失依赖、写入范围冲突、无验证节点和过大的工作项。
 - 简单目标允许生成单节点计划，不强制制造多 Agent。
 - 计划变更必须记录原因、影响和版本。
@@ -459,13 +459,13 @@ goal_revision:
 
 ### 10.4 工作区与环境管理
 
-#### FR-030：隔离工作区
+#### FR-030：当前工作目录执行
 
-- 每个 Attempt 使用独立 Git worktree 和运行目录。
-- 保存基础 Commit/Tree、配置哈希、工具版本和环境快照。
-- 不允许 Agent 直接修改主工作区或集成分支。
-- Attempt 结束后由系统独立计算 tracked/untracked 文件变化。
-- 超出允许写入范围的差异直接进入 Quarantine。
+- 一个 Git 项目只有一个活动 xgoal 实例，全部 Attempt、验证与审查在用户当前主工作目录中串行执行；不创建、切换或删除 Git worktree。linked worktree 入口明确拒绝。
+- 首个基线来自当前 HEAD；只接管干净目录，或与 xgoal 已记录的上次验收结果完全相同且 HEAD/index 未变的目录。其他预存修改保留并拒绝自动接管。
+- 保存基础 Commit/Tree、用户 HEAD/分支/index 身份、配置哈希和环境观测。所有系统快照使用独立临时 index，不改用户暂存区。
+- Attempt 结束后独立计算 tracked 与非忽略 untracked 的内容、mode、rename、symlink 和 delete；Git 元数据及 xgoal 状态不进入业务 Patch。
+- 超出 Scope、HEAD/index 漂移或无法归属的修改保留现场并进入 Quarantine/可操作等待；停止或取消不自动 reset、clean、stash 或回滚代码。
 
 #### FR-031：环境准备
 
@@ -541,11 +541,11 @@ goal_revision:
 
 #### FR-061：串行 Promotion
 
-- 在干净的验证工作区把 Patch 应用到最新集成版本。
+- 在 Git 对象层按 before mode/hash 严格应用 Patch 到最新集成 Tree，并核对结果与当前工作目录 Tree 相同；不重放到另一工作目录。
 - 冲突时创建 Reconcile 状态，不让 Agent 直接覆盖集成分支。
-- 重新运行受影响 Validator。
-- 验证通过后由 `xgoal` 创建带 Goal/Work Item/Attempt 元数据的 Commit。
-- Promotion 全局串行，确保最终顺序和证据可解释。
+- 重新运行受影响 Validator；Validator 与 Reviewer 前后必须核对当前 Tree 和 HEAD/index，不把验证期间漂移后的退出 0 归为原候选 Tree 的有效证据。
+- 验证通过后由 `xgoal` 用 commit-tree 创建带 Goal/Work Item/Attempt 元数据的审计 Commit，以 CAS 更新私有 refs/xgoal/goals/<goal-id>/integration。结果文件留在当前目录，用户 HEAD、分支与 index 保持不变。
+- Promotion 在项目内串行，确保最终顺序和证据可解释。
 
 #### FR-062：最终完成条件
 
@@ -603,7 +603,7 @@ Agent 输出中的 `status: done` 不参与该布尔判定。
 
 #### FR-081：崩溃恢复
 
-- 进程重启后核对 Lease、PID、worktree、Git Tree、子进程日志和未完成事务。
+- 进程重启后核对 Lease、PID、当前目录快照、HEAD/index、Git Tree、子进程日志和未完成事务；未知目录变化保留并等待。
 - Agent 退出码为 0 不等于成功；必须重新读取结果并运行验证。
 - 能安全恢复同一会话时可以使用 Agent Session ID；否则使用 Fresh Work Packet 创建新会话。
 - 所有未知状态默认进入校验或等待，不猜测成功。
@@ -634,6 +634,23 @@ Final Report 包含：
 - 已知限制、未覆盖风险和被取消的范围。
 - 时长、Attempt 次数和 Human Gate 次数等执行数据。
 
+
+### 10.11 项目隔离与持久后台执行
+
+本节由 OBJ-003 更新，澄清 FR-001、FR-080/081 与本地 daemon 的运行边界；替代将每个工作目录或用户级全局服务视作项目运行身份的旧假设。
+
+- **FR-100 项目身份**：当前 Git 主工作目录、子目录和路径别名定位同一 Project、daemon 与状态库；linked worktree、bare 和不支持的嵌套 Git 入口明确拒绝。一个 Git Common Directory 仅有一个活动 owner，独立 clone 独立。显式状态目录/socket 覆盖不能绕过身份核对。
+- **FR-101 状态归属**：数据库绑定 Project ID、Git Common Directory 和执行根目录。错误绑定、多个历史状态库、无法证明归属的外部旧库拒绝启动并给出恢复指引；不自动合并、移动或删除历史。既有默认 `.xgoal` 数据在验证归属后原位采用，迁移前备份。
+- **FR-102 生命周期**：项目独占所有权覆盖数据库打开、迁移、恢复、任务运行和最终关闭。启动失败不留下执行者；stop 成功前所属执行和请求结束、数据库关闭，随后才释放所有权。停一个项目不直接停止另一个项目。
+- **FR-103 后台入口**：`daemon serve` 前台运行；`daemon start` 显式启动独立后台进程并等待真实身份/readiness；`daemon status` 无写入查询；`daemon stop` 通过当前 instance 身份请求停止并等待退出，不从旧 PID 文件盲目发送信号。普通 CLI 不隐式启动 daemon。
+- **FR-104 可发现性**：CLI 与 daemon 统一 flags > 环境变量 > 已绑定项目定位 > 默认值的解析；socket 路径不依赖仓库路径长度。help/version/completion 与被动 doctor 无需 daemon，不打开或迁移状态库，不启动模型回合。主动 doctor 仍显式授权且受项目执行槽约束。
+- **FR-105 持久接受**：创建请求在一个事务中登记原始 Goal、规划意图和可重放的接受响应，立即返回 Goal ID。Planner 与后续工作由 daemon 拥有；CLI wait/watch 退出仅停止观察，已接受 Goal 继续。相同幂等键/请求回放原响应，不重复创建 Goal。
+- **FR-106 规划恢复**：Planner 结果经确定性检查后原子发布 Goal Revision、Plan、Work Graph 与规划完成记录。中断规划可恢复；已有可靠结果只读回提交，不重复调用 Provider。超时、无效输出、歧义或配置漂移进入可操作等待。规划期间支持 pause/resume/cancel；提供带版本与理由的规划重试/修正 Proposal 入口。
+- **FR-107 执行归属**：Planner、Implementer、Reviewer 和主动 Probe 的 Provider 调用受同一个项目串行槽约束；跨项目可以并行。Provider 执行前须可证明进程归属，崩溃后核对身份并回收旧执行者，旧结果不可推进已取消或新一代任务。恢复同时对账未决 Attempt/Lease/Work，不能留下永久无下一步的 DRAFT/RECONCILING/IN_PROGRESS。
+- **FR-108 隔离披露**：每项目 daemon、状态和独立仓库目录不构成敌对多租户隔离；同一项目内的角色共享当前目录。主机 CPU/内存/磁盘、端口、外部服务和 Provider 登录态/配额仍可能共享。项目服务资源应使用项目作用域的名称和可配置端口；强隔离与全局调度不属于本次实现。
+- **FR-109 原地交付与兼容**：workspace.provider 只接受 current-directory，新配置默认此值；旧 git-worktree 配置明确要求迁移，不静默改语义。成功结果留在当前目录，并绑定私有审计 Commit/Tree 和 Final Report。旧完成记录保留原版本可读，旧未完成 worktree 目标和未决外部副作用进入明确迁移等待，保留目录、Patch 和 Evidence，不自动续跑或删除。
+- **FR-110 现场恢复**：可安全捕获的失败修改保存快照；同一 Goal/Work 的显式 retry 在确认目录仍匹配已观察结果及原 HEAD/index 后可继续修复。未知变化、Scope 违规或元数据变动保留并等待用户处理。恢复不创建第二套 restore 状态机，不自动覆盖文件。
+
 ---
 
 ## 11. 用户体验与 CLI
@@ -652,7 +669,7 @@ xgoal pause                暂停新调度
 xgoal resume               从持久状态继续
 xgoal cancel               取消 Goal 或 Work Item
 xgoal report               生成/查看最终验收报告
-xgoal clean                清理可安全删除的 worktree、缓存和旧运行目录
+xgoal clean                清理可安全删除的运行元数据与缓存；不删除当前目录或历史 Git worktree
 ```
 
 高级命令可按资源分组：
@@ -740,7 +757,7 @@ v0.1 发布硬门槛：
 - Codex CLI、Claude Code CLI 两个适配器。
 - Goal Contract、单节点/顺序 Work Graph。
 - Planner、Implementer、Reviewer 三种逻辑角色。
-- Git worktree 隔离、补丁捕获、干净环境复验和串行 Promotion。
+- 当前目录独占、私有 index 快照、对象级 Patch 校验、原地复验和串行 Promotion。
 - 配置化 Validator、Evidence、Finding 和 Human Gate。
 - SQLite 状态、追加事件、Lease、幂等写回和崩溃恢复。
 - 默认 `max_parallel = 1`，先证明闭环正确性。
@@ -783,7 +800,7 @@ v0.1 发布硬门槛：
 **理由**：
 
 - AutoGo 的价值在安装期治理，加入持久运行时会破坏其极简边界。
-- LoopX 是通用长期控制平面，xgoal 的差异点是 Coding Agent 进程、Git worktree、验证器、补丁晋升和最终代码验收。
+- LoopX 是通用长期控制平面，xgoal 的差异点是 Coding Agent 进程、当前目录快照、验证器、补丁晋升和最终代码验收。
 - 独立项目更容易建立明确状态所有权、技术栈和许可证边界。
 
 ### D-002：确定性 Kernel，不设置 Manager LLM
@@ -794,7 +811,7 @@ v0.1 发布硬门槛：
 
 ### D-003：默认串行，逐步开放并行
 
-**决定**：v0.1 默认一个活动 Implementer；v0.2 只有依赖满足且写入范围不冲突时才并行，Promotion 始终串行。
+**决定**：当前版本同一项目只有一个活动执行者，Planner、Implementer、Reviewer 与验证串行；未来并行方案需要重新设计执行隔离，不属于当前合同。Promotion 在项目内始终串行。
 
 **理由**：长期任务首先需要正确恢复和验收，并行只是吞吐优化，不能先于状态与隔离正确性。
 
@@ -808,7 +825,7 @@ v0.1 发布硬门槛：
 
 ### D-006：可信仓库优先，安全能力如实标级
 
-**决定**：v0.1 本地进程 Provider 只承诺在可信仓库中的工作区隔离和 Agent 原生权限限制，不声称提供容器级强隔离；不可信仓库推迟到容器 Provider。
+**决定**：v0.1 本地进程 Provider 只承诺可信仓库中的串行执行、内容归属核对和 Agent 原生权限限制，不声称提供容器级强隔离；不可信仓库推迟到容器 Provider。
 
 ---
 
@@ -820,7 +837,7 @@ v0.1 发布硬门槛：
 | 验证器不足 | 全部测试通过但业务目标仍未满足 | Goal Contract 强制 Criteria→Validator 映射；Reviewer 专门查验收缺口；允许人工业务验收 |
 | 验证器被弱化 | Agent 修改测试或命令以通过 | Validator Registry 受信；变更验证器需 Gate；记录测试 diff 和配置哈希 |
 | Flaky 测试 | 反复重试造成假阳性 | 显式 flaky 策略；保留所有重跑结果；最终报告披露不稳定性 |
-| 并发污染 | 多 Agent 覆盖文件或产生不可解释结果 | 独立 worktree、范围锁、串行 Promotion、最终树复验 |
+| 并发污染 | 多 Agent 覆盖文件或产生不可解释结果 | 项目独占、范围检查、HEAD/index 和 Tree 核对、串行 Promotion、最终树复验 |
 | 长任务循环 | 重复相同错误、执行失控 | Failure Fingerprint、实质进展规则、超时、诊断/重规划/Human Gate |
 | Agent CLI 漂移 | 参数、JSON 事件或会话协议变化 | 启动时 Probe；能力协商；协议版本测试；不支持时 Fail Closed |
 | 本地安全边界不足 | Agent 读取用户凭据或访问网络 | 环境变量白名单、原生 sandbox、日志脱敏；v0.1 限可信仓库；容器 Provider 提供强隔离 |
@@ -846,14 +863,14 @@ v0.1 发布硬门槛：
 
 ### 17.1 Feature Requirement 验收
 
-- [x] **AC-FR-001**：在干净的可信本地 Git 仓库执行 `xgoal init`，能生成严格 `xgoal.yaml`、共享 worktree 的本地 Project ID 和权限受控运行目录，且不修改远端或生产资源。
+- [ ] **AC-FR-001**：在干净的可信 Git 主工作目录或其子目录执行 init，生成严格配置、本地 Project ID 和受控运行目录；linked worktree 拒绝，Git worktree 列表、用户 HEAD/index 与远端不变。
 - [x] **AC-FR-002**：`xgoal doctor` 能报告 Git/OS/Arch/Agent/Validator/隔离与策略事实；默认被动探测不发起模型回合，显式 Active Probe 才使用 Provider Transport 与认证，并在受控超时内保存 Evidence。
 - [x] **AC-FR-010**：自然语言、文件和 stdin 目标均能生成并校验 Goal Contract；原始输入、Config Hash 和创建者可追溯，关键缺口进入 Gate 而非被 Agent 猜测。
 - [x] **AC-FR-011**：Planner 输出能形成版本化 Work Graph；环路、缺失依赖、写 Scope 冲突、缺失 Validator 和无界 Work Item 会被确定性拒绝或转入 Finding/Gate。
 - [x] **AC-FR-020**：Codex 与 Claude Agent Profile 均能做版本与能力协商，分别展示 Provider Transport/认证来源、Project Network 和隔离限制；不兼容版本 Fail Closed。
 - [x] **AC-FR-021**：每个 Invocation 只绑定一个 Attempt、Work Item 和不可变 Work Packet，Kernel 能监督事件、限制输出、超时、取消和回收进程。
 - [x] **AC-FR-022**：同一 Work Item 同时最多一个 Active Lease；获取、心跳、Generation、过期读回和幂等写回在竞争与重启测试中成立。
-- [x] **AC-FR-030**：每个 Attempt 使用独立 worktree；基础 Commit/Tree、配置和环境可归因，tracked/untracked/binary/rename/mode/symlink/delete 变化均被捕获，范围外或逃逸变化进入 Quarantine。
+- [ ] **AC-FR-030**：全部 Attempt 在当前目录串行执行且不创建 Git worktree；基础与结果 Tree 可归因，完整文件变化被捕获，用户 HEAD/index 不被系统快照改动，范围外或逃逸变化保留并进入 Quarantine。
 - [x] **AC-FR-031**：受信 bootstrap、build、test、service 与健康探针可在 Local Provider 中准备、监督和清理；失败产生 Environment Evidence。
 - [x] **AC-FR-040**：Validator 只从受版本管理的配置或受信脚本注册；Agent 输出不能注入或弱化 Required Validator，未知或缺失定义阻止完成。
 - [x] **AC-FR-041**：Scope、Build、Test、Lint、Integration/E2E 和 Runtime Probe 按配置独立执行并生成 Command Receipt；最终 Required Validator 在最终 Integration Tree 上重跑。
@@ -880,6 +897,30 @@ v0.1 发布硬门槛：
 - [x] **AC-NF-005**：README 中的正确性和性能结论只引用实际运行数据；架构、配置、威胁模型、恢复、Agent Adapter、操作与已知限制文档齐全。
 
 ---
+
+
+### 项目隔离与后台执行增量验收（OBJ-003）
+
+- [ ] **AC-ISO-001**：双独立仓库同时运行完整 Goal；数据库、目标、工作区和 daemon 独立，停 A 后 B 继续。
+- [x] **AC-ISO-002**：主工作目录、子目录和 symlink 定位同一身份；linked worktree 入口明确拒绝；独立 clone 身份不同；不同 state-dir 不产生第二 owner。
+- [x] **AC-ISO-003**：错误 socket/状态绑定、旧库归属冲突、协议不兼容在业务副作用前拒绝；默认旧状态可保留历史并迁移，重复启动/迁移幂等。
+- [ ] **AC-ISO-004**：持锁期间第二实例不能建库/迁移；长仓库路径可运行；存活异项目 socket 不被删除；启动失败不残留执行者。
+- [ ] **AC-ISO-005**：start 并发调用只有一个实例；status 无副作用；stop 等待所属进程、请求与数据库关闭；旧 instance stop 不影响新实例。
+- [x] **AC-ISO-006**：flags/env 在所有入口一致；被动 doctor 在无 daemon/无库/损坏库时可用且不写项目；help/version/completion 无副作用。
+- [ ] **AC-BG-001**：慢 Planner 的 Goal 接受立即返回；客户端断开不取消已接受目标；接受前失败无部分状态，同 key 回放无重复。
+- [ ] **AC-BG-002**：规划 queued/executing/result-persisted/commit 窗口中断后恢复；Revision/Plan/Work 原子一致，已落盘结果不重复模型执行。
+- [ ] **AC-BG-003**：规划 pause/resume/cancel、失败等待、修正 Proposal/重试可操作；配置漂移拒绝默默执行；迟到结果不能冻结取消目标。
+- [ ] **AC-BG-004**：所有 Provider 角色/主动 Probe 共享项目槽；停止/崩溃后旧进程和不响应 TERM 的子孙被回收或明确阻止新执行；未知 PID 不被误杀。
+- [ ] **AC-BG-005**：历史 IN_PROGRESS、半冻结 Goal、未决 Attempt/Lease/Work 经保守恢复得到确定结果/等待，不无限停留，重复恢复不重复副作用。
+- [ ] **AC-BG-006**：真实 CLI→daemon→Provider→Git→Validator→Report 通过；固定 Provider fixture 的确定性故障测试与真实 Provider smoke 分别标注；全量门禁及 macOS/Linux 平台证据可复核。
+- [ ] **AC-CWD-001**：实际 Planner/Implementer/Reviewer CWD 为当前主目录，Validator 与 bootstrap CWD 为其内部受信的相对目录，完整 Goal 前后 Git worktree 列表不变；代码结果直接可见。
+- [ ] **AC-CWD-002**：未归属的 staged/unstaged/untracked 修改拒绝接管且字节不变；系统操作保留用户 HEAD、符号分支和 index；两个连续 Goal 可采纳完全匹配的已验收结果。
+- [ ] **AC-CWD-003**：私有 index/Object Tree 正确覆盖 tracked/非忽略 untracked/binary/rename/mode/symlink/delete，忽略构建产物，拒绝元数据、Scope 越界和路径逃逸；不执行 Agent 的 Git filters/hooks。
+- [ ] **AC-CWD-004**：Validator/Reviewer 期间源 Tree 或 HEAD/index 漂移使 Evidence 无效；最终当前目录、私有集成 Tree、Evidence 和 Report 必须一致。
+- [ ] **AC-CWD-005**：失败/暂停/取消/daemon 中断保留文件，已观察现场可显式 retry；未知漂移得到可操作等待而非覆盖、删除或无限自动重试。
+- [ ] **AC-CWD-006**：旧配置给出迁移诊断；旧完成 Report/Evidence 保留可读，旧未完成目标不继续 worktree 执行；clean 不删除当前目录或历史 worktree。
+
+Evidence 由当前 Operation/Change Review 保存；未取得当前 Evidence 前保持未勾选。
 
 ## 18. 产品摘要
 

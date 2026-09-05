@@ -24,6 +24,7 @@ func TestRealUnixAPIWritesAndReplaysGoal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(temporary) })
+	appGit(t, temporary, "init", "-b", "main")
 	paths, err := app.ResolvePaths(temporary, filepath.Join(temporary, "state"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +33,7 @@ func TestRealUnixAPIWritesAndReplaysGoal(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- app.Serve(ctx, paths) }()
 	waitForServeSocket(t, paths.SocketPath, result)
-	client, err := api.NewUnixClient(paths.SocketPath, time.Second)
+	client, err := api.NewProjectClient(paths.SocketPath, time.Second, app.ExpectedIdentity(paths))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- app.Serve(ctx, paths) }()
 	waitForServeSocket(t, paths.SocketPath, serveResult)
-	client, err := api.NewUnixClient(paths.SocketPath, time.Second)
+	client, err := api.NewProjectClient(paths.SocketPath, time.Second, app.ExpectedIdentity(paths))
 	if err != nil {
 		t.Fatal(err)
 	}

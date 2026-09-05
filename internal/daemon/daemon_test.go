@@ -32,10 +32,14 @@ func TestDaemonUsesPrivateSocketSingleWriterAndRecoveryBeforeListen(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(temporary) })
+	temporary, err = filepath.EvalSymlinks(temporary)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runDir := filepath.Join(temporary, "run")
 	socket := filepath.Join(runDir, "xgoal.sock")
 	recovered := &recovery{socket: socket, called: make(chan struct{})}
-	server, err := daemon.New(daemon.Config{RunDir: runDir, SocketPath: socket, ShutdownTimeout: time.Second}, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server, err := daemon.New(daemon.Config{RunDir: runDir, SocketPath: socket, ShutdownTimeout: time.Second, Identity: testIdentity()}, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}), recovered)
@@ -58,7 +62,7 @@ func TestDaemonUsesPrivateSocketSingleWriterAndRecoveryBeforeListen(t *testing.T
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("socket mode = %o, want 600", info.Mode().Perm())
 	}
-	client, err := api.NewUnixClient(socket, time.Second)
+	client, err := api.NewProjectClient(socket, time.Second, testExpected())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +71,7 @@ func TestDaemonUsesPrivateSocketSingleWriterAndRecoveryBeforeListen(t *testing.T
 		t.Fatalf("socket request status=%d err=%v", status, err)
 	}
 	secondRecovery := &recovery{socket: filepath.Join(runDir, "never-created.sock"), called: make(chan struct{})}
-	second, _ := daemon.New(daemon.Config{RunDir: runDir, SocketPath: socket}, http.NotFoundHandler(), secondRecovery)
+	second, _ := daemon.New(daemon.Config{RunDir: runDir, SocketPath: socket, Identity: testIdentity()}, http.NotFoundHandler(), secondRecovery)
 	if err := second.Serve(context.Background()); !errors.Is(err, daemon.ErrAlreadyRunning) {
 		t.Fatalf("second daemon error = %v, want ErrAlreadyRunning", err)
 	}
@@ -90,4 +94,12 @@ func waitForSocket(t *testing.T, path string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("socket %s did not become ready", path)
+}
+
+func testIdentity() api.DaemonIdentity {
+	return api.DaemonIdentity{ProtocolVersion: api.ProtocolVersion, SoftwareVersion: api.SoftwareVersion, ProjectID: "project_test", RepositoryIdentity: "repo_test", ProjectRoot: "/test-project", StateDir: "/test-project/.xgoal", InstanceID: "instance_test", PID: os.Getpid(), StartedAt: time.Now().UTC().Format(time.RFC3339Nano), State: "STARTING"}
+}
+func testExpected() api.ExpectedIdentity {
+	value := testIdentity()
+	return api.ExpectedIdentity{ProjectID: value.ProjectID, RepositoryIdentity: value.RepositoryIdentity, ProjectRoot: value.ProjectRoot, StateDir: value.StateDir}
 }

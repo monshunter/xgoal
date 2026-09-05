@@ -28,7 +28,7 @@
 3. 不实现 Manager LLM、模型路由推理链或自有工具调用循环；所有 Agent 均通过 CLI Adapter 启动。
 4. 使用 **确定性 Orchestration Kernel** 管理 Goal、Work Graph、Lease、Gate、Evidence、Reconcile 和 Completion。
 5. 使用 **SQLite 当前状态 + 同事务追加事件**；不是纯文件状态，也不是完整 Event Sourcing。
-6. 每个 Attempt 使用独立 **Git worktree**；Agent 工作区不被直接信任，补丁在干净验证工作区重放后再晋升。
+6. 一个项目独占当前主工作目录，全部角色串行执行，不创建 **Git worktree**；私有 index/Object Tree 捕获并重建 Patch，当前目录在验证前后必须匹配候选 Tree。
 7. v0.1 默认 `max_parallel = 1`；状态、恢复和闭环正确后再开放安全并行。
 8. Codex 通过非交互 `exec`、JSONL 和结构化输出接入；Claude Code 通过 Print Mode、JSON/Stream JSON 和 JSON Schema 接入。
 9. Agent 结果是 **Claim**；xgoal 独立读取 Git/文件事实并运行受信 Validator。
@@ -48,7 +48,7 @@ CLI ── Local API/Unix Socket ── xgoal Daemon/Kernel
           ┌───────────────────────────┼──────────────────────────┐
           ▼                           ▼                          ▼
    Agent Adapter                Workspace/Env              Validator
- Codex / Claude CLI          Git worktree/process       Git/Test/Probe
+ Codex / Claude CLI          Current checkout/process       Git/Test/Probe
           │                           │                          │
           └─────────────── Evidence + Events ──────────────────┘
                                       │
@@ -67,7 +67,7 @@ CLI ── Local API/Unix Socket ── xgoal Daemon/Kernel
 - 生成、校验和执行 Work Graph。
 - 编排 Codex CLI 与 Claude Code CLI。
 - 对 Agent Invocation、日志、会话、输出和退出进行统一抽象。
-- 创建隔离 worktree、准备环境、捕获补丁、清理工作区。
+- 取得当前目录会话、准备环境、捕获补丁、清理运行元数据；不删除代码目录。
 - 独立运行受信 Validator 并生成可追溯 Evidence。
 - 支持 Planner、Implementer、Reviewer 逻辑角色。
 - 支持 Lease、暂停、恢复、取消、超时、重试、重规划和 Human Gate。
@@ -154,7 +154,7 @@ flowchart LR
     ADP --> CL[Claude Code CLI]
 
     K --> WM[Workspace Manager]
-    WM --> GIT[Git Worktrees]
+    WM --> GIT[Current Checkout / Git Objects]
     WM --> ENV[Environment Provider]
 
     K --> VAL[Validator Runner]
@@ -182,13 +182,13 @@ flowchart LR
 | Scheduler | 选择任务、Agent 和并发槽；获取 Lease | 否 |
 | Worker Supervisor | 子进程启动、事件流、超时、取消、进程组回收 | 否 |
 | Agent Adapter | 供应商 CLI 参数、事件和结构化结果转换 | 否；只启动外部 Agent |
-| Workspace Manager | worktree、运行目录、Patch 捕获、清理 | 否 |
+| Workspace Manager | 当前目录会话、快照身份、运行元数据和清理 | 否 |
 | Environment Provider | 环境快照、bootstrap、服务生命周期、容器扩展点 | 否 |
 | Validator Runner | 受信命令、文件断言、运行探针、Evidence | 否 |
 | Review Coordinator | 创建 Reviewer Work Packet，保存 Finding | Reviewer 通过 Adapter |
 | Reconcile Engine | 根据状态和证据决定修复、重试、重规划或 Gate | 否 |
 | Policy/Gate Engine | 权限、风险、授权范围和过期控制 | 否 |
-| Promotion Manager | 干净重放、复验、集成 Commit 和最终锁 | 否 |
+| Promotion Manager | 对象级 Patch 重建、原地复验、私有集成 Commit 和最终锁 | 否 |
 | Evidence Store | Evidence 元数据、哈希、过期关系 | 否 |
 | Report Builder | Goal→Criteria→Evidence 的最终报告 | 否，可选 Agent 仅润色非事实部分 |
 | State/Event Store | 当前状态、事件、Effect、事务和查询 | 否 |
@@ -197,62 +197,25 @@ flowchart LR
 
 ## 5. 进程与部署模型
 
-### 5.1 单一二进制
+### 5.1 每项目单一 owner
 
-输出一个 `xgoal` Go 二进制，支持两种运行方式：
+一个 Go 二进制提供 `daemon serve`（前台）和 `daemon start/stop/status`（后台管理）。CLI 经当前项目的 Unix Socket API 操作状态。仅当前 Git 主工作目录及其子目录/别名可作为入口；linked worktree 明确拒绝。一个 Git Common Directory 只有一个 Project ID、执行根、状态库和活动实例；独立 clone 独立运行。`run --wait` 是观察客户端，不承担 Kernel。开发调试直接使用前台 `daemon serve`，不维护第二套 `run --foreground` Kernel 入口。
 
-1. **Daemon 模式（默认长期任务）**
-   - `xgoal daemon start` 启动当前用户的本地协调进程。
-   - CLI 通过权限为 `0600` 的 Unix Domain Socket 调用本地 JSON API。
-   - Daemon 是运行状态的唯一写入者，并监督 Agent 子进程。
+OBJ-003 以本节和 [DESIGN-004](docs/architecture/DESIGN-004-m5-control-daemon.md) 替代原用户级 registry.db/global socket、XGOAL_HOME 与双 Kernel 运行方式的设计；这些旧设想未形成兼容的实现合同。
 
-2. **Foreground 模式（开发与调试）**
-   - `xgoal run --foreground` 在当前进程运行同一 Kernel。
-   - 获取相同的项目写锁，禁止与 Daemon 并行写入。
+### 5.2 目录与项目解析
 
-Windows 不属于 v0.1 范围。
+- `internal/project` 从当前目录/`--project` 定位 Git root、canonical Common Directory 和共享 Project ID；所有入口采用 flags > `XGOAL_STATE_DIR`/`XGOAL_SOCKET` > 已绑定项目定位 > 默认值。
+- 默认状态保留在项目执行根的 `.xgoal/`；其中 state.db、backups、packets、patches、workspaces、environments、logs、reports 继续各司其职，不迁移旧数据到全局目录。
+- Git Common Directory 中的 xgoal 定位信息只拥有 Project ID、执行根与唯一状态目录，不能复制 Goal/Work 等运行状态。主目录及子目录通过此定位同一 owner；linked worktree 不作为备用执行根，多个历史 `.xgoal/state.db` 必须诊断而非静默择一。
+- socket 使用用户私有短 runtime 目录，按 canonical 仓库身份分区；目录 0700、socket 0600、核对 UID。可用 `XGOAL_RUNTIME_DIR` 覆盖 runtime 父目录，但超长、不安全或异项目存活 socket 必须在执行前拒绝。
+- 仓库锁位于 Common Directory 的 xgoal 私有区域；同时持有状态目录锁，防止不同项目竞争同一状态。兼容锁覆盖旧版 `<state>/run/daemon.lock`。锁先于所有数据库写入，后于全部执行及数据库关闭释放。
 
-### 5.2 本地目录
+### 5.3 状态绑定与兼容
 
-通过 `XGOAL_HOME` 统一覆盖；默认使用平台约定的 State/Cache/Runtime 目录。
+初始化持久化共享 `xgoal.projectID`，不会提交到 Git。状态库 metadata 绑定 Project ID、canonical Common Directory 与执行根。绑定检查在迁移和恢复前完成；错误绑定 fail closed。未绑定的历史默认状态在检查现有工作区/Packet 归属且没有竞争历史库后原位绑定；任意外部非空旧库不自动采用。已有定位不能被 `--state-dir` 静默改写；迁移/复制/移动产生不一致时保留数据并报告准确路径，由显式恢复流程处理。
 
-```text
-$XGOAL_HOME/
-├── registry.db                 # 本地项目注册信息
-├── run/xgoal.sock              # Unix Socket
-├── projects/<project-id>/
-│   ├── state.db                # 项目状态与事件
-│   ├── lock                    # 单写者锁
-│   ├── backups/                # Migration 前一致快照与校验 Hash
-│   ├── packets/                # 不可变 Work Packet
-│   ├── patches/                # Attempt Patch/Tree Manifest
-│   ├── logs/                   # Agent 与 Validator 日志
-│   ├── evidence/               # 大型 Evidence Payload
-│   └── reports/                # Markdown/JSON 报告
-└── workspaces/<project-id>/
-    ├── integration/            # xgoal 私有集成 worktree
-    ├── validation/             # 可复用但每次重置的干净验证 worktree
-    └── attempts/<attempt-id>/  # Agent 独立 worktree
-```
-
-项目仓库中只要求：
-
-```text
-xgoal.yaml                      # 可版本管理配置
-```
-
-可选：
-
-```text
-.xgoalignore                    # 报告/上下文排除，不替代 .gitignore
-scripts/xgoal/                  # 受信的复杂验证脚本
-```
-
-### 5.3 项目标识
-
-- `xgoal init` 在当前 Git Common Directory 的本地 Git Config 中写入随机 `xgoal.projectID`，不提交到仓库。
-- 同一仓库的 worktree 共享该 ID。
-- 新 Clone 默认生成新 Project ID；可显式导入历史状态，但不得自动合并两个运行数据库。
+独立 clone 不复制 Git local config，生成独立身份。同一仓库改名后已保存身份不会被新随机值覆盖；不能证明新旧绝对路径对应时先停止并报告，不自动重写历史 workspace/报告路径。
 
 ---
 
@@ -280,14 +243,14 @@ xgoal/
 │   │   ├── claude/             # Claude Code CLI Adapter
 │   │   └── fake/               # 测试 Adapter
 │   ├── supervisor/             # 子进程、超时、取消、日志
-│   ├── workspace/              # worktree、Patch、Manifest
+│   ├── workspace/              # 当前目录快照、Patch、Manifest
 │   ├── environment/            # 本地环境与未来容器 Provider
 │   ├── validator/              # Validator Registry/Runner
 │   ├── evidence/               # Evidence、哈希、过期
 │   ├── review/                 # Review Packet/Finding
 │   ├── reconcile/              # Failure Fingerprint/决策
 │   ├── policy/                 # 权限、Scope、Gate
-│   ├── promotion/              # 干净重放与串行集成
+│   ├── promotion/              # 对象级 Patch 重建与串行集成
 │   ├── report/                 # Markdown/JSON 报告
 │   └── observability/          # slog、metrics、redaction
 ├── docs/
@@ -303,7 +266,7 @@ xgoal/
 
 实现优先使用 Go 标准库，包括 `context`、`os/exec`、`net/http`、`log/slog`、`encoding/json`、`crypto/sha256` 和 `syscall`/平台适配。必要外部依赖控制在 SQLite Driver、YAML Parser 和 JSON Schema Validator 等少数基础库，并固定版本与供应链校验。
 
-Git 操作使用系统 `git` CLI，而不是在 v0.1 使用纯 Go Git 实现，以保持 worktree、属性、过滤器、子模块和用户仓库行为的一致性。
+Git 操作使用系统 `git` CLI，而不是在 v0.1 使用纯 Go Git 实现，以保持 Git 对象格式、ref CAS 和用户仓库读取行为的一致性；可信快照不运行 clean/smudge filter 或 hook。
 
 ---
 
@@ -322,7 +285,7 @@ Git 操作使用系统 `git` CLI，而不是在 v0.1 使用纯 Go Git 实现，�
 | Attempt | id, work_item_id, agent_profile_id, state, base_tree, result_tree, result_kind | 一次不可覆盖；失败重试创建新 Attempt |
 | AgentProfile | id, adapter, roles, command, capability_json, probe_at | 调度前能力满足角色与策略 |
 | Lease | id, work_item_id, holder, generation, expires_at, state | 同一 Work Item 最多一个 Active Lease |
-| Workspace | id, attempt_id, path, base_tree, state, manifest_hash | 一个 Attempt 一个主要写工作区 |
+| Workspace | id, attempt_id, path, base_tree, state, manifest_hash | 一个 Attempt 一份快照身份，当前代码目录始终相同 |
 | ValidatorDefinition | id, config_hash, type, policy, required | 来自受信配置；版本变化会使旧运行失效 |
 | ValidatorRun | id, validator_id, subject_type/id, tree_hash, state, result_hash | 结果必须绑定代码 Tree 和 Validator 版本 |
 | Evidence | id, kind, subject, producer, authority, tree_hash, payload_hash, state | 不可静默覆盖；过期状态显式记录 |
@@ -453,8 +416,10 @@ stateDiagram-v2
 
 约束：
 
-- Goal 不使用 `FAILED` 作为一般终态。不可自动恢复的问题进入 `WAITING`，由用户修正或取消。
+- Goal 不使用 `FAILED` 作为一般终态。已冻结目标不可自动恢复的问题进入 `WAITING`，由用户修正或取消。
 - `COMPLETED` 和 `CANCELLED` 是终态；已完成 Goal 的后续需求创建新 Goal 或新 Revision/Continuation，不原地篡改历史。
+
+未冻结目标保持 DRAFT，并由持久规划控制与 Effect 投影 `planning_state=QUEUED/RUNNING/PAUSED/WAITING`。规划暂停/缺口时 wait 返回 3，resume 仅恢复规划意图，不把没有 Revision 的目标改成 RUNNING；cancel 可以将 DRAFT 终止。已冻结目标才使用 Goal WAITING→RUNNING 的既有恢复路径。初始 Revision/Graph 的发布在一个事务内完成，外部不会观察到无有效图的 READY 中间态。
 
 ### 9.2 Work Item 状态
 
@@ -515,7 +480,7 @@ REQUESTED/EXECUTING/OBSERVING ──重启──→ RECOVERING → OBSERVING
 
 ### 10.1 Goal Compiler 流程
 
-1. 保存用户原始输入，生成 `GoalDrafted` Event。
+1. 原子保存原始 Goal、Planner Effect、Event 和幂等接受响应；立即返回 Goal ID，规划由 daemon 串行槽驱动。
 2. 创建只读项目快照和 Planner Work Packet。
 3. 调用 Planner Agent，要求输出 Goal Contract JSON。
 4. 验证 JSON Schema。
@@ -525,7 +490,7 @@ REQUESTED/EXECUTING/OBSERVING ──重启──→ RECOVERING → OBSERVING
    - in-scope 与 out-of-scope 无明显冲突。
    - 高风险能力具有 Gate。
    - Completion Policy 不允许 Agent 自述直接满足。
-6. 对关键缺口创建 Gate；否则冻结 Goal Revision。
+6. 对关键缺口创建可修正 Proposal 的 Gate；否则在同一事务冻结 Goal Revision、创建并激活 Work Graph、完成 Planner Effect。
 7. 对冻结 Revision 生成哈希：
 
 ```text
@@ -656,14 +621,14 @@ state = ACTIVE|RELEASED|EXPIRED|REVOKED
 - 过期只意味着“所有权未知”，不意味着可以立即重复执行；Kernel 先检查 PID、日志和 Workspace 外部事实。
 - 恢复后只有确认旧 Worker 不再写入，才能撤销 Lease 并启动新 Attempt。
 
-### 11.4 安全并行（v0.2 开启）
+### 11.4 并行边界（未来候选，当前不启用）
 
 - 默认 `max_parallel = 1`。
 - 写 Scope 转换为规范化 Path Set；任一范围为未知或全局时获取项目级写锁。
-- 两个 Work Item 只有在依赖满足且写 Scope 可证明不相交时并行。
+- 当前目录模型禁止同项目多 Work Item 并行。未来若开放，写 Scope 不相交只是必要条件，还必须重新设计工作目录与验证隔离；本版本没有此运行路径。
 - 读取范围不加排他锁，但基础 Tree 必须记录。
-- 每个 Attempt 使用独立 worktree。
-- Promotion 始终持有全局 Integration Lock，并在最新 Integration Tree 上重放与复验。
+- 每个 Attempt 独占当前主工作目录；同项目角色串行，不创建 Git worktree。
+- Promotion 始终持有项目内 Integration Lock，在最新 Integration Tree 上对象级重建，并核对当前目录后复验。
 
 ---
 
@@ -874,7 +839,7 @@ Go 没有官方 Claude Agent SDK 时，v0.1 直接使用 CLI 子进程；不得�
   "project": {
     "name": "xgoal",
     "base_tree": "sha256-or-git-tree",
-    "workspace": "/absolute/attempt/worktree"
+    "workspace": "/absolute/current/project"
   },
   "goal": {
     "id": "goal_...",
@@ -940,40 +905,31 @@ Attempt、Agent Event、Result 和 Evidence 都保存 `packet_hash`，避免输�
 
 ## 14. Workspace 与 Git 模型
 
-### 14.1 分支模型
+### 14.1 当前目录与审计引用
 
-```text
-user base branch (read only to xgoal v0.1)
-          │
-          └── xgoal/<goal-id>/integration
-                     ├── attempt worktree A (disposable)
-                     ├── attempt worktree B (disposable)
-                     └── validation worktree (clean replay)
-```
+所有角色使用 Resolver 确定的当前 Git 主工作目录，不创建、切换、删除 Git worktree，也不复制另一份执行代码目录。项目排他锁覆盖全部运行。仅当前 HEAD 为初始代码基线；旧 project.baseBranch / integrationBranchPrefix 字段可保留解析以给迁移诊断，不能把它们当作切换用户目录或修改用户分支的指令。
 
-- xgoal 不直接写用户当前 checkout。
-- 创建私有 Integration Branch，起点为 Goal 创建时记录的 Base Commit。
-- 默认不自动同步用户 Base Branch 的后续变化；检测到漂移时创建 Rebase/Goal Gate。
-- v0.1 不 push Integration Branch。
+初次 Goal 接管干净的 tracked/index/非忽略 untracked；也可接管完全匹配系统上次已验收结果且用户 HEAD/index 未变的目录，从该已验收 Commit/Tree 继续。其他 dirty、未知 ref/index 变化保留并等待，不能自动 stash/reset/clean。
 
-### 14.2 Attempt Workspace 创建
+用户 HEAD、符号分支及 index 始终不由 xgoal 改写。私有审计引用为 `refs/xgoal/goals/<goal-id>/integration`，起点为接管时的基线 Commit。系统用 commit-tree 创建审计 Commit，以 update-ref old-value CAS 晋升。最终代码直接留在当前目录，相对用户 HEAD 显示为待用户审阅提交的修改；不自动 push 或提交到用户分支。
 
-1. 记录 `WorkspaceCreateRequested` Effect。
-2. 使用固定基础 Commit 创建 worktree。
-3. 验证 `git rev-parse HEAD`、Git Common Dir 和工作目录。
-4. 写入 workspace marker：Attempt ID、Base Commit、Config Hash；marker 位于运行目录而不是业务仓库可提交范围。
-5. 记录实际路径与 Tree，Effect `SUCCEEDED`。
+初始干净准入要求用户 index Tree、HEAD Tree 与原始字节工作目录 Tree 一致；不依赖 git status，也不执行 filter 自动规范化。
 
-### 14.3 不信任 Agent Git 历史
+### 14.2 当前目录会话与快照
 
-Agent 可能提交、reset、rebase 或修改索引，因此：
+Workspace 由代码目录转为执行会话身份：所有 Snapshot.Path 都是同一当前 root；每个 Attempt/Validation 有独立元数据、BaseCommit/BaseTree、实际输入 Tree、HEAD/index 身份、ConfigHash 和不可变 marker。marker 放在状态目录，绝不放入业务 Patch。
 
-- xgoal 不直接 cherry-pick Agent 创建的 Commit。
-- Attempt 结束后读取实际文件系统和 Git 状态。
-- 验证当前 worktree 仍属于预期 Git Common Dir。
-- 基于记录的 Base Tree 捕获 tracked、untracked、deleted、renamed、binary 和 symlink 变化。
-- 明确拒绝 `.git`、Git Common Dir、其他 worktree、子模块元数据和范围外路径变化。
-- 生成 `Patch Manifest` 和内容哈希。
+持久 checkout 控制记录保存当前 owner、用户 HEAD/index 基线及最后已验收/已观察 Tree。每次角色执行前核对，结束后重新读取；新角色只有在前一角色及其子进程组结束后开始。未知变化不通过覆盖文件解决。
+
+旧 workspaces 及 marker 版本保留只读历史；新记录显式标识 current-directory。保留旧 path 唯一约束，新记录将其用于制品目录，并新增 execution_path 与 execution_model；使用顺序迁移和版本化读取，不把旧 worktree 路径改写为当前 root。旧未完成 worktree Goal 标记迁移等待，不进入新模型调度，也不自动删除历史目录。
+
+### 14.3 内容与 Git 元数据保护
+
+- 系统 Git 调用清除继承的 GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/GIT_INDEX_FILE 等定位变量，再显式设置受控目录/私有 index，避免显式项目被宿主环境重定向。
+- 代码路径由 Base Tree 的 tracked 集合和当前非忽略 untracked 集合构成；tracked 文件即使匹配 ignore 仍捕获。`.git` 无论文件/目录形态、xgoal 状态/runtime 路径、Git 元数据均排除且不能由 Write Scope 放行。预存 ignored 文件保留；ignored 构建输出不作为通过证据。
+- 使用 Lstat 读取实际内容、mode 和 symlink target，不运行 clean/smudge filters/hooks；不信任 Agent commit/index。受支持的所有文件变化以 Base Tree 和内容寻址对象计算。
+- 私有临时 GIT_INDEX_FILE 使用 read-tree/update-index/write-tree 生成 Tree；不运行作用于用户 index 的 git add/reset/checkout。元数据临时文件可精确清理，代码目录不可清理。
+- HEAD、符号分支、用户 index fingerprint 和受信配置/脚本身份变动保留为失败事实，不能靠恢复旧 index 隐藏 Agent 越界。
 
 ### 14.4 Patch Manifest
 
@@ -1018,35 +974,26 @@ patches/<attempt-id>/
 - Object/Manifest 先写临时文件、`fsync` 后原子 rename，再记录 Effect Observation；恢复时按 Bundle Hash 读回。
 - v0.1 不保留 hardlink 语义，捕获为独立 Regular File；submodule gitlink、设备文件、FIFO、socket、Git 元数据和不支持的 mode Fail Closed。
 
-### 14.5 干净重放
+### 14.5 对象级重建与现地复验
 
-- Validation Workspace 重置到当前 Integration HEAD。
-- 按 Manifest 顺序验证每个 before path/mode/content hash，再从 Object Store 应用变化；任何前置不匹配都形成 `PATCH_STALE_OR_CONFLICT`，不做模糊三方合并。
-- 再次计算 Tree 和 Scope。
-- 仅在该干净 Tree 上运行受信 Validator。
-- Agent Workspace 的构建产物和未声明缓存不能作为最终通过依据。
+逐项校验 Patch before path/mode/content hash 后，在私有 index 中将变化应用到最新 Integration Tree，得到 candidate Tree。前置不匹配报 PATCH_STALE_OR_CONFLICT，不进行模糊三方合并，不把 Patch 再写入当前目录或另一个目录。candidate 必须等于独立捕获的当前代码 Tree。
 
-### 14.6 Promotion
+Validator 与 Reviewer 的开始、结束以及整个验证集合结束时均核对当前 Tree 与用户 HEAD/index；发生源文件或元数据漂移时，退出 0 不能成为 candidate 的有效 PASS。Reviewer 独立性来自 Profile/Session/只读策略与绑定 Packet，不依赖独立代码目录。
 
-1. 获取项目级 Integration Lock。
-2. 将 Validation Workspace 重置到最新 Integration HEAD。
-3. 重放 Patch；如基础变化导致冲突，退出到 Reconcile。
-4. 运行 Item Validator 和影响范围 Validator。
-5. 检查 Blocker Finding 与 Gate。
-6. 由 xgoal 创建 Commit，包含 Trailer：
+### 14.6 Promotion 与最终结果
 
-```text
-XGoal-Goal: goal_...
-XGoal-Goal-Revision: 3
-XGoal-Work-Item: work_...
-XGoal-Attempt: att_...
-XGoal-Evidence-Set: evset_...
-```
+1. 项目独占，重读当前 Integration Ref、Attempt/Lease、Bundle 和最新 Goal 控制意图。
+2. 对象级重建 candidate，并核对当前目录 Tree、Scope、Required Validator/Review/Gate。
+3. 记录 Promotion Effect，内容绑定旧 ref、candidate、Goal/Work/Attempt、Bundle 和 Evidence Set。
+4. git commit-tree 创建带 XGoal-Goal、XGoal-Goal-Revision、XGoal-Work-Item、XGoal-Attempt、XGoal-Evidence-Set Trailer 的审计 Commit；原子保存 marker，再执行私有 ref CAS。
+5. 读回 Commit Tree/Trailer/ref，在事务中登记 Observation 并推进 Work。恢复通过 marker/ref 幂等完成，禁止重复 Commit 或把未验证现场晋升。
+6. Final Validation 仍在当前目录重跑；Completed 要求当前目录 Tree、私有集成 Tree、Final Evidence 和 Report 完全一致。文件保留在当前目录。
 
-7. 记录新 Integration Commit/Tree 和 `PromotionObserved`。
-8. Work Item 才可进入 `COMPLETED`。
+### 14.7 失败与恢复
 
-若崩溃发生在 Git Commit 已创建但 DB 未更新，恢复流程通过 Commit Trailer 和 Tree 读回，幂等完成状态写回，不重复提交。
+失败/停止/暂停/取消先停止所属执行者并保存可安全捕获的结果快照，保留现场，不自动 reset/clean/stash 或逐文件回滚。显式 retry 可继续同一 Goal/Work 的已观察修改，但须目录仍匹配该观察且 HEAD/index 未变；未知、Scope 越界或无法捕获的变化创建可操作 Gate。恢复由已有 Effect/Failure/Reconcile 表达，不新增 restore 状态机。
+
+旧配置 workspace.provider=git-worktree 给出 CONFIG_MIGRATION_REQUIRED；切换为 current-directory 是明确的行为迁移。旧完成 Report/Evidence 保留按原版本读取；旧未完成工作只进入明确等待，不恢复 worktree 执行，不自动导入未验收 Patch。clean 仅处理符合引用保护的运行元数据，当前代码与历史 worktree 永远不作为自动删除对象。
 
 ---
 
@@ -1101,7 +1048,7 @@ v0.2：`container`/`devcontainer`。
 
 | 等级 | Provider | 能力 | 适用范围 |
 |---|---|---|---|
-| L0 | local process | worktree 隔离、环境白名单、Agent 原生权限策略 | 可信仓库；v0.1 |
+| L0 | local process | 当前目录串行、内容身份核对、环境白名单、Agent 原生权限策略；无文件系统隔离 | 可信仓库；v0.1 |
 | L1 | local container | 文件挂载、网络 namespace、资源限制、临时凭据 | 不完全可信代码；v0.2 |
 | L2 | remote sandbox | VM/容器隔离、短期身份、网络出口策略 | 团队/云端；后续 |
 
@@ -1381,7 +1328,7 @@ ALLOW | DENY | REQUIRE_GATE
 | 动作 | Planner | Implementer | Reviewer | xgoal Validator/Promotion |
 |---|---|---|---|---|
 | 读取项目 | Allow | Allow | Allow | Allow |
-| 写业务工作区 | Deny | Scope 内 Allow | Deny | 仅验证/集成工作区 Allow |
+| 写业务工作区 | Deny | 当前目录 Scope 内 Allow | Deny | 受信验证命令运行；源 Tree 漂移使证据无效 |
 | Provider Transport | 受信 Profile Allow | 受信 Profile Allow | 受信 Profile Allow | 不适用 |
 | Project/Tool Network | Deny | Deny | Deny | Deny；显式 Gate 后有限开放 |
 | CLI 自有 Provider Credential | 只允许 CLI 内部使用 | 只允许 CLI 内部使用 | 只允许 CLI 内部使用 | 不适用 |
@@ -1484,7 +1431,7 @@ Complete(G, T) :=
 
 数据库事务无法覆盖以下外部动作：
 
-- 创建/删除 worktree。
+- 创建/清理当前目录会话元数据；禁止创建/删除 Git worktree。
 - 启动/杀死 Agent 进程。
 - 运行 Validator。
 - 写 Patch/报告文件。
@@ -1517,17 +1464,17 @@ Complete(G, T) :=
 | DB 标记 Promotion，Git 未变化 | 读回 Tree 不匹配 | 标记 Effect Failed，回到 Reconcile |
 | Goal 已完成，报告 rename 前崩溃 | DB report hash、临时文件 | 校验并完成 rename，或重建同哈希报告 |
 
-### 22.4 启动恢复顺序
+### 22.4 启动、恢复与停止
 
-1. 获取单写者锁。
-2. 校验 DB Schema 和不变量。
-3. 扫描 `REQUESTED/EXECUTING/OBSERVING` Effect。
-4. 核对 worktree 注册、PID/进程组、日志、Patch、Commit 和报告。
-5. 回收已确认无主的 Lease；拒绝旧 Generation 的迟到结果。
-6. 更新 Derived Readiness。
-7. 恢复调度。
+1. 解析项目并取得仓库锁和状态锁；验证状态归属。
+2. 打开、备份迁移并检查 SQLite；登记/核对唯一项目绑定。
+3. 核对任意角色的进程启动身份；回收确认属于旧实例的执行者，不向未知 PID 发信号。
+4. 恢复 Planner/Promotion Effect、报告协议、历史未完成幂等请求及未决 Lease/Attempt/Work。
+5. 绑定私有 socket，启动受监督执行循环，发布带项目与实例身份的 Ready API。
+6. 任何启动失败都取消并等待已创建执行者，关闭 DB 后解锁。
+7. 停止时拒绝新变更，取消请求流与调度；等待所有所属执行和制品收尾，持久化可恢复状态，关闭 DB，清理本实例 socket，最后解锁。
 
-旧 Worker 写回必须携带 Lease ID 和 Generation；不匹配时结果只能进入 Quarantine Evidence，不能推进状态。
+旧 Worker 的 Lease/Generation 与规划/审查 invocation generation 必须读回校验；已取消、过期或归属不匹配的结果不能推进状态。控制面没有 Provider task 时不代表恢复完成；持久状态中的未决任务同样必须有确定去向。
 
 ---
 
@@ -1537,12 +1484,15 @@ Complete(G, T) :=
 
 - HTTP/1.1 + JSON over Unix Domain Socket。
 - Socket 权限 `0600`；校验当前用户 UID。
-- 所有写请求使用 `Idempotency-Key`。
+- 所有写请求使用 `Idempotency-Key`；业务请求携带预期项目/仓库身份，CLI 先通过 `/v1/daemon` 核对协议、状态目录与 instance。
+- 创建 Goal 的接受结果与规划意图在同一 SQLite 事务提交；异步 Planner 不使用 HTTP request context。
 - `status --watch` 使用 NDJSON Event Stream；断线后通过 `after_event_id` 继续。
 
 ### 23.2 主要 Endpoint
 
 ```text
+GET    /v1/daemon
+POST   /v1/daemon/stop
 POST   /v1/projects/init
 POST   /v1/goals
 GET    /v1/goals/{id}
@@ -1550,6 +1500,7 @@ POST   /v1/goals/{id}/pause
 POST   /v1/goals/{id}/resume
 POST   /v1/goals/{id}/cancel
 POST   /v1/goals/{id}/replan
+POST   /v1/goals/{id}/plan
 GET    /v1/goals/{id}/work-items
 GET    /v1/goals/{id}/events
 GET    /v1/goals/{id}/gates
@@ -1628,7 +1579,7 @@ agents:
     environmentAllowlist: [PATH, HOME, TMPDIR]
 
 workspace:
-  provider: git-worktree
+  provider: current-directory
   keepFailed: true
   cleanupCompletedAfter: 168h
 
@@ -1721,8 +1672,8 @@ report:
 - Agent 子进程按不可信执行器处理。
 - 不使用 Agent 输出构造 Kernel SQL、路径、状态或任意 shell 命令。
 - Work Packet、Result 和配置均做 Schema 验证和大小限制。
-- 路径规范化并校验处于预期 worktree；拒绝 symlink 逃逸。
-- Agent 工作区不直接晋升；必须干净重放和复验。
+- 路径规范化并校验处于当前主工作目录；拒绝 Git 元数据、状态目录和 symlink 逃逸。
+- Agent 文件变化经对象级 Patch 重建、当前目录 Tree 核对和原地复验后晋升。
 - Lease Generation 防止迟到 Worker 写回。
 - 默认不传密钥；环境变量日志只记录名称或脱敏值。
 - Provider Transport 只允许受信 CLI 的模型控制面连接；Project/Tool Network 保持独立 Deny/Gate。CLI 自有登录态不复制到 Packet、项目命令或 Validator；显式 Provider Secret 使用最小范围 Gate。
@@ -1925,7 +1876,7 @@ wall_time
 
 ### M2：Git、环境与验证
 
-- Git worktree、Patch Manifest、干净重放、Scope Check。
+- 当前目录独占、私有 index、Patch Manifest、对象级重建与 Scope Check。
 - Local Environment Provider、Supervisor。
 - Validator Registry、Command Receipt、Evidence Staleness。
 - Promotion Manager。
@@ -1982,10 +1933,10 @@ wall_time
 - **选择**：SQLite。
 - **原因**：本地事务、CAS、索引和恢复足够；运维成本最低；Event 保留审计而不强迫全量重放。
 
-### ADR-004：Git CLI + worktree + Patch 重放
+### ADR-004：Git CLI + 当前目录快照 + 对象级 Patch 重建
 
-- **选择**：不信任 Agent Commit，捕获实际 Patch 后在干净 Tree 验证和晋升。
-- **原因**：隔离 Agent 历史操作，保证最终代码和证据绑定。
+- **选择**：当前目录捕获实际 Patch，以独立临时 index 在 Git 对象层重建候选 Tree，原地验证后创建私有审计 Commit。
+- **原因**：无需额外 worktree，保留用户 HEAD/index，保证当前可见代码和证据绑定。
 
 ### ADR-005：v0.1 默认串行
 
@@ -2042,12 +1993,12 @@ wall_time
 
 ### 32.3 Git 与环境
 
-- [x] 每个 Attempt 独立 worktree。
+- [ ] 全部角色在当前主目录串行执行，不创建 Git worktree，用户 HEAD/index 与最终文件可复核。
 - [x] tracked/untracked/binary/rename/symlink 变化均能归因。
 - [x] Patch Bundle 对 tracked/untracked/binary/rename/mode/symlink/delete 使用不可变 Object 与 Canonical Manifest，缺失或哈希不符时 Fail Closed。
 - [x] `.git`、范围外路径和软链接逃逸被拒绝。
 - [x] Agent Commit 不被直接信任。
-- [x] Patch 在最新 Integration Tree 干净重放并复验。
+- [ ] Patch 在最新 Integration Tree 对象级重建，并在当前目录核对 Tree 后复验。
 - [x] Promotion 崩溃不会重复 Commit。
 
 ### 32.4 验证与完成
@@ -2077,7 +2028,7 @@ wall_time
 Agent Adapter 让原生 Agent 可被调用
 Work Packet 让每次执行有界
 Lease 与 State Machine 让长期任务可恢复
-Git Worktree 让修改可隔离和归因
+当前目录独占与不可变 Tree 快照让修改可归因
 Validator 与 Evidence 让验收脱离 Agent 自述
 Reconcile 让失败形成下一决策而不是无限重试
 Promotion 让最终版本串行、干净、可复验

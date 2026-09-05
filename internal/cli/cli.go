@@ -19,7 +19,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const version = "v0.1.0"
+const version = api.SoftwareVersion
 
 type apiClient interface {
 	Do(context.Context, string, string, string, any) (int, []byte, error)
@@ -61,9 +61,8 @@ func silentStatus(code int) error {
 // Run executes xgoal with explicit output streams and returns the stable process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	dependencies := runtime{
-		newClient: currentClient,
-		newID:     generatedID,
-		now:       time.Now,
+		newID: generatedID,
+		now:   time.Now,
 	}
 	return execute(args, os.Stdin, stdout, stderr, dependencies)
 }
@@ -101,6 +100,19 @@ func newRootCommand(runtime runtime) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
+	}
+	var projectPath, stateDir, socketPath string
+	root.PersistentFlags().StringVar(&projectPath, "project", "", "project directory (or XGOAL_PROJECT)")
+	root.PersistentFlags().StringVar(&stateDir, "state-dir", "", "project state directory (or XGOAL_STATE_DIR)")
+	root.PersistentFlags().StringVar(&socketPath, "socket", "", "Unix socket path (or XGOAL_SOCKET)")
+	if runtime.newClient == nil {
+		runtime.newClient = func() (apiClient, error) {
+			paths, err := app.ResolvePaths(projectPath, stateDir, socketPath)
+			if err != nil {
+				return nil, err
+			}
+			return api.NewProjectClient(paths.SocketPath, 5*time.Second, app.ExpectedIdentity(paths))
+		}
 	}
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	root.AddCommand(
@@ -161,6 +173,9 @@ func (runtime runtime) executeAPI(cmd *cobra.Command, request requestSpec) error
 	client, err := runtime.newClient()
 	if err != nil {
 		return fail(2, err)
+	}
+	if closer, ok := client.(interface{ Close() }); ok {
+		defer closer.Close()
 	}
 	ctx := cmd.Context()
 	if request.watch {
@@ -264,18 +279,6 @@ func createdGoalState(response []byte) (goalID, state string, waiting bool, err 
 		return "", "", false, errors.New("goal_id is missing")
 	}
 	return value.GoalID, value.State, value.PlannerGateRequired || len(value.Gates) > 0, nil
-}
-
-func currentClient() (apiClient, error) {
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	paths, err := app.ResolvePaths(workingDirectory, os.Getenv("XGOAL_STATE_DIR"), os.Getenv("XGOAL_SOCKET"))
-	if err != nil {
-		return nil, err
-	}
-	return api.NewUnixClient(paths.SocketPath, 5*time.Second)
 }
 
 func generatedID(prefix string) (string, error) {

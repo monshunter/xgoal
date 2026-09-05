@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monshunter/xgoal/internal/doctor"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +31,19 @@ func newDoctorCommand(runtime runtime) *cobra.Command {
 			request, err := doctorRequest(options)
 			if err != nil {
 				return err
+			}
+			if !options.active {
+				paths, err := commandPaths(cmd)
+				if err != nil {
+					return fail(2, err)
+				}
+				value := doctor.Inspect(cmd.Context(), paths)
+				raw, err := json.Marshal(value)
+				if err != nil {
+					return fail(5, err)
+				}
+				prettyJSON(cmd.OutOrStdout(), raw)
+				return nil
 			}
 			return runtime.executeAPI(cmd, request)
 		},

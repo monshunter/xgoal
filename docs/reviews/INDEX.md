@@ -40,4 +40,11 @@
 | REVIEW-035-spec-001-cobra-cli | REVIEW-035：SPEC-001 Cobra CLI 行为规范 | [REVIEW-035-spec-001-cobra-cli.md](REVIEW-035-spec-001-cobra-cli.md) |
 | REVIEW-036-design-006-cobra-cli | REVIEW-036：DESIGN-006 Cobra CLI 迁移设计 | [REVIEW-036-design-006-cobra-cli.md](REVIEW-036-design-006-cobra-cli.md) |
 | REVIEW-037-plan-008-change | REVIEW-037：PLAN-008 Cobra CLI Change Review | [REVIEW-037-plan-008-change.md](REVIEW-037-plan-008-change.md) |
+| REVIEW-038-plans-009-010 | REVIEW-038：PLAN-009 / PLAN-010 项目隔离与后台执行 Plan Review | [REVIEW-038-plans-009-010.md](REVIEW-038-plans-009-010.md) |
+| REVIEW-039-spec-project-background | REVIEW-039：项目隔离与持久后台执行 Spec Review | [REVIEW-039-spec-project-background.md](REVIEW-039-spec-project-background.md) |
+| REVIEW-040-design-004-project-background | REVIEW-040：DESIGN-004 项目隔离与持久后台执行 Design Review | [REVIEW-040-design-004-project-background.md](REVIEW-040-design-004-project-background.md) |
+| REVIEW-041-plans-current-directory | REVIEW-041：PLAN-009 / PLAN-011 / PLAN-010 当前目录执行 Plan Review | [REVIEW-041-plans-current-directory.md](REVIEW-041-plans-current-directory.md) |
+| REVIEW-042-spec-current-directory | REVIEW-042：当前工作目录与持久后台执行 Spec Review | [REVIEW-042-spec-current-directory.md](REVIEW-042-spec-current-directory.md) |
+| REVIEW-043-design-current-directory | REVIEW-043：当前工作目录、持久后台与历史兼容 Design Review | [REVIEW-043-design-current-directory.md](REVIEW-043-design-current-directory.md) |
+| REVIEW-044-change-project-daemon-isolation | REVIEW-044：PLAN-009 项目隔离与 Daemon 生命周期 Change Review | [REVIEW-044-change-project-daemon-isolation.md](REVIEW-044-change-project-daemon-isolation.md) |
 <!-- AGENT-HARNESS:END INDEX -->

@@ -92,7 +92,6 @@ func TestCobraReadCommandsRouteRequests(t *testing.T) {
 		path   string
 		stream bool
 	}{
-		{[]string{"doctor"}, "/v1/doctor", false},
 		{[]string{"status", "goal-1"}, "/v1/goals/goal-1", false},
 		{[]string{"status", "goal-1", "--watch", "--after-event-id", "event-2"}, "/v1/goals/goal-1/events?watch=1&after_event_id=event-2", true},
 		{[]string{"logs", "attempt-1"}, "/v1/attempts/attempt-1/logs", false},
@@ -155,7 +154,7 @@ func TestCobraCommandTreeContainsEverySupportedCommand(t *testing.T) {
 		{"init"}, {"doctor"}, {"run"}, {"status"}, {"logs"}, {"gates"}, {"approve"},
 		{"pause"}, {"resume"}, {"cancel"}, {"report"}, {"clean"}, {"version"},
 		{"config", "validate"}, {"benchmark", "validate"}, {"benchmark", "run"},
-		{"daemon", "serve"}, {"goal", "get"}, {"goal", "replan"}, {"goal", "finalize"},
+		{"daemon", "serve"}, {"daemon", "start"}, {"daemon", "stop"}, {"daemon", "status"}, {"goal", "get"}, {"goal", "replan"}, {"goal", "finalize"},
 		{"work", "list"}, {"work", "retry"}, {"work", "cancel"}, {"completion"}, {"help"},
 	}
 	for _, path := range paths {

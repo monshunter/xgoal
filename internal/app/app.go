@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -15,53 +17,43 @@ import (
 	"github.com/monshunter/xgoal/internal/daemon"
 	"github.com/monshunter/xgoal/internal/finalize"
 	"github.com/monshunter/xgoal/internal/orchestrator"
+	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/recovery"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 )
 
-type Paths struct {
-	ProjectRoot string
-	StateDir    string
-	RunDir      string
-	SocketPath  string
-}
+type Paths = project.Paths
 
 func ResolvePaths(projectRoot, stateDir, socketPath string) (Paths, error) {
-	if projectRoot == "" {
-		return Paths{}, errors.New("project root is required")
-	}
-	absoluteRoot, err := filepath.Abs(projectRoot)
-	if err != nil {
-		return Paths{}, err
-	}
-	absoluteRoot = filepath.Clean(absoluteRoot)
-	resolvedRoot, err := filepath.EvalSymlinks(absoluteRoot)
-	if err != nil {
-		return Paths{}, err
-	}
-	absoluteRoot = filepath.Clean(resolvedRoot)
-	if stateDir == "" {
-		stateDir = filepath.Join(absoluteRoot, ".xgoal")
-	} else if !filepath.IsAbs(stateDir) {
-		stateDir = filepath.Join(absoluteRoot, stateDir)
-	}
-	stateDir = filepath.Clean(stateDir)
-	runDir := filepath.Join(stateDir, "run")
-	if socketPath == "" {
-		socketPath = filepath.Join(runDir, "xgoal.sock")
-	} else if !filepath.IsAbs(socketPath) {
-		socketPath = filepath.Join(absoluteRoot, socketPath)
-	}
-	return Paths{ProjectRoot: absoluteRoot, StateDir: stateDir, RunDir: runDir, SocketPath: filepath.Clean(socketPath)}, nil
+	return project.Resolve(context.Background(), projectRoot, stateDir, socketPath)
+}
+
+func ExpectedIdentity(paths Paths) api.ExpectedIdentity {
+	return api.ExpectedIdentity{ProjectID: paths.ProjectID, RepositoryIdentity: paths.RepositoryIdentity, ProjectRoot: paths.ProjectRoot, StateDir: paths.StateDir}
 }
 
 func Serve(ctx context.Context, paths Paths) (returnErr error) {
-	store, err := sqlite.Open(ctx, paths.StateDir, clock.Real{})
+	ownership, err := project.Acquire(ctx, paths)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, ownership.Close()) }()
+	binding := sqlite.ProjectBinding{ProjectID: paths.ProjectID, CommonDir: paths.CommonDir, ProjectRoot: paths.ProjectRoot}
+	if err := sqlite.CheckProjectBinding(ctx, paths.StateDir, binding, paths.LegacyState); err != nil {
+		return err
+	}
+	if err := ownership.Bind(ctx); err != nil {
+		return err
+	}
+	store, err := sqlite.OpenProject(ctx, paths.StateDir, clock.Real{}, binding, paths.LegacyState)
 	if err != nil {
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, store.Close()) }()
+	runtimeContext, cancelRuntime := context.WithCancel(ctx)
+	defer cancelRuntime()
+	ctx = runtimeContext
 	service, err := control.New(store, paths.ProjectRoot)
 	if err != nil {
 		return err
@@ -96,10 +88,26 @@ func Serve(ctx context.Context, paths Paths) (returnErr error) {
 	if executionEngine != nil {
 		recoveryManager = append(recoveryManager, engineRecovery{engine: executionEngine})
 	}
-	server, err := daemon.New(daemon.Config{RunDir: paths.RunDir, SocketPath: paths.SocketPath, ShutdownTimeout: 5 * time.Second}, handler, recoveryManager)
+	instanceBytes := make([]byte, 16)
+	if _, err := rand.Read(instanceBytes); err != nil {
+		return err
+	}
+	identity := api.DaemonIdentity{ProtocolVersion: api.ProtocolVersion, SoftwareVersion: api.SoftwareVersion, ProjectID: paths.ProjectID, RepositoryIdentity: paths.RepositoryIdentity, ProjectRoot: paths.ProjectRoot, StateDir: paths.StateDir, InstanceID: hex.EncodeToString(instanceBytes), PID: os.Getpid(), StartedAt: time.Now().UTC().Format(time.RFC3339Nano), State: "STARTING"}
+	server, err := daemon.New(daemon.Config{RunDir: paths.RunDir, SocketPath: paths.SocketPath, ShutdownTimeout: 5 * time.Second, Identity: identity, RequestStop: cancelRuntime}, handler, recoveryManager)
 	if err != nil {
 		return err
 	}
+	if err := server.Prepare(ctx); err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, server.Close()) }()
+	engineDone := make(chan struct{})
+	if executionEngine != nil {
+		go func() { defer close(engineDone); executionEngine.Run(ctx) }()
+	} else {
+		close(engineDone)
+	}
+	defer func() { cancelRuntime(); <-engineDone }()
 	return server.Serve(ctx)
 }
 
@@ -109,7 +117,6 @@ func (recovery engineRecovery) Recover(ctx context.Context) error {
 	if err := recovery.engine.Recover(ctx); err != nil {
 		return err
 	}
-	go recovery.engine.Run(ctx)
 	return nil
 }
 

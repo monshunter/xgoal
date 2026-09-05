@@ -31,15 +31,16 @@ go test ./...
 
 ## 快速开始
 
-在干净、可信且位于命名分支的 Git 仓库根目录执行：
+以下示例在可信 Git 主工作目录执行；首次运行 Goal 前提交配置与已有修改，保持工作目录干净：
 
 ```bash
 xgoal init
 xgoal config validate --file xgoal.yaml
-xgoal daemon serve
+xgoal daemon start
+xgoal daemon status
 ```
 
-另一个终端中：
+同一终端即可继续：
 
 ```bash
 xgoal doctor
@@ -70,6 +71,8 @@ xgoal work retry|cancel <work-id> --version <n> [--reason <text>]
 xgoal goal replan <goal-id> --file <request.json>
 xgoal report <goal-id>
 xgoal clean [project-id] --dry-run
+xgoal daemon status
+xgoal daemon stop [--timeout 30s]
 ```
 
 所有 command 和 subcommand 都提供 Cobra 标准帮助与参数说明：
@@ -87,9 +90,15 @@ source <(xgoal completion zsh)
 
 `run --wait` 持续读取 SQLite 权威状态，并在 Goal `Completed`、`Waiting`、`Cancelled` 时分别退出 0、3、4；不带 `--wait` 只表示 Goal 已被持久接收。
 
+`daemon start` 在后台启动，等待身份握手与真实 readiness；重复启动复用当前实例。`daemon serve` 仍可前台运行。`daemon stop` 请求当前实例退出，等请求、执行和数据库关闭后才释放项目所有权。CLI 退出不会等同于 daemon 停止。
+
+项目入口统一使用 `--project`、`--state-dir`、`--socket`，优先级为显式参数、对应 `XGOAL_PROJECT`/`XGOAL_STATE_DIR`/`XGOAL_SOCKET` 环境变量、已绑定项目位置、默认值。例如 `xgoal --project /path/to/A daemon status`。项目绑定后不能通过另一个 state-dir 启动第二个实例；linked worktree 入口明确拒绝。`doctor` 默认可离线运行，不打开、创建或迁移 SQLite；主动 Probe 需要运行中的 daemon。
+
 ## 配置与安全
 
 [xgoal.example.yaml](xgoal.example.yaml) 展示完整 v0.1 配置。Validator 的 `argv` 来自版本管理配置，Agent 不能注入命令或削弱 Required Validator。远端 push、发布、生产操作和项目 Secret 默认拒绝；Provider Transport 与 CLI 自有登录态是单独的受信执行通道。
+
+A、B 两个独立 Git 仓库分别拥有 daemon、状态库、锁和 socket，可同时运行；子目录和路径别名定位同一个实例。IPC 请求同时核对项目身份、协议和 daemon 实例，错误 socket 不会执行到另一个项目。CPU、内存、磁盘、端口、外部数据库/Docker、Provider 登录态与配额仍可能共享。
 
 v0.1 是 Local Process Provider，实际隔离等级为 L0。它不能像容器/VM 一样证明 Agent CLI 无法读取用户主目录或访问主机网络，只适合用户明确授权的可信本地仓库。详见 [威胁模型](docs/architecture/THREAT-MODEL-v0.1.md) 和 [操作与恢复手册](docs/operations/V0.1-OPERATIONS-RECOVERY.md)。
 

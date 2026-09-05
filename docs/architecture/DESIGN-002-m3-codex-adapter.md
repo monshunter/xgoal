@@ -2,19 +2,19 @@
 
 ## 状态与范围
 
-`accepted`
+M3 历史版本对应 PLAN-004，已经验收；OBJ-003 修订本设计的工作目录、生命周期与验收合同。修订版随当前 Spec/Design 审查进入实现，文档变更不代表新的运行行为已经验收。
 
-本设计实现 PLAN-004，只覆盖 Codex CLI 的 Passive/Active Probe、非交互执行、JSONL、结构化 Agent Result、角色 Sandbox、取消和安全 Resume，并把真实输出交给 M2 Workspace/Patch/Validator 独立验收。Claude Adapter、Reviewer、完整 Kernel Reconcile/Gate、Daemon/API 与 Final Report 属于 M4–M6。
+本设计拥有 Codex CLI 的 Passive/Active Probe、非交互执行、JSONL、结构化 Agent Result、角色权限、取消和安全 Resume。项目身份与进程所有权由 [DESIGN-004](DESIGN-004-m5-control-daemon.md) 拥有，当前目录的 Tree/Patch/Validator 合同由 [DESIGN-001](DESIGN-001-m2-git-environment-validation.md) 拥有，独立 Review 与 Final Report 分别见 DESIGN-003、DESIGN-005。OBJ-003 以当前主 checkout 原地执行替代 M3 的独立 Attempt/validation worktree 假设；历史验收记录保留其原版本含义。
 
 ## 当前 CLI 合同
 
-当前验收环境为 `codex-cli 0.145.0`，本机 `codex exec --help` 与 `codex exec resume --help` 已确认：
+M3 历史验收环境为 `codex-cli 0.145.0`，当时的本机 `codex exec --help` 与 `codex exec resume --help` 确认了以下调用面；当前环境仍须经 Passive Probe 检查：
 
 - 非交互入口为 `codex exec`，Prompt 使用 stdin `-`；
 - `--json` 输出 JSONL，`--output-schema <FILE>`约束最终消息；
 - 顶层 `--sandbox read-only|workspace-write`、`--ask-for-approval never` 与 `--cd <DIR>`可作用于 exec/resume；
 - Resume 使用 `codex exec resume <session-id> -`；
-- `codex login status` 是不产生模型调用的本地认证状态检查，当前报告 ChatGPT 登录可用。
+- `codex login status` 是不产生模型调用的本地认证状态检查，认证可用性取本次检查结果。
 
 Adapter 不依赖未承诺的内部 Rust API；版本或帮助面缺失任一必要能力时 Passive Probe 失败关闭。
 
@@ -38,6 +38,8 @@ codex --ask-for-approval never --sandbox <bound-policy> --cd <same-workspace>
 - v0.1 Codex CLI 没有受信的细粒度 Tool Allowlist 合同，因此声明 `ToolAllowlist=false`；Invocation 请求非空 ToolPolicy 时拒绝，不伪装已限制。
 - Adapter 只传入调用方已白名单化的环境，默认补充固定 locale；M3 `cli-session` 不接收 Token/Key/Secret 型环境变量。
 - Packet 必须是绝对路径的只读 regular file；Prompt 可引用 Packet，但 Packet 内容不拼成命令参数。
+- `<workspace>` 与 `<same-workspace>` 均为已绑定项目的当前主 checkout 根目录；Planner、Implementer、Reviewer 和 Active Probe 不另建 Git worktree 或执行代码副本。项目内这些调用与验证使用同一个有界串行执行槽。
+- 角色权限约束不代表工作目录隔离。Implementer 直接修改当前目录；Planner/Reviewer 使用只读权限和独立 Invocation，不能依赖另一份工作区来保证只读。
 
 ## 执行生命周期与制品
 
@@ -45,11 +47,12 @@ codex --ask-for-approval never --sandbox <bound-policy> --cd <same-workspace>
 Start/Resume
   → 校验 Invocation + 创建 private invocation directory
   → 写 canonical invocation metadata / schema
-  → 启动独立进程组并流式消费 stdout/stderr
+  → 持久化启动意图，通过 Supervisor 握手登记进程身份后才释放执行
+  → 在当前项目根目录运行独立进程组并流式消费 stdout/stderr
   → 每行 JSON 先解析和脱敏，再发布 immutable raw event
   → 规范化 AgentEvent 并推送 EventSink
   → 校验最终 agent_message 为 AgentResult
-  → Wait 返回 Claim；M2 再读真实文件系统和 Validator
+  → Wait 返回 Claim；Kernel 再核对当前文件系统、Git 身份和 Validator
 ```
 
 运行布局：
@@ -68,7 +71,7 @@ Start/Resume
 
 stdout 原始内容不直接落盘；Adapter 在内存中按行限长，解析为 JSON 后递归脱敏字符串，再以 `0600` immutable 文件发布。stderr 同样在限长内先脱敏后落盘。`--output-last-message` 不使用，避免 CLI 绕过脱敏直接写原始文本。
 
-Cancel 取消 execution context；Supervisor 向独立进程组发送 TERM、等待 grace period 后 KILL 并 Wait。`Start` 仅建立一次 Invocation；重复 ID、目录或 result 发布均按幂等冲突拒绝。
+Cancel 取消 execution context；Supervisor 向身份匹配的独立进程组发送 TERM、等待 grace period 后 KILL，并等待所属执行者与输出消费者结束。启动登记、daemon 退出和崩溃恢复使用 DESIGN-004 的统一生命周期。取消、停止与失败均保留当前文件现场及审计制品，不 reset、clean、切换分支或删除历史 worktree。`Start` 仅建立一次 Invocation；重复 ID、目录或 result 发布均按幂等冲突拒绝。
 
 ## JSONL 与结果合同
 
@@ -86,7 +89,7 @@ Cancel 取消 execution context；Supervisor 向独立进程组发送 TERM、等
 
 ## Session 安全绑定
 
-Session Binding 使用 Canonical Hash 绑定 Adapter/Profile、Work、Attempt、Goal Revision、Plan Revision、Base Tree、Packet Hash、Workspace、Sandbox、Tool Policy、环境变量名称和 Output Schema Hash。只有：
+Session Binding 使用 Canonical Hash 绑定 Adapter/Profile、Work、Attempt、Goal Revision、Plan Revision、Base Tree、Packet Hash、当前项目执行根、Sandbox、Tool Policy、环境变量名称和 Output Schema Hash。项目与当前 Git 身份还须通过 Kernel 的启动/恢复检查；路径相同不能单独证明现场仍可继续。只有：
 
 - Invocation 明确使用 `resume-compatible`；
 - Session ID 来自已解析 `thread.started`；
@@ -99,7 +102,8 @@ Session Binding 使用 Canonical Hash 绑定 Adapter/Profile、Work、Attempt、
 
 - fixture executable 覆盖命令参数、stdin、已知/未知 JSONL、结构化结果、截断、退出码 0 但结果无效、取消进程组及新 Adapter 实例 Resume。
 - 真实 CLI smoke 首先运行 Active Contract 与 Resume，再在临时真实 Git 仓库执行一个有界 Fast 文件修改和一个 Standard Implementer 修改。
-- 两个写路径都由 M2 从冻结 Base Tree 捕获 Patch、检查 Scope、在干净 validation worktree 重放并运行受信 Validator；Agent Claim 或 CLI 退出码不作为完成判据。
+- 两个写路径均从冻结 Base Tree 与当前文件系统捕获 Patch、检查 Scope，在同一当前目录运行受信 Validator；使用临时私有 index 构造 Tree，保持用户 HEAD、symbolic ref 和真实 index 不变。Validator 前后的当前 Tree 与 Git 身份必须符合所绑定快照，结果才可进入 Evidence。Agent Claim 或 CLI 退出码不作为完成判据。
+- 新版验收还须证明 Git worktree 清单不变、没有另复制执行目录、最终修改留在当前目录；旧版 validation worktree smoke 不能直接用作这些合同的 Evidence。
 
 ## 失败与兼容
 
@@ -113,3 +117,5 @@ Session Binding 使用 Canonical Hash 绑定 Adapter/Profile、Work、Attempt、
 | 未知事件 | 保存并标为 unknown，继续读取已知合同 |
 
 M3 不声明 L0 可阻止模型生成工具访问主机；实际限制由 Codex Sandbox 与项目可信边界共同提供，并在 Capability/Report 中披露。
+
+旧 Session 或未完成 Attempt 若绑定历史 worktree，升级后只读保留，进入明确迁移等待；不把路径改成当前根后自动 Resume。历史 worktree 不由新版自动删除。

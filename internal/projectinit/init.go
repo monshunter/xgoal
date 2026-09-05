@@ -3,8 +3,6 @@ package projectinit
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,10 +12,14 @@ import (
 	"strings"
 
 	"github.com/monshunter/xgoal/internal/config"
+	"github.com/monshunter/xgoal/internal/project"
+	"github.com/monshunter/xgoal/internal/store/sqlite"
 )
 
 type Options struct {
 	ProjectRoot       string
+	StateDir          string
+	SocketPath        string
 	AvailableCommands map[string]string
 }
 
@@ -35,25 +37,13 @@ type Result struct {
 }
 
 func Initialize(ctx context.Context, options Options) (Result, error) {
-	root, err := canonicalRoot(options.ProjectRoot)
+	paths, err := project.Resolve(ctx, options.ProjectRoot, options.StateDir, options.SocketPath)
 	if err != nil {
 		return Result{}, err
 	}
-	top, err := git(ctx, root, "rev-parse", "--show-toplevel")
-	resolvedTop, resolveErr := filepath.EvalSymlinks(top)
-	if err != nil || resolveErr != nil || filepath.Clean(resolvedTop) != root {
-		return Result{}, errors.New("xgoal init requires the current trusted Git worktree root")
-	}
+	root := paths.ProjectRoot
 	if err := ensureOnlyInitPathsDirty(ctx, root); err != nil {
 		return Result{}, err
-	}
-	common, err := git(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return Result{}, fmt.Errorf("resolve Git common directory: %w", err)
-	}
-	common = filepath.Clean(common)
-	if !filepath.IsAbs(common) {
-		return Result{}, errors.New("Git common directory is not absolute")
 	}
 	baseBranch, err := git(ctx, root, "branch", "--show-current")
 	if err != nil || strings.TrimSpace(baseBranch) == "" {
@@ -65,6 +55,20 @@ func Initialize(ctx context.Context, options Options) (Result, error) {
 	}
 	if commands["codex"] == "" && commands["claude"] == "" {
 		return Result{}, errors.New("xgoal init requires Codex CLI or Claude Code CLI")
+	}
+	owner, err := project.Acquire(ctx, paths)
+	if err != nil {
+		return Result{}, err
+	}
+	defer owner.Close()
+	if err := sqlite.CheckProjectBinding(ctx, paths.StateDir, sqlite.ProjectBinding{ProjectID: paths.ProjectID, CommonDir: paths.CommonDir, ProjectRoot: paths.ProjectRoot}, paths.LegacyState); err != nil {
+		return Result{}, err
+	}
+	if err := owner.Bind(ctx); err != nil {
+		return Result{}, err
+	}
+	if err := ensureOnlyInitPathsDirty(ctx, root); err != nil {
+		return Result{}, err
 	}
 
 	configPath := filepath.Join(root, "xgoal.yaml")
@@ -80,8 +84,13 @@ func Initialize(ctx context.Context, options Options) (Result, error) {
 		createdConfig = true
 	} else if err != nil {
 		return Result{}, err
-	} else if _, err := config.LoadFile(configPath); err != nil {
-		return Result{}, fmt.Errorf("existing xgoal.yaml is invalid: %w", err)
+	} else {
+		if err := regularInitFile(configPath); err != nil {
+			return Result{}, err
+		}
+		if _, err := config.LoadFile(configPath); err != nil {
+			return Result{}, fmt.Errorf("existing xgoal.yaml is invalid: %w", err)
+		}
 	}
 
 	createdIgnore := false
@@ -96,28 +105,15 @@ func Initialize(ctx context.Context, options Options) (Result, error) {
 		createdIgnore = true
 	} else if err != nil {
 		return Result{}, err
+	} else if err := regularInitFile(xgoalIgnore); err != nil {
+		return Result{}, err
 	}
 	if err := ensureGitIgnore(root); err != nil {
 		return Result{}, err
 	}
-	stateDir := filepath.Join(root, ".xgoal")
-	if err := ensurePrivateDirectory(stateDir); err != nil {
-		return Result{}, err
-	}
-
-	projectID, err := git(ctx, root, "config", "--local", "--get", "xgoal.projectID")
-	if err != nil || projectID == "" {
-		projectID, err = randomID()
-		if err != nil {
-			return Result{}, err
-		}
-		if _, err := git(ctx, root, "config", "--local", "xgoal.projectID", projectID); err != nil {
-			return Result{}, fmt.Errorf("persist project id: %w", err)
-		}
-	}
 	return Result{
-		ProjectRoot: root, ProjectID: projectID, GitCommonDir: common,
-		ConfigPath: configPath, StateDir: stateDir, BaseBranch: baseBranch,
+		ProjectRoot: root, ProjectID: paths.ProjectID, GitCommonDir: paths.CommonDir,
+		ConfigPath: configPath, StateDir: paths.StateDir, BaseBranch: baseBranch,
 		CreatedConfig: createdConfig, CreatedIgnore: createdIgnore,
 		IsolationLevel: "L0", RemoteChanges: false,
 	}, nil
@@ -220,6 +216,9 @@ func ensureOnlyInitPathsDirty(ctx context.Context, root string) error {
 
 func ensureGitIgnore(root string) error {
 	path := filepath.Join(root, ".gitignore")
+	if err := regularInitFile(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	contents, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -272,58 +271,26 @@ func writeReplace(path string, contents []byte, mode os.FileMode) error {
 	return os.Rename(temporary, path)
 }
 
-func ensurePrivateDirectory(path string) error {
+func regularInitFile(path string) error {
 	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(path, 0o700); err != nil {
-			return err
-		}
-		info, err = os.Lstat(path)
-	}
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New(".xgoal must be a real private directory")
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("initialization file must be a regular file: %s", path)
 	}
-	return os.Chmod(path, 0o700)
-}
-
-func canonicalRoot(value string) (string, error) {
-	if value == "" {
-		var err error
-		value, err = os.Getwd()
-		if err != nil {
-			return "", err
-		}
-	}
-	absolute, err := filepath.Abs(value)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(filepath.Clean(absolute))
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(resolved), nil
-}
-
-func randomID() (string, error) {
-	value := make([]byte, 16)
-	if _, err := rand.Read(value); err != nil {
-		return "", err
-	}
-	return "project_" + hex.EncodeToString(value), nil
+	return nil
 }
 
 func git(ctx context.Context, root string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = root
+	command.Env = project.GitEnvironment()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(output)), err)
 	}
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSuffix(string(output), "\n"), nil
 }
 
 func fileExists(path string) bool {

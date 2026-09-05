@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -28,6 +29,7 @@ import (
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/goalcompile"
 	"github.com/monshunter/xgoal/internal/planner"
+	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/protocol"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	basestore "github.com/monshunter/xgoal/internal/store"
@@ -573,10 +575,7 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 		path, err := exec.LookPath(name)
 		status := map[string]any{"available": err == nil, "path": path, "probe": "passive"}
 		if err == nil {
-			probeContext, cancel := context.WithTimeout(ctx, 2*time.Second)
-			command := exec.CommandContext(probeContext, path, "--version")
-			output, runErr := command.CombinedOutput()
-			cancel()
+			output, runErr := passiveCommandOutput(ctx, path, "--version")
 			status["version"] = strings.TrimSpace(string(output))
 			status["version_available"] = runErr == nil
 		}
@@ -585,7 +584,7 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 	gitFacts := map[string]any{"repository": false}
 	gitContext, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if output, err := exec.CommandContext(gitContext, "git", "-C", service.projectRoot, "rev-parse", "--show-toplevel").CombinedOutput(); err == nil {
+	if output, err := passiveCommandOutput(gitContext, "git", "-C", service.projectRoot, "rev-parse", "--show-toplevel"); err == nil {
 		gitFacts["repository"] = true
 		gitFacts["top_level"] = strings.TrimSpace(string(output))
 		gitFacts["head"] = commandOutput(gitContext, "git", "-C", service.projectRoot, "rev-parse", "HEAD")
@@ -655,18 +654,23 @@ func (service *Service) passiveProfile(ctx context.Context, profile config.Agent
 			environment[name] = value
 		}
 	}
-	runtimeAdapter, err := service.profileAdapter(profile, environment)
-	if err == nil {
-		probeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-		capabilities, probeErr := runtimeAdapter.Probe(probeContext, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
-		cancel()
-		if probeErr == nil {
-			result["available"] = true
-			result["capabilities"] = capabilities
-			return result
-		}
-		err = probeErr
+	spec := adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second}
+	var capabilities adapter.Capabilities
+	var err error
+	switch profile.Adapter {
+	case "codex-cli":
+		capabilities, err = codexadapter.PassiveProbe(ctx, codexadapter.Config{Binary: profile.Command, ProjectRoot: service.projectRoot, Environment: environment}, spec)
+	case "claude-cli":
+		capabilities, err = claudeadapter.PassiveProbe(ctx, claudeadapter.Config{Binary: profile.Command, ProjectRoot: service.projectRoot, Environment: environment}, spec)
+	default:
+		err = errors.New("passive probe is unavailable for this adapter")
 	}
+	if err == nil {
+		result["available"] = true
+		result["capabilities"] = capabilities
+		return result
+	}
+
 	result["available"] = false
 	result["error"] = err.Error()
 	return result
@@ -757,11 +761,35 @@ func randomComponent(prefix string) (string, error) {
 }
 
 func commandOutput(ctx context.Context, name string, arguments ...string) string {
-	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
+	output, err := passiveCommandOutput(ctx, name, arguments...)
 	if err != nil {
 		return "unavailable"
 	}
 	return strings.TrimSpace(string(output))
+}
+
+type passiveBuffer struct{ bytes.Buffer }
+
+func (buffer *passiveBuffer) Write(data []byte) (int, error) {
+	n := len(data)
+	if remaining := 8192 - buffer.Len(); remaining > 0 {
+		if len(data) > remaining {
+			data = data[:remaining]
+		}
+		_, _ = buffer.Buffer.Write(data)
+	}
+	return n, nil
+}
+func passiveCommandOutput(ctx context.Context, name string, arguments ...string) ([]byte, error) {
+	probeContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(probeContext, name, arguments...)
+	command.Env = append(project.GitEnvironment(), "GIT_OPTIONAL_LOCKS=0")
+	command.WaitDelay = 250 * time.Millisecond
+	var output passiveBuffer
+	command.Stdout, command.Stderr = &output, &output
+	err := command.Run()
+	return output.Bytes(), err
 }
 
 func goalView(goal domain.Goal) map[string]any {

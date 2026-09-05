@@ -1,5 +1,7 @@
 # M5 Reconcile、Gate 与 Daemon 验收记录
 
+> 历史版本验收记录。OBJ-003 项目单实例、当前目录执行与持久后台合同的当前证据见[增量验收](PROJECT-DAEMON-CURRENT-DIRECTORY-ACCEPTANCE.md)。
+
 ## 范围
 
 本记录对应 `PLAN-006` 与 `DESIGN-004`，只证明 M5 确定性控制面、有限授权、Local API、Daemon 和恢复能力；M4 已完成的真实 Codex/Claude 双向 Agent/Review 不在本记录重复调用，最终报告与 Benchmark 留给 M6。

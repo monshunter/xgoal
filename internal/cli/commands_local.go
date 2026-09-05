@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,11 +23,11 @@ func newInitCommand() *cobra.Command {
 		Short: "Initialize xgoal in the current Git repository",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := os.Getwd()
+			paths, err := commandPaths(cmd)
 			if err != nil {
-				return fail(5, err)
+				return fail(2, err)
 			}
-			result, err := projectinit.Initialize(cmd.Context(), projectinit.Options{ProjectRoot: root})
+			result, err := projectinit.Initialize(cmd.Context(), projectinit.Options{ProjectRoot: paths.ProjectRoot, StateDir: paths.StateDir, SocketPath: paths.SocketPath})
 			if err != nil {
 				return fail(5, fmt.Errorf("init failed: %w", err))
 			}
@@ -151,36 +152,73 @@ func newBenchmarkRunCommand(runtime runtime) *cobra.Command {
 	return cmd
 }
 
+func commandPaths(cmd *cobra.Command) (app.Paths, error) {
+	project, _ := cmd.Flags().GetString("project")
+	state, _ := cmd.Flags().GetString("state-dir")
+	socket, _ := cmd.Flags().GetString("socket")
+	return app.ResolvePaths(project, state, socket)
+}
+
 func newDaemonCommand() *cobra.Command {
-	parent := groupCommand("daemon", "Run the local xgoal control daemon")
-	var project, stateDir, socket string
-	serve := &cobra.Command{
-		Use:   "serve",
-		Short: "Serve the current project's Unix Socket API",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if project == "" {
-				var err error
-				project, err = os.Getwd()
-				if err != nil {
-					return fail(5, err)
-				}
+	parent := groupCommand("daemon", "Manage the current project's local daemon")
+	serve := &cobra.Command{Use: "serve", Short: "Run the project's Unix Socket API in the foreground", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		paths, err := commandPaths(cmd)
+		if err != nil {
+			return fail(2, err)
+		}
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := app.Serve(ctx, paths); err != nil {
+			return fail(5, fmt.Errorf("daemon failed: %w", err))
+		}
+		return nil
+	}}
+	status := &cobra.Command{Use: "status", Short: "Inspect daemon identity and readiness without opening its database", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		paths, err := commandPaths(cmd)
+		if err != nil {
+			return fail(2, err)
+		}
+		value, err := app.Status(cmd.Context(), paths)
+		raw, _ := json.Marshal(value)
+		prettyJSON(cmd.OutOrStdout(), raw)
+		if err != nil {
+			return fail(6, err)
+		}
+		if value.State != "READY" {
+			return silentStatus(6)
+		}
+		return nil
+	}}
+	parent.AddCommand(serve, status)
+	for _, action := range []string{"start", "stop"} {
+		var timeout time.Duration
+		child := &cobra.Command{Use: action, Short: action + " the project's background daemon", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+			if timeout <= 0 {
+				return errors.New("--timeout must be a positive duration")
 			}
-			paths, err := app.ResolvePaths(project, stateDir, socket)
+			paths, err := commandPaths(cmd)
 			if err != nil {
 				return fail(2, err)
 			}
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			signalContext, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			if err := app.Serve(ctx, paths); err != nil {
-				return fail(5, fmt.Errorf("daemon failed: %w", err))
+			ctx, cancel := context.WithTimeout(signalContext, timeout)
+			defer cancel()
+			var value any
+			if action == "start" {
+				value, err = app.Start(ctx, paths, "")
+			} else {
+				value, err = app.Stop(ctx, paths)
+			}
+			raw, _ := json.Marshal(value)
+			prettyJSON(cmd.OutOrStdout(), raw)
+			if err != nil {
+				return fail(6, err)
 			}
 			return nil
-		},
+		}}
+		child.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "maximum time to wait for daemon lifecycle completion")
+		parent.AddCommand(child)
 	}
-	serve.Flags().StringVar(&project, "project", "", "project path (defaults to the current directory)")
-	serve.Flags().StringVar(&stateDir, "state-dir", "", "override the xgoal state directory")
-	serve.Flags().StringVar(&socket, "socket", "", "override the Unix socket path")
-	parent.AddCommand(serve)
 	return parent
 }
