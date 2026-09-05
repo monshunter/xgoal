@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,6 +215,14 @@ func TestControlServiceRetryKeepsPriorAttemptAndCreatesANewGeneration(t *testing
 	}
 	if err := os.WriteFile(filepath.Join(root, "xgoal.yaml"), configuration, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "--quiet"}, {"config", "user.name", "XGoal Test"}, {"config", "user.email", "test@example.invalid"},
+		{"add", "xgoal.yaml"}, {"commit", "--quiet", "-m", "baseline"},
+	} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s: %v", args, output, err)
+		}
 	}
 	source := clock.NewFake(time.Date(2026, 9, 2, 23, 30, 0, 0, time.UTC))
 	store, err := sqlite.Open(ctx, filepath.Join(root, ".xgoal"), source)

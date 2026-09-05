@@ -147,6 +147,22 @@ func (s *Store) ResolveWorkerRecovery(ctx context.Context, attemptID string, exp
 		if affected != 1 {
 			return fmt.Errorf("worker %q: %w", attemptID, basestore.ErrConflict)
 		}
+		// A journaled promotion owns the remaining lifecycle transition. The
+		// worker is stopped, but revoking its lease would make ref readback
+		// impossible after a crash between Git CAS and SQLite observation.
+		var pendingPromotion int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotions WHERE attempt_id=? AND state NOT IN ('OBSERVED','FAILED')`, attemptID).Scan(&pendingPromotion); err != nil {
+			return err
+		}
+		if pendingPromotion > 0 {
+			if err := s.appendEvent(ctx, tx, "attempt", attemptID, prepared); err != nil {
+				return err
+			}
+			worker.State, worker.Version = state, worker.Version+1
+			worker.UpdatedAt, _ = time.Parse(time.RFC3339Nano, now)
+			result = worker
+			return nil
+		}
 		if attempt.State.CanTransition(domain.AttemptInterrupted) {
 			if _, err := tx.ExecContext(ctx, `UPDATE attempts SET state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`, domain.AttemptInterrupted, now, attempt.ID, attempt.Version); err != nil {
 				return fmt.Errorf("interrupt recovered attempt: %w", err)

@@ -26,11 +26,14 @@ import (
 )
 
 const (
-	providerName     = "local-process"
-	isolationLevel   = "L0"
-	maxVersionBytes  = 64 << 10
-	maxLockfileBytes = 16 << 20
+	providerName         = "local-process"
+	isolationLevel       = "L0"
+	maxVersionBytes      = 64 << 10
+	maxLockfileBytes     = 16 << 20
+	maxSnapshotFileBytes = int64(64 << 20)
 )
+
+var ErrCheckoutDrift = errors.New("current checkout changed during the execution phase")
 
 var defaultToolProbes = []ToolProbe{
 	{Name: "claude", Argv: []string{"claude", "--version"}},
@@ -97,12 +100,12 @@ func (local *Local) Prepare(ctx context.Context, spec Spec) (Handle, error) {
 	if err := validateSpec(spec); err != nil {
 		return Handle{}, err
 	}
-	worktree, err := local.repository.InspectWorktree(ctx, spec.WorktreePath)
-	if err != nil {
-		return Handle{}, err
+	if spec.WorktreePath != local.repository.Root() || spec.Identity.Root != spec.WorktreePath || spec.BaseCommit != spec.Identity.HeadCommit {
+		return Handle{}, errors.New("environment must bind the current project root and user HEAD identity")
 	}
-	if worktree.HeadCommit != spec.BaseCommit || worktree.HeadTree != spec.BaseTree {
-		return Handle{}, errors.New("environment worktree does not match base commit/tree")
+	spec.ExcludePaths = append(append([]string(nil), spec.ExcludePaths...), filepath.Dir(local.root))
+	if err := local.repository.CheckSnapshot(ctx, snapshotSpec(spec), spec.Identity, spec.BaseTree); err != nil {
+		return Handle{}, fmt.Errorf("%w: %w", ErrCheckoutDrift, err)
 	}
 	local.mu.Lock()
 	defer local.mu.Unlock()
@@ -135,7 +138,7 @@ func (local *Local) Prepare(ctx context.Context, spec Spec) (Handle, error) {
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return Handle{}, fmt.Errorf("create environment handle token: %w", err)
 	}
-	handle := Handle{ID: spec.ID, Worktree: worktree.Path, Root: environmentRoot, token: hex.EncodeToString(tokenBytes)}
+	handle := Handle{ID: spec.ID, Worktree: spec.WorktreePath, Root: environmentRoot, token: hex.EncodeToString(tokenBytes)}
 	local.handles[spec.ID] = &managedEnvironment{spec: spec, handle: handle, environment: environment, services: supervisor.NewGroup()}
 	prepared = true
 	return handle, nil
@@ -146,12 +149,8 @@ func (local *Local) Snapshot(ctx context.Context, handle Handle) (protocol.Envir
 	if err != nil {
 		return protocol.EnvironmentSnapshot{}, err
 	}
-	worktree, err := local.repository.InspectWorktree(ctx, managed.handle.Worktree)
-	if err != nil {
+	if err := local.VerifyTree(ctx, handle, managed.spec.BaseTree); err != nil {
 		return protocol.EnvironmentSnapshot{}, err
-	}
-	if worktree.HeadCommit != managed.spec.BaseCommit || worktree.HeadTree != managed.spec.BaseTree {
-		return protocol.EnvironmentSnapshot{}, errors.New("environment base commit/tree changed")
 	}
 	environment := environmentSlice(managed.environment)
 	kernel, err := local.runVersion(ctx, managed.handle.Worktree, []string{"uname", "-srv"}, environment)
@@ -213,7 +212,27 @@ func (local *Local) Snapshot(ctx context.Context, handle Handle) (protocol.Envir
 	if err := snapshot.Validate(); err != nil {
 		return protocol.EnvironmentSnapshot{}, err
 	}
+	if err := local.VerifyTree(ctx, handle, managed.spec.BaseTree); err != nil {
+		return protocol.EnvironmentSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+// VerifyTree binds command/review evidence to the same raw current-directory
+// contents and user Git identity before and after a phase.
+func (local *Local) VerifyTree(ctx context.Context, handle Handle, expectedTree string) error {
+	managed, err := local.readHandle(handle)
+	if err != nil {
+		return err
+	}
+	if err := local.repository.CheckSnapshot(ctx, snapshotSpec(managed.spec), managed.spec.Identity, expectedTree); err != nil {
+		return fmt.Errorf("%w: %w", ErrCheckoutDrift, err)
+	}
+	return nil
+}
+
+func snapshotSpec(spec Spec) gitrepo.SnapshotSpec {
+	return gitrepo.SnapshotSpec{BaseTree: spec.BaseTree, ExcludePaths: spec.ExcludePaths, MaxFileBytes: maxSnapshotFileBytes}
 }
 
 func (local *Local) StartServices(ctx context.Context, handle Handle, services []ServiceSpec) error {
@@ -308,11 +327,11 @@ func (local *Local) Cleanup(ctx context.Context, handle Handle) error {
 	if !exists || current != managed || current.handle.token != handle.token || filepath.Dir(current.handle.Root) != local.root {
 		return errors.New("environment handle changed before cleanup")
 	}
-	if err := os.RemoveAll(current.handle.Root); err != nil {
-		return fmt.Errorf("remove environment directory: %w", err)
-	}
+	// The directory contains attributable service logs and temporary failure
+	// evidence. Explicit clean owns deletion; lifecycle cleanup only releases
+	// processes and this in-memory capability.
 	delete(local.handles, handle.ID)
-	return syncDirectory(local.root)
+	return nil
 }
 
 func (local *Local) readHandle(handle Handle) (*managedEnvironment, error) {

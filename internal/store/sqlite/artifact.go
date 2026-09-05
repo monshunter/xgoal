@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/protocol"
 	basestore "github.com/monshunter/xgoal/internal/store"
@@ -106,16 +107,23 @@ func (s *Store) RecordWorkspace(ctx context.Context, snapshot workspace.Snapshot
 		if snapshot.Kind == workspace.Validation {
 			kind = "VALIDATION"
 		}
+		metadata, err := canonical.Marshal(workspaceExecutionMetadata{Identity: snapshot.Identity, ExcludePaths: snapshot.ExcludePaths, InputTree: snapshot.InputTree})
+		if err != nil {
+			return err
+		}
+		if snapshot.ExecutionModel != workspace.ExecutionCurrentDirectory {
+			return workspace.ErrLegacyWorkspace
+		}
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO workspaces(
     id, attempt_id, kind, path, common_dir, base_commit, base_tree,
-    config_hash, marker_hash, state, version, created_at, updated_at
+    config_hash, marker_hash, state, version, created_at, updated_at, execution_model, execution_path, execution_metadata
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-			snapshot.ID, snapshot.AttemptID, kind, snapshot.Path, snapshot.CommonDir,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+			snapshot.ID, snapshot.AttemptID, kind, filepath.Dir(snapshot.MarkerPath), snapshot.CommonDir,
 			snapshot.BaseCommit, snapshot.BaseTree, snapshot.ConfigHash, snapshot.MarkerHash,
 			WorkspaceArtifactActive, snapshot.CreatedAt.UTC().Format(time.RFC3339Nano),
-			s.source.Now().UTC().Format(time.RFC3339Nano),
+			s.source.Now().UTC().Format(time.RFC3339Nano), snapshot.ExecutionModel, snapshot.Path, metadata,
 		)
 		if err != nil {
 			return fmt.Errorf("insert workspace artifact %q: %w", snapshot.ID, err)
@@ -272,7 +280,13 @@ func (s *Store) RecordEnvironmentSnapshot(ctx context.Context, workspaceID strin
 		if err != nil {
 			return err
 		}
-		if workspaceRecord.State != WorkspaceArtifactActive || workspaceRecord.Snapshot.BaseTree != snapshot.BaseTree || workspaceRecord.Snapshot.ConfigHash != snapshot.ConfigHash {
+		expectedTree := workspaceRecord.Snapshot.BaseTree
+		expectedCommit := workspaceRecord.Snapshot.BaseCommit
+		if workspaceRecord.Snapshot.ExecutionModel == workspace.ExecutionCurrentDirectory {
+			expectedTree = workspaceRecord.Snapshot.InputTree
+			expectedCommit = workspaceRecord.Snapshot.Identity.HeadCommit
+		}
+		if workspaceRecord.State != WorkspaceArtifactActive || expectedTree != snapshot.BaseTree || expectedCommit != snapshot.BaseCommit || workspaceRecord.Snapshot.ConfigHash != snapshot.ConfigHash {
 			return errors.New("environment snapshot does not match its active workspace")
 		}
 		existing, err := readEnvironmentArtifact(ctx, tx, snapshot.ID)
@@ -519,19 +533,24 @@ type artifactQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type workspaceExecutionMetadata struct {
+	Identity     gitrepo.CheckoutIdentity `json:"identity"`
+	ExcludePaths []string                 `json:"exclude_paths"`
+	InputTree    string                   `json:"input_tree"`
+}
+
 func readWorkspaceArtifact(ctx context.Context, queryer artifactQueryer, id string, verifyDisk bool, runtimeRoot string) (WorkspaceArtifact, error) {
 	var result WorkspaceArtifact
-	var kind, createdAt string
+	var kind, createdAt, storedPath, executionPath string
+	var metadata []byte
 	err := queryer.QueryRowContext(ctx, `
-SELECT id, attempt_id, kind, path, common_dir, base_commit, base_tree,
-       config_hash, marker_hash, state, version, created_at
-FROM workspaces WHERE id = ?`, id).Scan(
-		&result.Snapshot.ID, &result.Snapshot.AttemptID, &kind, &result.Snapshot.Path,
-		&result.Snapshot.CommonDir, &result.Snapshot.BaseCommit, &result.Snapshot.BaseTree,
+SELECT id,attempt_id,kind,path,common_dir,base_commit,base_tree,config_hash,marker_hash,state,version,created_at,
+ execution_model,execution_path,execution_metadata FROM workspaces WHERE id=?`, id).Scan(
+		&result.Snapshot.ID, &result.Snapshot.AttemptID, &kind, &storedPath, &result.Snapshot.CommonDir, &result.Snapshot.BaseCommit, &result.Snapshot.BaseTree,
 		&result.Snapshot.ConfigHash, &result.Snapshot.MarkerHash, &result.State, &result.Version, &createdAt,
-	)
+		&result.Snapshot.ExecutionModel, &executionPath, &metadata)
 	if errors.Is(err, sql.ErrNoRows) {
-		return WorkspaceArtifact{}, fmt.Errorf("workspace artifact %q: %w", id, basestore.ErrNotFound)
+		return WorkspaceArtifact{}, fmt.Errorf("workspace %q: %w", id, basestore.ErrNotFound)
 	}
 	if err != nil {
 		return WorkspaceArtifact{}, err
@@ -542,9 +561,8 @@ FROM workspaces WHERE id = ?`, id).Scan(
 	case "VALIDATION":
 		result.Snapshot.Kind = workspace.Validation
 	default:
-		return WorkspaceArtifact{}, errors.New("persisted workspace kind is invalid")
+		return WorkspaceArtifact{}, errors.New("invalid workspace kind")
 	}
-	result.Snapshot.MarkerPath = filepath.Join(filepath.Dir(result.Snapshot.Path), "marker.json")
 	canonicalRuntime, err := canonicalArtifactDirectory(runtimeRoot)
 	if err != nil {
 		return WorkspaceArtifact{}, err
@@ -553,13 +571,34 @@ FROM workspaces WHERE id = ?`, id).Scan(
 	if result.Snapshot.Kind == workspace.Validation {
 		directory = "validation"
 	}
-	expectedContainer := filepath.Join(canonicalRuntime, "workspaces", directory, result.Snapshot.ID)
-	if result.Snapshot.Path != filepath.Join(expectedContainer, "tree") || result.Snapshot.MarkerPath != filepath.Join(expectedContainer, "marker.json") {
-		return WorkspaceArtifact{}, errors.New("persisted workspace path is outside the project runtime layout")
+	container := filepath.Join(canonicalRuntime, "workspaces", directory, result.Snapshot.ID)
+	result.Snapshot.MarkerPath = filepath.Join(container, "marker.json")
+	switch result.Snapshot.ExecutionModel {
+	case workspace.ExecutionLegacyWorktree:
+		if storedPath != filepath.Join(container, "tree") || executionPath != "" {
+			return WorkspaceArtifact{}, errors.New("persisted legacy workspace layout mismatch")
+		}
+		result.Snapshot.Path = storedPath
+	case workspace.ExecutionCurrentDirectory:
+		if storedPath != container {
+			return WorkspaceArtifact{}, errors.New("persisted workspace metadata path mismatch")
+		}
+		var decoded workspaceExecutionMetadata
+		if err := decodeCanonical(metadata, &decoded); err != nil {
+			return WorkspaceArtifact{}, err
+		}
+		result.Snapshot.Path = executionPath
+		result.Snapshot.Identity = decoded.Identity
+		result.Snapshot.ExcludePaths = decoded.ExcludePaths
+		result.Snapshot.InputTree = decoded.InputTree
+		result.Snapshot.HeadCommit = decoded.Identity.HeadCommit
+		result.Snapshot.HeadTree = decoded.Identity.HeadTree
+	default:
+		return WorkspaceArtifact{}, errors.New("unknown workspace execution model")
 	}
 	result.Snapshot.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil || result.Version <= 0 || (result.State != WorkspaceArtifactActive && result.State != WorkspaceArtifactCleaned && result.State != WorkspaceArtifactFailed) {
-		return WorkspaceArtifact{}, errors.New("persisted workspace artifact is invalid")
+		return WorkspaceArtifact{}, errors.New("invalid persisted workspace")
 	}
 	if err := result.Snapshot.ValidateMarkerBinding(); err != nil {
 		return WorkspaceArtifact{}, err
@@ -789,12 +828,19 @@ func decodeCanonical(content []byte, destination any) error {
 }
 
 func sameWorkspaceMarker(left, right workspace.Snapshot) bool {
-	return left.ID == right.ID && left.AttemptID == right.AttemptID && left.Kind == right.Kind &&
-		left.Path == right.Path && left.MarkerPath == right.MarkerPath && left.CommonDir == right.CommonDir &&
-		left.BaseCommit == right.BaseCommit && left.BaseTree == right.BaseTree && left.ConfigHash == right.ConfigHash &&
-		left.MarkerHash == right.MarkerHash && left.CreatedAt.Equal(right.CreatedAt)
+	return left.ID == right.ID && left.AttemptID == right.AttemptID && left.Kind == right.Kind && left.Path == right.Path && left.MarkerPath == right.MarkerPath && left.CommonDir == right.CommonDir && left.BaseCommit == right.BaseCommit && left.BaseTree == right.BaseTree && left.ConfigHash == right.ConfigHash && left.MarkerHash == right.MarkerHash && left.CreatedAt.Equal(right.CreatedAt) && left.ExecutionModel == right.ExecutionModel && left.InputTree == right.InputTree && left.Identity == right.Identity && equalStrings(left.ExcludePaths, right.ExcludePaths)
 }
-
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
 func validateWorkspaceArtifactLayout(runtimeRoot string, snapshot workspace.Snapshot) error {
 	canonicalRuntime, err := canonicalArtifactDirectory(runtimeRoot)
 	if err != nil {
@@ -804,14 +850,20 @@ func validateWorkspaceArtifactLayout(runtimeRoot string, snapshot workspace.Snap
 	if snapshot.Kind == workspace.Validation {
 		directory = "validation"
 	}
-	expectedContainer := filepath.Join(canonicalRuntime, "workspaces", directory, snapshot.ID)
-	expectedPath := filepath.Join(expectedContainer, "tree")
-	if snapshot.Path != expectedPath || snapshot.MarkerPath != filepath.Join(expectedContainer, "marker.json") {
-		return errors.New("workspace artifact does not match the project runtime layout")
+	container := filepath.Join(canonicalRuntime, "workspaces", directory, snapshot.ID)
+	if snapshot.ExecutionModel != workspace.ExecutionCurrentDirectory {
+		return workspace.ErrLegacyWorkspace
+	}
+	if snapshot.MarkerPath != filepath.Join(container, "marker.json") || snapshot.Path != snapshot.Identity.Root || snapshot.CommonDir != snapshot.Identity.CommonDir || !equalStrings(snapshot.ExcludePaths, []string{canonicalRuntime}) {
+		return errors.New("workspace artifact does not match current-directory runtime layout")
+	}
+	canonicalContainer, err := canonicalArtifactDirectory(container)
+	if err != nil || canonicalContainer != container {
+		return errors.New("workspace metadata directory is missing or linked")
 	}
 	canonicalPath, err := canonicalArtifactDirectory(snapshot.Path)
-	if err != nil || canonicalPath != expectedPath {
-		return errors.New("workspace artifact path is missing, linked, or outside the project runtime layout")
+	if err != nil || canonicalPath != snapshot.Path {
+		return errors.New("workspace execution directory is missing or linked")
 	}
 	return nil
 }

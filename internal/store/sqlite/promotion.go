@@ -13,6 +13,7 @@ import (
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/promotion"
 	basestore "github.com/monshunter/xgoal/internal/store"
+	"github.com/monshunter/xgoal/internal/workspace"
 )
 
 const promotionEffectType = "PROMOTION"
@@ -83,6 +84,15 @@ func (s *Store) Preflight(ctx context.Context, request promotion.Request) error 
 		return err
 	}
 	return s.withTransaction(ctx, func(tx *sql.Tx) error {
+		if request.ExecutionModel == workspace.ExecutionCurrentDirectory {
+			checkout, err := readCheckout(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if request.CheckoutIdentity == nil || checkout.GoalID != request.GoalID || checkout.WorkID != request.WorkItemID || checkout.Identity != *request.CheckoutIdentity || checkout.AcceptedCommit != request.OldCommit || checkout.AcceptedTree != request.OldTree {
+				return ErrCheckoutConflict
+			}
+		}
 		var attemptState domain.AttemptState
 		var workState domain.WorkState
 		var goalState domain.GoalState
@@ -207,7 +217,7 @@ func (s *Store) RecoverablePromotions(ctx context.Context) ([]promotion.Record, 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id
 FROM promotions
-WHERE state IN (?, ?, ?)
+WHERE goal_id IN (SELECT id FROM goals WHERE execution_model='current-directory') AND state IN (?, ?, ?)
 ORDER BY created_at, id`, promotion.Requested, promotion.CommitCreated, promotion.RefUpdated)
 	if err != nil {
 		return nil, err
@@ -272,10 +282,30 @@ WHERE id = ? AND version = ?`, target, commit, now, id, current.Version); err !=
 				return err
 			}
 		case promotion.Observed:
+			if current.ExecutionModel == workspace.ExecutionCurrentDirectory {
+				checkout, err := readCheckout(ctx, tx)
+				if err != nil {
+					return err
+				}
+				if current.CheckoutIdentity == nil || checkout.GoalID != current.GoalID || checkout.WorkID != current.WorkItemID || checkout.Identity != *current.CheckoutIdentity || checkout.AcceptedCommit != current.OldCommit || checkout.AcceptedTree != current.OldTree {
+					return ErrCheckoutConflict
+				}
+				checkout.AcceptedCommit = commit
+				checkout.AcceptedTree = current.CandidateTree
+				checkout.ObservedTree = current.CandidateTree
+				checkout.WorkID = ""
+				checkout.RetryAuthorized = false
+				if err := saveCheckout(ctx, tx, checkout); err != nil {
+					return err
+				}
+			}
 			if err := s.transitionPromotionLifecycle(ctx, tx, current, true, now); err != nil {
 				return err
 			}
 			if err := finishPromotionEffect(ctx, tx, current.EffectID, domain.EffectSucceeded, observation, now); err != nil {
+				return err
+			}
+			if err := s.resolvePromotionRecoveryGate(ctx, tx, current, now); err != nil {
 				return err
 			}
 		}
@@ -293,6 +323,42 @@ WHERE id = ? AND version = ?`, target, commit, now, id, current.Version); err !=
 		return nil
 	})
 	return result, err
+}
+
+// A successful readback resolves this diagnostic blocker only. It grants no
+// reusable permission and leaves a waiting Goal for an explicit resume.
+func (s *Store) resolvePromotionRecoveryGate(ctx context.Context, tx *sql.Tx, current promotionRecord, now string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM gates WHERE goal_id=? AND work_item_id=? AND attempt_id=? AND reason_code='promotion_recovery_required' AND state='OPEN'`, current.GoalID, current.WorkItemID, current.AttemptID)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE gates SET state='APPROVED',decision='ALLOW',decided_by='kernel',decision_reason='promotion recovery readback observed',decided_at=?,used=max_uses,version=version+1,updated_at=? WHERE id=? AND state='OPEN'`, now, now, id); err != nil {
+			return err
+		}
+		event, err := prepareEvent(EventInput{Type: "PromotionRecoveryObserved", ActorType: "kernel", CorrelationID: current.EffectID, Payload: map[string]any{"promotion_id": current.ID}})
+		if err != nil {
+			return err
+		}
+		if err := s.appendEvent(ctx, tx, "gate", id, event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) transitionPromotionLifecycle(ctx context.Context, tx *sql.Tx, current promotionRecord, succeeded bool, now string) error {

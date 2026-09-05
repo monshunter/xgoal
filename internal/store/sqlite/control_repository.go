@@ -97,6 +97,17 @@ func (s *Store) ClaimWork(
 		if err := ensureWorkCanBecomeReady(ctx, tx, work); err != nil {
 			return err
 		}
+		if _, err := readCheckout(ctx, tx); err == nil {
+			goalID, err := workGoalID(ctx, tx, work)
+			if err != nil {
+				return err
+			}
+			if err := claimCheckoutWork(ctx, tx, goalID, workID); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, basestore.ErrNotFound) {
+			return err
+		}
 		var activeLeases int
 		if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*)

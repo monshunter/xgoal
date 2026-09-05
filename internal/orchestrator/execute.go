@@ -31,8 +31,9 @@ import (
 )
 
 var (
-	errProjectNetworkGate = errors.New("bootstrap requires project network authorization")
-	errValidatorChange    = errors.New("attempt changes the trusted validator configuration")
+	errProjectNetworkGate    = errors.New("bootstrap requires project network authorization")
+	errValidatorChange       = errors.New("attempt changes the trusted validator configuration")
+	errExecutionStillRunning = errors.New("execution shutdown could not be confirmed")
 )
 
 type validationEvidence struct {
@@ -157,6 +158,26 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return err
 	}
 	claimed = true
+	var environments []environment.Handle
+	cleanupEnvironments := func() error {
+		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		var result error
+		for index := len(environments) - 1; index >= 0; index-- {
+			result = errors.Join(result, engine.environment.Cleanup(cleanupContext, environments[index]))
+		}
+		if result == nil {
+			environments = nil
+		}
+		return result
+	}
+	defer cleanupEnvironments()
+	fail := func(class reconcile.FailureClass, cause error, strategy, patchHash string) error {
+		if err := cleanupEnvironments(); err != nil {
+			cause = errors.Join(cause, errExecutionStillRunning, err)
+		}
+		return engine.failAttempt(ctx, goal, work, revision, lease, class, cause, strategy, patchHash)
+	}
 	attemptContext, cancelAttempt := context.WithCancelCause(ctx)
 	engine.registerWork(work.ID, cancelAttempt)
 	defer engine.unregisterWork(work.ID)
@@ -169,10 +190,10 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	}()
 	ctx = attemptContext
 	if _, _, err := engine.store.RecordWorkspace(ctx, attemptWorkspace); err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, "")
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	if err := engine.advanceAttempt(ctx, lease, domain.AttemptPreparing); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 
 	attemptEnvironment, environmentSnapshot, err := engine.prepareAttemptEnvironment(ctx, attemptWorkspace, revision, profile)
@@ -182,31 +203,31 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 			class = reconcile.PolicyBlocked
 		}
 		if _, evidenceErr := engine.recordEnvironmentFailureEvidence(ctx, work.ID, revision, integration.Tree, "attempt", err); evidenceErr != nil {
-			return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, errors.Join(err, evidenceErr), profile.ID, "")
+			return fail(reconcile.InternalInvariantViolation, errors.Join(err, evidenceErr), profile.ID, "")
 		}
-		return engine.failAttempt(ctx, goal, work, revision, lease, class, err, profile.ID, "")
+		return fail(class, err, profile.ID, "")
 	}
-	defer engine.environment.Cleanup(context.Background(), attemptEnvironment)
+	environments = append(environments, attemptEnvironment)
 	if _, _, err := engine.store.RecordEnvironmentSnapshot(ctx, attemptWorkspace.ID, environmentSnapshot); err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, "")
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	if err := engine.advanceAttempt(ctx, lease, domain.AttemptStarting); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	if err := engine.advanceAttempt(ctx, lease, domain.AttemptRunning); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	if err := engine.advanceWork(ctx, work.ID, domain.WorkRunning); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 
 	schema, err := protocol.Schema(protocol.SchemaAgentResult)
 	if err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	invocationID, err := randomID("invoke")
 	if err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	invocation := adapter.Invocation{
 		InvocationID: invocationID, AttemptID: attemptID, WorkItemID: work.ID, ProfileID: profile.ID,
@@ -225,37 +246,39 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	}
 	handle, err := runtimeAdapter.Start(ctx, invocation, nil)
 	if err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, classifyAgentError(err), err, profile.ID, "")
+		return fail(classifyAgentError(err), err, profile.ID, "")
 	}
 	workerVersion, err := engine.recordWorkerIfAlive(ctx, attemptID, handle)
 	if err != nil {
-		_ = runtimeAdapter.Cancel(context.Background(), handle)
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, "")
+		shutdownContext, requestShutdown := context.WithCancelCause(context.WithoutCancel(ctx))
+		requestShutdown(err)
+		_, shutdownErr := engine.waitAgent(shutdownContext, runtimeAdapter, handle)
+		return fail(reconcile.InternalInvariantViolation, errors.Join(err, shutdownErr), profile.ID, "")
 	}
 	claim, waitErr := engine.waitAgent(ctx, runtimeAdapter, handle)
-	if workerVersion > 0 {
+	if workerVersion > 0 && !errors.Is(waitErr, errExecutionStillRunning) {
 		if _, err := engine.store.MarkWorkerExited(context.Background(), attemptID, workerVersion, event("WorkerExited", "daemon", map[string]any{"pid": handle.PID})); err != nil {
-			return err
+			return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 		}
 	}
 	if waitErr != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, classifyAgentError(waitErr), waitErr, profile.ID, "")
+		return fail(classifyAgentError(waitErr), waitErr, profile.ID, "")
 	}
 	if err := claim.Validate(); err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.AgentProtocolInvalid, err, profile.ID, "")
+		return fail(reconcile.AgentProtocolInvalid, err, profile.ID, "")
 	}
 	if claim.Status != protocol.ResultCompleted {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.AgentProtocolInvalid, fmt.Errorf("agent returned %s: %s", claim.Status, claim.Summary), profile.ID, "")
+		return fail(reconcile.AgentProtocolInvalid, fmt.Errorf("agent returned %s: %s", claim.Status, claim.Summary), profile.ID, "")
 	}
 	sessionID, err := agentSessionID(runtimeAdapter, handle)
 	if err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.AgentProtocolInvalid, err, profile.ID, "")
+		return fail(reconcile.AgentProtocolInvalid, err, profile.ID, "")
 	}
 	if err := engine.advanceAttempt(ctx, lease, domain.AttemptCollecting); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	captured, err := patch.Capture(ctx, engine.repository, patch.CaptureSpec{
-		AttemptID: attemptID, WorktreePath: attemptWorkspace.Path,
+		AttemptID: attemptID, ExecutionPath: attemptWorkspace.Path, Identity: attemptWorkspace.Identity, ExcludePaths: attemptWorkspace.ExcludePaths,
 		BaseCommit: integration.Commit, BaseTree: integration.Tree, MaxFileBytes: maxPatchFile,
 	})
 	if err != nil {
@@ -263,39 +286,39 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		if !strings.Contains(err.Error(), "no changes") {
 			class = reconcile.ScopeViolation
 		}
-		return engine.failAttempt(ctx, goal, work, revision, lease, class, err, profile.ID, "")
+		return fail(class, err, profile.ID, "")
 	}
 	if changesValidatorConfig(captured) && engine.config.ScopePolicy.ValidatorChanges == "human-gate" {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.PolicyBlocked, errValidatorChange, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.PolicyBlocked, errValidatorChange, profile.ID, captured.Bundle.BundleHash)
 	}
 	bundlePath, err := engine.patches.Save(captured)
 	if err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	if _, _, err := engine.store.RecordPatchBundle(ctx, captured.Bundle, bundlePath); err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
 	}
 
 	validationID, err := randomID("validation")
 	if err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	validationWorkspace, err := engine.workspaces.Create(ctx, workspace.Spec{
 		ID: validationID, AttemptID: attemptID, Kind: workspace.Validation,
 		BaseCommit: integration.Commit, BaseTree: integration.Tree, ConfigHash: engine.configHash,
 	})
 	if err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.PatchConflict, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.PatchConflict, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	if _, _, err := engine.store.RecordWorkspace(ctx, validationWorkspace); err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	policy, err := scope.NewPolicy(work.WriteScope, engine.config.ScopePolicy.Deny)
 	if err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	replayed, err := patch.Replay(ctx, engine.repository, patch.ReplaySpec{
-		WorktreePath: validationWorkspace.Path, IntegrationCommit: integration.Commit, IntegrationTree: integration.Tree,
+		ExecutionPath: validationWorkspace.Path, Identity: validationWorkspace.Identity, ExcludePaths: validationWorkspace.ExcludePaths, IntegrationCommit: integration.Commit, IntegrationTree: integration.Tree,
 		Captured: captured, Policy: policy, MaxFileBytes: maxPatchFile,
 	})
 	if err != nil {
@@ -303,25 +326,25 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		if errors.Is(err, patch.ErrUnsafeReplay) || strings.Contains(strings.ToLower(err.Error()), "scope") {
 			class = reconcile.ScopeViolation
 		}
-		return engine.failAttempt(ctx, goal, work, revision, lease, class, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(class, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	if err := engine.advanceAttempt(ctx, lease, domain.AttemptValidating); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	if err := engine.advanceWork(ctx, work.ID, domain.WorkVerifying); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	validationHandle, _, err := engine.prepareValidationEnvironment(ctx, validationWorkspace, revision)
 	if err != nil {
 		if _, evidenceErr := engine.recordEnvironmentFailureEvidence(ctx, work.ID, revision, replayed.CandidateTree, "change-validation", err); evidenceErr != nil {
-			return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, errors.Join(err, evidenceErr), profile.ID, captured.Bundle.BundleHash)
+			return fail(reconcile.InternalInvariantViolation, errors.Join(err, evidenceErr), profile.ID, captured.Bundle.BundleHash)
 		}
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.EnvironmentPrepFailed, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.EnvironmentPrepFailed, err, profile.ID, captured.Bundle.BundleHash)
 	}
-	defer engine.environment.Cleanup(context.Background(), validationHandle)
+	environments = append(environments, validationHandle)
 	validation, err := engine.runValidators(ctx, registry, validationHandle, validationWorkspace, revision, attemptID, work.ID, replayed.CandidateTree, work.ValidatorIDs, evidence.SetChange)
 	if err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, classifyValidatorError(err), err, profile.ID, captured.Bundle.BundleHash)
+		return fail(classifyValidatorError(err), err, profile.ID, captured.Bundle.BundleHash)
 	}
 	evidenceIDs := make([]string, len(validation))
 	runIDs := make([]string, len(validation))
@@ -330,30 +353,36 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	}
 	setID, err := randomID("evidence_set_change")
 	if err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	changeSet, err := evidence.NewSet(setID, evidence.SetChange, revision.Hash, engine.configHash, replayed.CandidateTree, evidenceIDs, time.Now().UTC())
 	if err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	if err := engine.store.CreateEvidenceSet(ctx, changeSet); err != nil {
-		return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
 	}
 
 	if frozen.Mode == "standard" && engine.config.Review.RequiredInStandard {
 		if err := engine.advanceAttempt(ctx, lease, domain.AttemptReviewing); err != nil {
-			return err
+			return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 		}
 		if err := engine.runReview(ctx, profile, sessionID, revision, plan, work, validationWorkspace, replayed.CandidateTree, runIDs); err != nil {
-			return engine.failAttempt(ctx, goal, work, revision, lease, reconcile.ReviewBlocked, err, profile.ID, captured.Bundle.BundleHash)
+			return fail(reconcile.ReviewBlocked, err, profile.ID, captured.Bundle.BundleHash)
 		}
 	}
 	if err := engine.advanceAttempt(ctx, lease, domain.AttemptPromoting); err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
+	}
+	if err := cleanupEnvironments(); err != nil {
+		return fail(reconcile.EnvironmentPrepFailed, err, profile.ID, captured.Bundle.BundleHash)
+	}
+	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, replayed.CandidateTree); err != nil {
+		return fail(reconcile.PatchConflict, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	promotionID, err := randomID("promotion")
 	if err != nil {
-		return err
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 	observation, err := engine.promotions.Promote(ctx, promotion.Request{
 		ID: promotionID, EffectID: "effect_" + promotionID,
@@ -362,19 +391,24 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		WorkItemID: work.ID, AttemptID: attemptID, LeaseID: lease.ID, LeaseGeneration: lease.Generation,
 		BundleHash: captured.Bundle.BundleHash, EvidenceSetID: changeSet.ID,
 		IntegrationRef: integrationRef, OldCommit: integration.Commit, OldTree: integration.Tree,
-		CandidateTree: replayed.CandidateTree, ValidationWorktree: validationWorkspace.Path, CommitAt: time.Now().UTC(),
+		CandidateTree: replayed.CandidateTree, CommitAt: time.Now().UTC(),
+		ExecutionModel: promotion.CurrentDirectory, ExecutionPath: validationWorkspace.Path, CheckoutIdentity: &validationWorkspace.Identity, ExcludePaths: validationWorkspace.ExcludePaths,
 	})
 	if err != nil {
-		// A deterministically failed Promotion has already terminalized the
-		// Attempt and released its Lease in the journal transaction. Feed that
-		// fact back through Reconcile so the Work cannot remain stranded.
-		currentAttempt, attemptErr := engine.store.Attempt(ctx, attemptID)
-		currentWork, workErr := engine.store.WorkItem(ctx, work.ID)
-		if attemptErr == nil && workErr == nil && currentWork.State == domain.WorkReconciling &&
-			(currentAttempt.State == domain.AttemptFailed || currentAttempt.State == domain.AttemptQuarantined) {
-			return engine.recordAndWait(ctx, goal, currentWork, revision, currentAttempt, reconcile.PatchConflict, err, profile.ID, captured.Bundle.BundleHash)
+		// An external ref effect may already exist. Preserve its lease and
+		// journal intent until recovery can prove and observe the candidate.
+		recoveryContext, stopRecovery := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer stopRecovery()
+		pending, readErr := engine.store.RecoverablePromotions(recoveryContext)
+		if readErr != nil {
+			return errors.Join(err, readErr)
 		}
-		return errors.Join(err, attemptErr, workErr)
+		for _, record := range pending {
+			if record.ID == promotionID {
+				return engine.openPromotionRecoveryGate(recoveryContext, goal, record, err)
+			}
+		}
+		return fail(reconcile.PatchConflict, err, profile.ID, captured.Bundle.BundleHash)
 	}
 	if observation.IntegrationTree != replayed.CandidateTree {
 		return errors.New("promotion observation tree mismatch")
@@ -384,16 +418,31 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 }
 
 func (engine *Engine) integration(ctx context.Context, goalID string) (string, gitrepo.Revision, error) {
-	branch := engine.config.Orchestration.IntegrationBranchPrefix + goalID + "/integration"
-	if engine.config.Orchestration.IntegrationBranchPrefix == "" {
-		branch = "xgoal/" + goalID + "/integration"
-	}
-	base, err := engine.repository.ResolveRevision(ctx, engine.config.Project.BaseBranch)
+	identity, err := engine.repository.ReadCheckoutIdentity(ctx)
 	if err != nil {
 		return "", gitrepo.Revision{}, err
 	}
-	revision, _, err := engine.repository.EnsureIntegrationBranch(ctx, branch, base.Commit)
-	return "refs/heads/" + branch, revision, err
+	baseTree := identity.HeadTree
+	previous, err := engine.store.Checkout(ctx)
+	if err == nil && previous.Identity == identity {
+		baseTree = previous.AcceptedTree
+	} else if err != nil && !errors.Is(err, basestore.ErrNotFound) {
+		return "", gitrepo.Revision{}, err
+	}
+	current, err := engine.repository.SnapshotTree(ctx, gitrepo.SnapshotSpec{BaseTree: baseTree, ExcludePaths: []string{engine.runtimeRoot}, MaxFileBytes: maxPatchFile})
+	if err != nil {
+		return "", gitrepo.Revision{}, err
+	}
+	checkout, err := engine.store.AdmitCheckout(ctx, goalID, current.Identity, current.Tree)
+	if err != nil {
+		return "", gitrepo.Revision{}, err
+	}
+	ref := "refs/xgoal/goals/" + goalID + "/integration"
+	revision, _, err := engine.repository.EnsureIntegrationRef(ctx, ref, checkout.AcceptedCommit)
+	if err == nil && (revision.Commit != checkout.AcceptedCommit || revision.Tree != checkout.AcceptedTree) {
+		err = errors.New("private integration ref differs from the accepted checkout; recover the pending Promotion before continuing")
+	}
+	return ref, revision, err
 }
 
 func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot workspace.Snapshot, revision domain.GoalRevision, profile config.Agent) (environment.Handle, protocol.EnvironmentSnapshot, error) {
@@ -407,7 +456,8 @@ func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot wo
 	}
 	handle, err := engine.environment.Prepare(ctx, environment.Spec{
 		ID: "environment_" + snapshot.ID, WorktreePath: snapshot.Path,
-		BaseCommit: snapshot.BaseCommit, BaseTree: snapshot.BaseTree,
+		BaseCommit: snapshot.Identity.HeadCommit, BaseTree: snapshot.InputTree,
+		Identity: snapshot.Identity, ExcludePaths: snapshot.ExcludePaths,
 		ConfigHash: engine.configHash, GoalRevisionHash: revision.Hash,
 		EnvironmentAllowlist: profile.EnvironmentAllowlist, BootstrapHash: bootstrapHash,
 	})
@@ -425,10 +475,19 @@ func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot wo
 			GracePeriod: time.Second, Stdout: ioDiscard{}, Stderr: ioDiscard{},
 		})
 		cancel()
-		if runErr != nil || execution.ExitCode != 0 {
-			_ = engine.environment.Cleanup(context.Background(), handle)
-			return environment.Handle{}, protocol.EnvironmentSnapshot{}, fmt.Errorf("bootstrap %q failed with exit %d: %w", command.ID, execution.ExitCode, runErr)
+		verificationContext, stopVerification := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		checkoutErr := engine.environment.VerifyTree(verificationContext, handle, snapshot.InputTree)
+		stopVerification()
+		if runErr != nil || execution.ExitCode != 0 || checkoutErr != nil {
+			cleanupContext, stopCleanup := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			cleanupErr := engine.environment.Cleanup(cleanupContext, handle)
+			stopCleanup()
+			return environment.Handle{}, protocol.EnvironmentSnapshot{}, fmt.Errorf("bootstrap %q failed with exit %d: %w", command.ID, execution.ExitCode, errors.Join(runErr, checkoutErr, cleanupErr))
 		}
+	}
+	if err := engine.environment.VerifyTree(ctx, handle, snapshot.InputTree); err != nil {
+		_ = engine.environment.Cleanup(context.Background(), handle)
+		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
 	}
 	environmentSnapshot, err := engine.environment.Snapshot(ctx, handle)
 	if err != nil {
@@ -441,7 +500,8 @@ func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot wo
 func (engine *Engine) prepareValidationEnvironment(ctx context.Context, snapshot workspace.Snapshot, revision domain.GoalRevision) (environment.Handle, protocol.EnvironmentSnapshot, error) {
 	handle, err := engine.environment.Prepare(ctx, environment.Spec{
 		ID: "environment_" + snapshot.ID, WorktreePath: snapshot.Path,
-		BaseCommit: snapshot.BaseCommit, BaseTree: snapshot.BaseTree,
+		BaseCommit: snapshot.Identity.HeadCommit, BaseTree: snapshot.InputTree,
+		Identity: snapshot.Identity, ExcludePaths: snapshot.ExcludePaths,
 		ConfigHash: engine.configHash, GoalRevisionHash: revision.Hash,
 	})
 	if err != nil {
@@ -479,17 +539,22 @@ func (engine *Engine) runValidators(ctx context.Context, registry *validator.Reg
 		if err != nil {
 			return nil, err
 		}
-		receipt, err := runner.Run(ctx, validator.CommandRequest{
+		receipt, runErr := runner.Run(ctx, validator.CommandRequest{
 			RunID: runID, ValidatorID: validatorID, GoalRevisionHash: revision.Hash,
 			ConfigHash: engine.configHash, TreeHash: tree, EnvironmentHash: environmentRecord.Hash,
 			MaxOutputBytes: 16 << 20,
 		})
-		if err != nil {
-			return nil, err
+		if receipt.ID == "" {
+			return nil, runErr
 		}
-		run, _, err := engine.store.RecordValidatorRun(ctx, attemptID, workspaceSnapshot.ID, receipt)
+		recordContext, stopRecord := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		run, _, err := engine.store.RecordValidatorRun(recordContext, attemptID, workspaceSnapshot.ID, receipt)
+		stopRecord()
 		if err != nil {
-			return nil, err
+			return nil, errors.Join(runErr, err)
+		}
+		if runErr != nil {
+			return nil, runErr
 		}
 		if receipt.Result != protocol.CommandPassed {
 			return nil, fmt.Errorf("validator %q returned %s", validatorID, receipt.Result)
@@ -509,10 +574,19 @@ func (engine *Engine) runValidators(ctx context.Context, registry *validator.Reg
 		}
 		result = append(result, validationEvidence{ID: evidenceID, Validator: validatorID, Receipt: receipt, Hash: run.Hash, Flaky: definition.Flaky})
 	}
+	if err := engine.environment.StopServices(ctx, handle); err != nil {
+		return nil, err
+	}
+	if err := engine.environment.VerifyTree(ctx, handle, tree); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
 func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, implementationSession string, revision domain.GoalRevision, plan domain.PlanRevision, work domain.WorkItem, validationWorkspace workspace.Snapshot, candidateTree string, validatorRunIDs []string) error {
+	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, candidateTree); err != nil {
+		return err
+	}
 	profile, reviewer, err := engine.reviewerProfile(implementer)
 	if err != nil {
 		return err
@@ -524,7 +598,7 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 	if err != nil {
 		return err
 	}
-	packet, err := engine.reviews.Prepare(review.PrepareInput{
+	packet, err := engine.reviews.Prepare(ctx, review.PrepareInput{
 		ID: reviewID, GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash,
 		WorkItemID: work.ID, ImplementationAttemptID: validationWorkspace.AttemptID,
 		ImplementationProfileID: implementer.ID, ImplementationSessionID: implementationSession,
@@ -553,14 +627,20 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 		OutputSchema: schema, Environment: profileEnvironment(profile), PermissionMode: "dontAsk",
 		Tools: []string{"Read", "Glob", "Grep"}, Timeout: profile.Timeout.Duration, MaxOutputBytes: maxAgentOutput,
 	}, nil)
-	if err != nil {
-		return err
+	verificationContext, stopVerification := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	checkoutErr := engine.checkWorkspaceTree(verificationContext, validationWorkspace, candidateTree)
+	stopVerification()
+	if err != nil || checkoutErr != nil {
+		return errors.Join(err, checkoutErr)
 	}
 	if execution.SessionID == "" || execution.SessionID == implementationSession {
 		return errors.New("Reviewer session is not independent from implementation")
 	}
 	result, err := engine.reviewStore.SaveResult(reviewID, execution.Result)
 	if err != nil {
+		return err
+	}
+	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, candidateTree); err != nil {
 		return err
 	}
 	stored, _, err := engine.store.RecordReview(ctx, packet, result, execution.SessionID)
@@ -573,6 +653,13 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 	return nil
 }
 
+func (engine *Engine) checkWorkspaceTree(ctx context.Context, snapshot workspace.Snapshot, expectedTree string) error {
+	if snapshot.ExecutionModel != workspace.ExecutionCurrentDirectory || snapshot.Path != engine.projectRoot {
+		return errors.New("workspace requires migration to current-directory execution")
+	}
+	return engine.repository.CheckSnapshot(ctx, gitrepo.SnapshotSpec{BaseTree: snapshot.BaseTree, ExcludePaths: snapshot.ExcludePaths, MaxFileBytes: maxPatchFile}, snapshot.Identity, expectedTree)
+}
+
 func (engine *Engine) waitAgent(ctx context.Context, runtimeAdapter adapter.Adapter, handle adapter.Handle) (protocol.AgentResult, error) {
 	type outcome struct {
 		result protocol.AgentResult
@@ -580,7 +667,7 @@ func (engine *Engine) waitAgent(ctx context.Context, runtimeAdapter adapter.Adap
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		result, err := runtimeAdapter.Wait(ctx, handle)
+		result, err := runtimeAdapter.Wait(context.WithoutCancel(ctx), handle)
 		done <- outcome{result: result, err: err}
 	}()
 	for {
@@ -588,8 +675,24 @@ func (engine *Engine) waitAgent(ctx context.Context, runtimeAdapter adapter.Adap
 		case result := <-done:
 			return result.result, result.err
 		case <-ctx.Done():
-			_ = runtimeAdapter.Cancel(context.Background(), handle)
-			return protocol.AgentResult{}, context.Cause(ctx)
+			cleanupContext, stopCleanup := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			cancelled := make(chan error, 1)
+			go func() { cancelled <- runtimeAdapter.Cancel(cleanupContext, handle) }()
+			var cancelErr error
+			select {
+			case cancelErr = <-cancelled:
+			case <-cleanupContext.Done():
+				stopCleanup()
+				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), errExecutionStillRunning)
+			}
+			select {
+			case <-done:
+				stopCleanup()
+				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), cancelErr)
+			case <-cleanupContext.Done():
+				stopCleanup()
+				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), cancelErr, errExecutionStillRunning)
+			}
 		}
 	}
 }

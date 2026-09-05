@@ -65,6 +65,15 @@ func (s *Store) CancelWork(ctx context.Context, id string, expectedVersion int64
 		if err := domain.ValidateWorkTransition(work.State, domain.WorkCancelled); err != nil {
 			return fmt.Errorf("work item %q cannot be cancelled: %v: %w", id, err, basestore.ErrConflict)
 		}
+		if s.info.SchemaVersion >= 8 {
+			var pending int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotions p JOIN goals g ON g.id=p.goal_id WHERE p.work_item_id=? AND g.execution_model='current-directory' AND p.state NOT IN ('OBSERVED','FAILED')`, id).Scan(&pending); err != nil {
+				return err
+			}
+			if pending != 0 {
+				return fmt.Errorf("recover the pending promotion before cancelling this work: %w", basestore.ErrConflict)
+			}
+		}
 
 		lease, leaseErr := scanLease(tx.QueryRowContext(ctx, `
 SELECT id, work_item_id, attempt_id, holder, generation, state,

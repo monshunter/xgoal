@@ -44,7 +44,7 @@ agents:
     environmentAllowlist: [PATH, HOME, TMPDIR]
 
 workspace:
-  provider: git-worktree
+  provider: current-directory
   keepFailed: true
   cleanupCompletedAfter: 168h
 

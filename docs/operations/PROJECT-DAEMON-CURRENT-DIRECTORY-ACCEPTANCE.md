@@ -27,6 +27,22 @@
 
 最终组合回归 `go test -race ./internal/project ./internal/projectinit ./internal/store/sqlite ./internal/api ./internal/app ./internal/daemon ./internal/cli ./internal/doctor ./internal/control ./internal/adapter/codex ./internal/adapter/claude -count=1` 全部通过；`go test ./...` 全仓通过。格式、`go vet ./...` 和 Diff 检查通过。[REVIEW-044](../reviews/REVIEW-044-change-project-daemon-isolation.md) 为 `PASS_WITH_NOTES`，唯一 note 为上述 WAL 边界，无阻塞。PLAN-009 已完成对账。未将完整 Goal、所有角色进程恢复或当前目录执行标为通过。
 
-## PLAN-011 与 PLAN-010：待实施与验收
+## PLAN-011：当前主目录执行
 
-当前目录执行、私有 Tree/Evidence 链路、旧配置/历史兼容、持久 Planner、所有角色进程归属与双项目完整 Goal 尚未验收。AC-ISO-001、AC-BG、AC-CWD 保持未完成。真实 Provider smoke 与 Linux 原生进程测试将在后续阶段单列；不以交叉编译替代运行证据。
+已取得的定向 Evidence：
+
+- `internal/gitrepo` / `patch` 的 race 回归通过；私有 index 原始字节快照覆盖 binary/rename/mode/symlink/delete、非忽略 untracked、Unicode 名称与冲突。FIFO 被 Git 文件清单遗漏、私有 ref 为 symref 时可能写用户分支、replace refs 改变对象读回这三类问题均有失败复现和修复后通过的测试。Git filters/hooks/fsmonitor 不参与快照与审计提交。
+- `internal/workspace`：Attempt/Validation 记录共用实际主目录；清理只删各自 marker 与空元数据容器，源码保留；v1 marker 哈希保持可读，旧目录不能被新 Cleanup 删除。`internal/store/sqlite` 的迁移测试验证 schema 7→8 备份、历史 Report 哈希不变与旧 Goal 迁移等待。
+- Checkout 状态与 ClaimWork 共用事务；拒绝未知 dirty 基线和跨 Goal 接管。失败 retry 只认同一 Work 的精确 observed Tree、原身份和活跃 Plan，专用 Gate 与 Work/Goal 转换原子发生。独立审查补充了旧 pending Promotion 阻塞新 Goal、未处理现场 replan、过期 Lease 失败收尾的回归。
+- `internal/environment` / `validator` / `review` / `orchestrator` race 回归通过。Validator 退出 0 但修改源码仍失败；bootstrap/Reviewer 非零退出并修改源码也不能把现场记为可接受结果。失败服务日志保留，停止服务后才释放 handle。
+- `internal/promotion` race 通过：私有 Commit/Ref，不移动用户 HEAD/index；覆盖 Marker/Commit/ref CAS/Observe 崩溃窗口、ref 已更新后源码漂移与恢复、两个 Work 顺序晋升。SQLite Observe 原子更新 accepted tuple，并关闭已确认恢复的专用 Gate；待恢复 Promotion 的 Lease 不被 Worker 回收提前撤销。
+- `internal/control.TestPublicFinalizeRejectsLiveCheckoutDriftAndPreservesScene`的源码、HEAD Commit、符号分支、index 与私有 ref 漂移场景均拒绝公开 finalize，拒绝时保留状态和文件。临时 overlay 去掉公共 dispatch 的 guard 后源码漂移回归按预期失败，实际源码没有被该实验修改。
+- `internal/app.TestRealUnixAPIRunsGoalToVerifiedFinalReport` 完整 Unix API Goal 到 `COMPLETED`；旧配置重启后原 Report 逐字节可读。配置不兼容时不构造 Engine/Adapter 执行目录，其他字段非法不会被迁移提示掩盖。config/projectinit/doctor/control/app 组合 race 全通过。
+
+`internal/cli.TestRealCLICurrentDirectoryTwoGoalsPreserveGitAndBindFinalEvidence` 已通过（47.716s）：真实构建 CLI、init/config validate、后台 daemon start、第一 Goal 自然语言规划、第二 Goal Proposal、两次 `run --wait`、status/report、stop。所有角色 CWD 均为当前主目录，第二私有 Commit parent 等于第一 accepted Commit；HEAD、index 字节、用户 refs 与 worktree 列表保持不变。停止后只读 SQLite 确认 Final Tree = 私有 ref Tree = Report Tree = final Evidence/Receipt Tree。Provider 是本地协议 fixture，不能将此记录表述为真实模型服务验收。
+
+独立审查复现并修复了终验期间私有 ref 漂移仍可能完成、Worker 登记失败后取消失败被忽略两项问题。最终四项失败/恢复定向 race 通过（50.112s）；SQLite/workspace/Codex Adapter race 通过（24.998s/4.003s/3.586s）。全仓回归首轮只有 opt-in smoke 旧接口编译失败，适配后 Codex Adapter 单包通过；最后的全仓 `go test ./... -count=1` 全部通过：orchestrator 136.442s、真实 CLI 63.228s、app 35.880s、SQLite 11.060s。默认全局 Git ignore（含缺失→创建、XDG 空值、显式空值与尾空格路径）身份遗漏已修复，Git/Patch 最终 race 通过 15.758s/9.755s。`work.cancel` 在当前未决 Promotion 存在时明确拒绝，避免撤销其读回所需 Lease；旧冻结 Promotion 仍可取消。以上两项有发现方独立复现与修复后通过证据。`go vet ./...`、格式与 Diff 检查通过。[REVIEW-045](../reviews/REVIEW-045-change-current-directory.md) 汇总跨 owner 独立审查及已修复发现，PLAN-011 已完成对账。
+
+## PLAN-010：待实施与验收
+
+持久 Planner、所有角色进程归属、客户端断连与双项目完整 Goal 尚未验收。AC-ISO-001、AC-BG 与包含全部中断恢复语义的 AC-CWD-005 保持未完成。真实 Provider smoke 与 Linux 原生进程测试将在后续阶段单列；不以交叉编译替代运行证据。

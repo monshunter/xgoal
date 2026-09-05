@@ -262,12 +262,17 @@ func (engine *Engine) Recover(ctx context.Context) error {
 		revision, revisionErr := engine.activeGoalRevision(ctx, goal)
 		if errors.Join(attemptErr, workErr, goalErr, revisionErr) == nil && work.State == domain.WorkReconciling &&
 			(attempt.State == domain.AttemptFailed || attempt.State == domain.AttemptQuarantined) {
-			if err := engine.recordAndWait(ctx, goal, work, revision, attempt, reconcile.PatchConflict, promoteErr, attempt.AgentProfileID, record.BundleHash); err != nil {
+			if err := engine.recordAndWait(ctx, goal, work, revision, attempt, reconcile.PatchConflict, promoteErr, attempt.AgentProfileID, record.BundleHash, false); err != nil {
 				return err
 			}
 			continue
 		}
-		return errors.Join(promoteErr, attemptErr, workErr, goalErr, revisionErr)
+		if joined := errors.Join(attemptErr, workErr, goalErr, revisionErr); joined != nil {
+			return errors.Join(promoteErr, joined)
+		}
+		if err := engine.openPromotionRecoveryGate(ctx, goal, record, promoteErr); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -311,6 +316,17 @@ func (engine *Engine) RunGoal(parent context.Context, goalID string) error {
 		delete(engine.runs, goalID)
 		engine.mu.Unlock()
 	}()
+
+	model, err := engine.store.GoalExecutionModel(ctx, goalID)
+	if err != nil {
+		return err
+	}
+	if model != workspace.ExecutionCurrentDirectory {
+		return sqlite.ErrExecutionMigrationRequired
+	}
+	if err := engine.Recover(ctx); err != nil {
+		return err
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {

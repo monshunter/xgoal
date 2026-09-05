@@ -78,7 +78,7 @@ orchestration: {defaultMode: standard, maxParallel: 1, leaseTTL: 400ms, heartbea
 agents:
   - {id: codex-implementer, adapter: codex-cli, command: %q, roles: [planner, implementer], timeout: 10s, sandbox: workspace-write, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
   - {id: claude-reviewer, adapter: claude-cli, command: %q, roles: [reviewer], timeout: 10s, permissionMode: dontAsk, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
-workspace: {provider: git-worktree, keepFailed: true, cleanupCompletedAfter: 1h}
+workspace: {provider: current-directory, keepFailed: true, cleanupCompletedAfter: 1h}
 runtime: {provider: local-process, isolationLevelRequired: L0, projectNetwork: deny, projectSecrets: deny}
 scopePolicy: {deny: ["/.git/**", "/.env"], validatorChanges: human-gate}
 validators:
@@ -110,12 +110,24 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if err != nil || status != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s err=%v", status, body, err)
 	}
-	deadline := time.Now().Add(15 * time.Second)
+	// The current-directory contract includes external Git identity and raw
+	// tree checks through final validation. Keep a bounded budget for the
+	// entire completion/report path, not only the implementation Attempt.
+	started := time.Now()
+	deadline := started.Add(45 * time.Second)
+	lastProgress := ""
 	var observed map[string]any
 	for time.Now().Before(deadline) {
 		status, body, err = client.Do(context.Background(), http.MethodGet, "/v1/goals/goal_unix_e2e", "", nil)
-		if err == nil && status == http.StatusOK && json.Unmarshal(body, &observed) == nil && observed["state"] == string(domain.GoalCompleted) {
-			break
+		if err == nil && status == http.StatusOK && json.Unmarshal(body, &observed) == nil {
+			progress := fmt.Sprintf("state=%v version=%v", observed["state"], observed["version"])
+			if progress != lastProgress {
+				t.Logf("Goal progress after %s: %s", time.Since(started).Round(time.Millisecond), progress)
+				lastProgress = progress
+			}
+			if observed["state"] == string(domain.GoalCompleted) {
+				break
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -126,8 +138,29 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if err != nil || status != http.StatusOK || !strings.Contains(string(body), `"AC-UNIX"`) || !strings.Contains(string(body), `"output-check"`) {
 		t.Fatalf("report status=%d body=%s err=%v", status, body, err)
 	}
+	originalReport := string(body)
 	cancel()
 	if err := <-serveResult; err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
+	legacyConfig := strings.Replace(configuration, "provider: current-directory", "provider: git-worktree", 1)
+	if err := os.WriteFile(filepath.Join(project, "xgoal.yaml"), []byte(legacyConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stopLegacy, legacyResult := startMigrationTestDaemon(t, paths)
+	waitForServeSocket(t, paths.SocketPath, legacyResult)
+	legacyClient, err := api.NewProjectClient(paths.SocketPath, time.Second, app.ExpectedIdentity(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacyClient.Close()
+	status, body, err = legacyClient.Do(context.Background(), http.MethodGet, "/v1/goals/goal_unix_e2e/report", "", nil)
+	if err != nil || status != http.StatusOK || string(body) != originalReport {
+		t.Fatalf("legacy configuration changed historical Report: %d %s %v", status, body, err)
+	}
+	stopLegacy()
+	if err := <-legacyResult; err != nil {
 		t.Fatal(err)
 	}
 }

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	baseadapter "github.com/monshunter/xgoal/internal/adapter"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/validator"
@@ -79,15 +81,22 @@ func NewCoordinator(runtimeRoot string) (*Coordinator, error) {
 	return &Coordinator{root: root, store: store}, nil
 }
 
-func (coordinator *Coordinator) Prepare(input PrepareInput) (PacketArtifact, error) {
+func (coordinator *Coordinator) Prepare(ctx context.Context, input PrepareInput) (PacketArtifact, error) {
 	if !component(input.ID) || !component(input.WorkItemID) || !component(input.ImplementationAttemptID) ||
 		!component(input.ImplementationProfileID) || !component(input.ReviewerProfileID) ||
 		input.ImplementationSessionID == "" || input.CandidateTree == "" || len(input.ValidatorRunIDs) == 0 {
 		return PacketArtifact{}, errors.New("review preparation identity and reviewer profile are required")
 	}
 	marker, err := workspace.ReadMarkerSnapshot(input.ValidationWorkspace.MarkerPath)
-	if err != nil || marker.ID != input.ValidationWorkspace.ID || marker.Kind != workspace.Validation || marker.AttemptID != input.ImplementationAttemptID || marker.Path != input.ValidationWorkspace.Path {
+	if err != nil || marker.ID != input.ValidationWorkspace.ID || marker.Kind != workspace.Validation || marker.AttemptID != input.ImplementationAttemptID || marker.Path != input.ValidationWorkspace.Path || marker.ExecutionModel != workspace.ExecutionCurrentDirectory || marker.Identity != input.ValidationWorkspace.Identity || !slices.Equal(marker.ExcludePaths, input.ValidationWorkspace.ExcludePaths) {
 		return PacketArtifact{}, errors.New("review validation workspace does not match its immutable marker")
+	}
+	repository, err := gitrepo.Open(ctx, marker.Path)
+	if err != nil {
+		return PacketArtifact{}, err
+	}
+	if err := repository.CheckSnapshot(ctx, gitrepo.SnapshotSpec{BaseTree: marker.BaseTree, ExcludePaths: marker.ExcludePaths}, marker.Identity, input.CandidateTree); err != nil {
+		return PacketArtifact{}, err
 	}
 	patchStore, err := patch.NewStore(coordinator.root)
 	if err != nil {

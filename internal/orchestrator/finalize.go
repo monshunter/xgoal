@@ -12,6 +12,7 @@ import (
 	"github.com/monshunter/xgoal/internal/completion"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/evidence"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/protocol"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
@@ -143,6 +144,16 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 	if err != nil {
 		return err
 	}
+	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, integration.Tree); err != nil {
+		return err
+	}
+	currentRef, err := engine.repository.ResolveRef(ctx, "refs/xgoal/goals/"+goal.ID+"/integration")
+	if err != nil {
+		return err
+	}
+	if currentRef.Commit != integration.Commit || currentRef.Tree != integration.Tree {
+		return fmt.Errorf("%w: private integration ref changed during final validation", gitrepo.ErrRefConflict)
+	}
 	result, _, err := engine.finalizer.Finalize(ctx, goal.ID, goal.Version, facts, report, event("GoalCompleted", "kernel", map[string]any{"tree": integration.Tree, "evidence_set_id": finalSet.ID}))
 	if err != nil {
 		return err
@@ -245,7 +256,7 @@ func (engine *Engine) buildFinalReport(frozen frozenContract, revision domain.Go
 		ProtocolVersion: finalreport.ProtocolVersion,
 		Goal:            finalreport.GoalTrace{ID: status.Goal.ID, Raw: revision.RawGoal, Revision: revision.Revision, RevisionHash: revision.Hash, ConfigHash: frozen.ConfigHash, CreatedBy: frozen.CreatedBy, Authority: domain.AuthorityDecision},
 		Work:            works, Attempts: attempts,
-		Final:    finalreport.FinalTrace{Commit: commit, Tree: tree, EvidenceSetID: setID, Scope: uniqueSorted(scopeValues), Decisions: []finalreport.Statement{{Text: "Only independently validated Git state was promoted to the integration branch.", Authority: domain.AuthorityDeterministic}}, Authority: domain.AuthorityFact},
+		Final:    finalreport.FinalTrace{Commit: commit, Tree: tree, EvidenceSetID: setID, Scope: uniqueSorted(scopeValues), Decisions: []finalreport.Statement{{Text: "The validated result remains in the current project directory; its commit is recorded under a private xgoal audit ref while the user's HEAD, branch and index remain unchanged.", Authority: domain.AuthorityDeterministic}}, Authority: domain.AuthorityFact},
 		Criteria: criteria, Validators: validators, Gates: gates, Findings: findingTraces,
 		Execution: []finalreport.ExecutionMetric{
 			{Name: "wall_time", Unit: "millisecond", Known: true, Value: completedAt.Sub(revision.FrozenAt).Milliseconds(), Authority: domain.AuthorityFact},

@@ -44,6 +44,7 @@ type Service struct {
 	configHash    string
 	validators    map[string]bool
 	configuration *config.Config
+	configError   error
 	lifecycle     Lifecycle
 }
 
@@ -71,6 +72,7 @@ func New(store *sqlite.Store, projectRoot string) (*Service, error) {
 	validators := make(map[string]bool)
 	configHash := ""
 	var loadedConfiguration *config.Config
+	var configurationError error
 	if cfg, loadErr := config.LoadFile(filepath.Join(projectRoot, "xgoal.yaml")); loadErr == nil {
 		configHash, err = cfg.Hash()
 		if err != nil {
@@ -80,19 +82,43 @@ func New(store *sqlite.Store, projectRoot string) (*Service, error) {
 			validators[validator.ID] = true
 		}
 		loadedConfiguration = &cfg
-	} else if !errors.Is(loadErr, os.ErrNotExist) {
+	} else if errors.Is(loadErr, config.ErrMigrationRequired) || errors.Is(loadErr, os.ErrNotExist) {
+		configurationError = loadErr
+	} else {
 		return nil, fmt.Errorf("load xgoal.yaml: %w", loadErr)
 	}
-	return &Service{store: store, projectRoot: projectRoot, finalizer: finalizer, configHash: configHash, validators: validators, configuration: loadedConfiguration}, nil
+	return &Service{store: store, projectRoot: projectRoot, finalizer: finalizer, configHash: configHash, validators: validators, configuration: loadedConfiguration, configError: configurationError}, nil
 }
 
 func (service *Service) SetLifecycle(lifecycle Lifecycle) { service.lifecycle = lifecycle }
+
+// ExecutionConfiguration returns the same validated startup snapshot used by
+// the control service. App must not reload a different configuration between
+// constructing Control and Engine, or run an Engine for legacy configuration.
+func (service *Service) ExecutionConfiguration() (config.Config, bool) {
+	if service.configError != nil || service.configuration == nil {
+		return config.Config{}, false
+	}
+	return *service.configuration, true
+}
 
 func (service *Service) Events(ctx context.Context, goalID, afterID string, limit int) ([]domain.Event, error) {
 	return service.store.GoalEventsAfter(ctx, goalID, afterID, limit)
 }
 
 func (service *Service) Execute(ctx context.Context, operation api.Operation) (int, any, error) {
+	if errors.Is(service.configError, config.ErrMigrationRequired) && operation.Name != "goal.cancel" && operation.Name != "work.cancel" {
+		return 0, nil, &api.APIError{Status: http.StatusConflict, Code: "CONFIG_MIGRATION_REQUIRED", Message: service.configError.Error()}
+	}
+	if operation.Name == "goal.pause" || operation.Name == "goal.resume" || operation.Name == "goal.replan" || operation.Name == "goal.finalize" {
+		model, err := service.store.GoalExecutionModel(ctx, operation.ResourceID)
+		if err != nil {
+			return 0, nil, mapStoreError(err)
+		}
+		if model == "git-worktree" {
+			return 0, nil, checkoutAPIError(sqlite.ErrExecutionMigrationRequired)
+		}
+	}
 	switch operation.Name {
 	case "project.init":
 		var request struct{}
@@ -234,12 +260,9 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 		if err := api.DecodeStrict(operation.Body, &request); err != nil || request.ExpectedVersion <= 0 {
 			return 0, nil, invalid("expected_version is required", err)
 		}
-		if err := service.store.UpdateWorkState(ctx, operation.ResourceID, request.ExpectedVersion, domain.WorkReady, sqlite.EventInput{Type: "WorkRetryReady", ActorType: "human", Payload: map[string]any{"reason": request.Reason}}); err != nil {
-			return 0, nil, mapStoreError(err)
-		}
-		work, err := service.store.WorkItem(ctx, operation.ResourceID)
+		work, err := service.retryCheckoutWork(ctx, operation.ResourceID, request)
 		if err != nil {
-			return 0, nil, mapStoreError(err)
+			return 0, nil, err
 		}
 		if goalID, resolveErr := service.store.WorkGoalID(ctx, work.ID); resolveErr == nil {
 			service.wake(goalID)
@@ -262,6 +285,9 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 		var request finalizeRequest
 		if err := api.DecodeStrict(operation.Body, &request); err != nil || request.ExpectedVersion <= 0 {
 			return 0, nil, invalid("expected_version, completion facts, and report are required", err)
+		}
+		if err := service.checkFinalizeCheckout(ctx, operation.ResourceID, request); err != nil {
+			return 0, nil, err
 		}
 		result, record, err := service.finalizer.Finalize(ctx, operation.ResourceID, request.ExpectedVersion, request.Facts, request.Report, sqlite.EventInput{Type: "GoalCompleted", ActorType: "kernel", Payload: map[string]any{"protocol_version": finalreport.ProtocolVersion}})
 		if err != nil {
@@ -333,7 +359,17 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 			"validation_summary": status.Validation, "latest_material_progress_hash": status.LatestProgressHash,
 			"execution_boundary": service.executionBoundary(),
 			"authority":          status.Authority,
+			"execution_model":    status.ExecutionModel,
 		}
+		blocker := service.executionBlocker()
+		if status.ExecutionBlocker != "" {
+			if blocker != "" {
+				blocker += "; "
+			}
+			blocker += status.ExecutionBlocker
+		}
+		response["execution_available"] = blocker == "" && status.ExecutionModel == workspace.ExecutionCurrentDirectory
+		response["execution_blocker"] = blocker
 		return http.StatusOK, response, nil
 	case "goal.work-items":
 		items, err := service.store.GoalWorkItems(ctx, operation.ResourceID)
@@ -596,7 +632,7 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 	validators := []any{}
 	unmet := []string{}
 	if service.configuration == nil {
-		unmet = append(unmet, "valid xgoal.yaml is unavailable")
+		unmet = append(unmet, service.executionBlocker())
 	} else {
 		for _, profile := range service.configuration.Agents {
 			profiles = append(profiles, service.passiveProfile(ctx, profile))
@@ -625,11 +661,22 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 	return map[string]any{
 		"project_root": service.projectRoot, "store": service.store.Info(), "tools": tools,
 		"os": runtime.GOOS, "arch": runtime.GOARCH, "git": gitFacts, "config_hash": service.configHash,
+		"execution_available": service.executionBlocker() == "", "execution_blocker": service.executionBlocker(),
 		"agent_profiles": profiles, "validators": validators, "unmet_capabilities": unmet,
 		"provider_transport": boundary["provider_transport"], "provider_credential_status": "passive_not_inspected",
 		"active_probe_evidence": "none", "project_network_policy": boundary["project_network_policy"], "project_secrets_policy": boundary["project_secrets_policy"], "isolation_level": boundary["isolation_level"],
 		"isolation_limit": "local-process L0 cannot strongly isolate the user home or network", "model_calls": 0,
 	}
+}
+
+func (service *Service) executionBlocker() string {
+	if service.configError != nil && !errors.Is(service.configError, os.ErrNotExist) {
+		return service.configError.Error()
+	}
+	if service.configuration == nil {
+		return "CONFIG_UNAVAILABLE: a valid xgoal.yaml is required for execution"
+	}
+	return ""
 }
 
 func (service *Service) executionBoundary() map[string]any {

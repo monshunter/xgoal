@@ -37,6 +37,8 @@ type ValidationSummary struct {
 }
 
 type GoalStatus struct {
+	ExecutionModel     string                      `json:"execution_model"`
+	ExecutionBlocker   string                      `json:"execution_blocker,omitempty"`
 	Goal               domain.Goal                 `json:"goal"`
 	GoalRevision       *GoalRevisionSummary        `json:"goal_revision,omitempty"`
 	WorkItems          []domain.WorkItem           `json:"work_items"`
@@ -58,6 +60,10 @@ func (s *Store) GoalStatus(ctx context.Context, goalID string) (GoalStatus, erro
 	if err != nil {
 		return GoalStatus{}, err
 	}
+	model, err := s.GoalExecutionModel(ctx, goalID)
+	if err != nil {
+		return GoalStatus{}, err
+	}
 	result := GoalStatus{Goal: goal, Authority: map[string]domain.Authority{
 		"goal": domain.AuthorityFact, "goal_revision": domain.AuthorityDecision, "work_items": domain.AuthorityFact, "attempts": domain.AuthorityFact,
 		"leases": domain.AuthorityFact, "workspaces": domain.AuthorityFact, "gates": domain.AuthorityDecision,
@@ -65,6 +71,10 @@ func (s *Store) GoalStatus(ctx context.Context, goalID string) (GoalStatus, erro
 		"latest_tree": domain.AuthorityFact, "validation_summary": domain.AuthorityDeterministic,
 		"latest_material_progress_hash": domain.AuthorityDeterministic,
 	}}
+	result.ExecutionModel = model
+	if model != "current-directory" && goal.State != domain.GoalCompleted && goal.State != domain.GoalCancelled {
+		result.ExecutionBlocker = ErrExecutionMigrationRequired.Error()
+	}
 	if goal.ActiveRevisionID != "" {
 		revision, revisionErr := s.GoalRevision(ctx, goal.ActiveRevisionID)
 		if revisionErr != nil {

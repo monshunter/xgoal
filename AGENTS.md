@@ -5,7 +5,7 @@
 
 `xgoal` 是一个面向长期软件工程目标的本地多 Agent 编排与证据闭环系统。它以确定性 Go Kernel 负责任务状态、租约、策略、工作区、验证、恢复、晋升与完成判断，通过 CLI Adapter 调用 Codex CLI 和 Claude Code CLI；Agent 的声明只作为 Claim，最终完成必须由绑定当前 Goal Revision 与最终 Git Tree 的 Evidence 证明。
 
-当前仓库已实现 v0.1 的自然语言 Planner、SQLite 单一状态、Unix Socket CLI/API、Codex/Claude Adapter、独立 worktree/Patch、受信 Validator/Evidence、独立 Review、Gate/Reconcile、串行 Promotion、崩溃恢复、Final Report 与固定 Benchmark Harness。v0.1 只面向 macOS/Linux 上的可信本地 Git 仓库，默认串行执行和 L0 本地进程隔离，不承诺容器级安全，不自动 push、发布或部署生产。
+当前仓库已实现 v0.1 的自然语言 Planner、SQLite 单一状态、Unix Socket CLI/API、Codex/Claude Adapter、当前主目录串行执行与私有 index/Patch、受信 Validator/Evidence、独立 Review、Gate/Reconcile、串行 Promotion、崩溃恢复、Final Report 与固定 Benchmark Harness。v0.1 只面向 macOS/Linux 上的可信本地 Git 仓库，默认串行执行和 L0 本地进程隔离，不承诺容器级安全，不自动 push、发布或部署生产。
 
 ```text
 .
@@ -25,7 +25,7 @@
 └── AGENTS.md                     # 项目事实与工程运行合同
 ```
 
-当前 CLI 实现 `init`、`doctor`、`run`、`status`、`logs`、`gates`、`approve`、`pause/resume/cancel`、`work retry`、`goal replan/finalize`、`report`、`clean`、`benchmark`、`config validate` 与 `daemon serve`。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
+当前 CLI 实现 `init`、`doctor`、`run`、`status`、`logs`、`gates`、`approve`、`pause/resume/cancel`、`work retry`、`goal replan/finalize`、`report`、`clean`、`benchmark`、`config validate` 与 `daemon start/status/stop/serve`。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
 
 ---
 

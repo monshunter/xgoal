@@ -12,84 +12,38 @@ import (
 	"github.com/monshunter/xgoal/internal/workspace"
 )
 
-func TestIntegrationAndDetachedWorkspaceLifecyclePreservesUserCheckout(t *testing.T) {
-	t.Parallel()
-
+func TestCurrentDirectorySessionRejectsChangedUserGitIdentity(t *testing.T) {
 	ctx := context.Background()
-	repositoryPath := filepath.Join(t.TempDir(), "trusted repo")
-	initializeRepository(t, repositoryPath)
-	repository, err := gitrepo.Open(ctx, repositoryPath)
+	root := filepath.Join(t.TempDir(), "repo")
+	initializeRepository(t, root)
+	repo, err := gitrepo.Open(ctx, root)
 	if err != nil {
-		t.Fatalf("gitrepo.Open() error = %v", err)
+		t.Fatal(err)
 	}
-	base, err := repository.ResolveRevision(ctx, "HEAD")
+	base, err := repo.ResolveRevision(ctx, "HEAD")
 	if err != nil {
-		t.Fatalf("ResolveRevision() error = %v", err)
+		t.Fatal(err)
 	}
-	integration, created, err := repository.EnsureIntegrationBranch(ctx, "xgoal/goal_1/integration", base.Commit)
+	manager, err := workspace.NewManager(filepath.Join(t.TempDir(), "runtime"), repo)
 	if err != nil {
-		t.Fatalf("EnsureIntegrationBranch() error = %v", err)
+		t.Fatal(err)
 	}
-	if !created || integration.Commit != base.Commit || integration.Tree != base.Tree {
-		t.Fatalf("integration = %+v, created = %v", integration, created)
-	}
-
-	runtimeRoot := filepath.Join(t.TempDir(), "runtime")
-	manager, err := workspace.NewManager(runtimeRoot, repository)
+	session, err := manager.Create(ctx, workspace.Spec{ID: "session", AttemptID: "attempt", Kind: workspace.Attempt, BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: strings.Repeat("a", 64)})
 	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
+		t.Fatal(err)
 	}
-	attempt, err := manager.Create(ctx, workspace.Spec{
-		ID: "workspace_attempt_1", AttemptID: "attempt_1", Kind: workspace.Attempt,
-		BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: strings.Repeat("a", 64),
-	})
-	if err != nil {
-		t.Fatalf("Create(attempt) error = %v", err)
+	if err := os.WriteFile(filepath.Join(root, "agent.txt"), []byte("agent\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if attempt.HeadCommit != base.Commit || attempt.HeadTree != base.Tree || attempt.CommonDir != repository.CommonDir() {
-		t.Fatalf("attempt workspace = %+v", attempt)
+	runGit(t, root, "add", "agent.txt")
+	if _, err := manager.ReadBack(ctx, session.ID); err == nil {
+		t.Fatal("session accepted a changed user index")
 	}
-	if info, err := os.Stat(attempt.MarkerPath); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("attempt marker stat = %v, %v", info, err)
+	if err := manager.Cleanup(ctx, session.ID); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(attempt.Path, "agent.txt"), []byte("agent\n"), 0o600); err != nil {
-		t.Fatalf("write agent file: %v", err)
-	}
-	runGit(t, attempt.Path, "add", "agent.txt")
-	runGit(t, attempt.Path, "-c", "user.name=Agent", "-c", "user.email=agent@example.invalid", "commit", "--no-verify", "-m", "agent commit")
-	userHead := strings.TrimSpace(runGit(t, repositoryPath, "rev-parse", "HEAD"))
-	integrationHead := strings.TrimSpace(runGit(t, repositoryPath, "rev-parse", "refs/heads/xgoal/goal_1/integration"))
-	if userHead != base.Commit || integrationHead != base.Commit {
-		t.Fatalf("agent commit changed user/integration refs: user=%s integration=%s base=%s", userHead, integrationHead, base.Commit)
-	}
-
-	readBack, err := manager.ReadBack(ctx, attempt.ID)
-	if err != nil {
-		t.Fatalf("ReadBack() error = %v", err)
-	}
-	if readBack.HeadCommit == base.Commit || readBack.BaseCommit != base.Commit || readBack.Kind != workspace.Attempt {
-		t.Fatalf("read-back workspace = %+v", readBack)
-	}
-	validation, err := manager.Create(ctx, workspace.Spec{
-		ID: "workspace_validation_1", AttemptID: "attempt_1", Kind: workspace.Validation,
-		BaseCommit: integration.Commit, BaseTree: integration.Tree, ConfigHash: strings.Repeat("a", 64),
-	})
-	if err != nil {
-		t.Fatalf("Create(validation) error = %v", err)
-	}
-	if validation.HeadCommit != base.Commit || validation.Path == attempt.Path {
-		t.Fatalf("validation workspace = %+v", validation)
-	}
-	if err := manager.Cleanup(ctx, validation.ID); err != nil {
-		t.Fatalf("Cleanup(validation) error = %v", err)
-	}
-	if err := manager.Cleanup(ctx, attempt.ID); err != nil {
-		t.Fatalf("Cleanup(attempt) error = %v", err)
-	}
-	for _, path := range []string{validation.Path, attempt.Path} {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Fatalf("cleaned worktree %s still exists: %v", path, err)
-		}
+	if _, err := os.Stat(filepath.Join(root, "agent.txt")); err != nil {
+		t.Fatal("cleanup removed user files")
 	}
 }
 

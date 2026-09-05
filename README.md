@@ -1,6 +1,6 @@
 # xgoal
 
-`xgoal` 是一个用 Go 实现的本地 Coding Agent 编排器。用户给出自然语言目标后，Planner 生成冻结的 Goal Contract 与 Work Graph；Kernel 以 SQLite 为唯一运行状态，串行调度 Codex CLI / Claude Code CLI，在独立 Git worktree 中实现、捕获 Patch、执行受信 Validator、独立 Review、晋升到私有 Integration Branch，最后在当前 Tree 上复验并生成可追溯报告。
+`xgoal` 是一个用 Go 实现的本地 Coding Agent 编排器。用户给出自然语言目标后，Planner 生成冻结的 Goal Contract 与 Work Graph；Kernel 以 SQLite 为唯一运行状态，串行调度 Codex CLI / Claude Code CLI，在当前 Git 主工作目录中实现、捕获 Patch、执行受信 Validator、独立 Review，并把验收结果记录到私有审计 Commit/Ref，最后在当前 Tree 上复验并生成可追溯报告。
 
 核心原则是：Agent 的完成声明只是 Claim，只有 Git/文件事实、受信命令 Receipt、当前 Evidence 与必要的人类决策能够推进完成状态。产品合同见 [产品 SPEC](xgoal-product-spec-v0.1.md)，实现设计见 [技术 SPEC](xgoal-technical-spec-v0.1.md)。
 
@@ -9,7 +9,7 @@
 - 单一 Go CLI/Daemon，Unix Socket HTTP/JSON API，每项目私有 SQLite/WAL 状态；
 - 自然语言、文件或 stdin Goal，严格 Planner Schema、冻结 Revision、DAG 与 Scope/Validator 校验；
 - Codex 与 Claude 的 Probe、Plan、Start、Wait、Cancel、Resume 和结构化输出适配；
-- 独立 Attempt/Validation worktree，完整 tracked/untracked/binary/rename/mode/symlink/delete Patch 捕获；
+- 同项目串行使用当前工作目录，以私有 index 捕获完整 tracked/untracked/binary/rename/mode/symlink/delete Patch；
 - `scope`、`command`、`file_assertion`、`runtime_probe`、`git_assertion` 五类受信 Validator、Command Receipt 与 Evidence；
 - Standard 独立 Reviewer Session、Finding、有限 Human Gate 与无进展 Reconcile；
 - Git ref CAS、xgoal Commit Trailer、Promotion Effect Journal 和崩溃后幂等读回；
@@ -93,6 +93,16 @@ source <(xgoal completion zsh)
 `daemon start` 在后台启动，等待身份握手与真实 readiness；重复启动复用当前实例。`daemon serve` 仍可前台运行。`daemon stop` 请求当前实例退出，等请求、执行和数据库关闭后才释放项目所有权。CLI 退出不会等同于 daemon 停止。
 
 项目入口统一使用 `--project`、`--state-dir`、`--socket`，优先级为显式参数、对应 `XGOAL_PROJECT`/`XGOAL_STATE_DIR`/`XGOAL_SOCKET` 环境变量、已绑定项目位置、默认值。例如 `xgoal --project /path/to/A daemon status`。项目绑定后不能通过另一个 state-dir 启动第二个实例；linked worktree 入口明确拒绝。`doctor` 默认可离线运行，不打开、创建或迁移 SQLite；主动 Probe 需要运行中的 daemon。
+
+## 当前目录执行与恢复
+
+xgoal 不创建或删除 Git worktree。Implementer、Reviewer 和 Validator 使用同一个主工作目录；工作区记录只是独立的会话元数据。每个项目只允许一个执行者，项目 A 与 B 的执行互不占用对方的执行槽。
+
+首次运行要求原始文件 Tree、用户 index Tree 与 HEAD Tree 一致。xgoal 使用私有临时 index 和 `refs/xgoal/goals/<goal-id>/integration` 记录结果，保留用户 HEAD、分支和 index。完成后结果直接留在当前目录；后续 Goal 可以继承上一已完成 Goal 的精确验收 Tree，也可以在用户正常提交、工作目录干净后建立新基线。
+
+失败或外部编辑时保留文件与诊断日志，不自动 stash、reset 或 clean。仅经过 Scope 检查并记录的同一 Work 失败现场允许 `work retry`；文件、HEAD、index 或配置再变化会拒绝重试。未处理现场不能直接 replan。晋升已更新私有 ref 而读回未完成时，先恢复提示要求的精确文件与 Git 元数据，再重启或 resume 以完成读回。
+
+旧 `workspace.provider: git-worktree` 配置提示 `CONFIG_MIGRATION_REQUIRED`；确认当前目录执行语义后改为 `current-directory` 并重启。旧 Goal、报告、Evidence 和 worktree 文件保留可读；未完成旧 Goal 不会自动转为原地执行，可取消旧 Goal 后从已审查的干净主目录创建新 Goal。`clean` 只处理允许删除的会话元数据，不删除当前源码或旧 worktree；服务诊断日志保留用于检查。
 
 ## 配置与安全
 

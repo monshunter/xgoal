@@ -5,14 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/monshunter/xgoal/internal/api"
 	"github.com/monshunter/xgoal/internal/clock"
-	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/control"
 	"github.com/monshunter/xgoal/internal/daemon"
 	"github.com/monshunter/xgoal/internal/finalize"
@@ -59,14 +56,12 @@ func Serve(ctx context.Context, paths Paths) (returnErr error) {
 		return err
 	}
 	var executionEngine *orchestrator.Engine
-	if configuration, loadErr := config.LoadFile(filepath.Join(paths.ProjectRoot, "xgoal.yaml")); loadErr == nil {
+	if configuration, executable := service.ExecutionConfiguration(); executable {
 		executionEngine, err = orchestrator.New(ctx, store, paths.ProjectRoot, configuration)
 		if err != nil {
 			return err
 		}
 		service.SetLifecycle(executionEngine)
-	} else if !errors.Is(loadErr, os.ErrNotExist) {
-		return fmt.Errorf("load xgoal.yaml: %w", loadErr)
 	}
 	handler, err := api.NewHandler(service, store)
 	if err != nil {
@@ -84,7 +79,7 @@ func Serve(ctx context.Context, paths Paths) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	recoveryManager := recoveryChain{workerRecovery, reportRecovery}
+	recoveryManager := recoveryChain{workerRecovery, storeRecovery{store: store}, reportRecovery}
 	if executionEngine != nil {
 		recoveryManager = append(recoveryManager, engineRecovery{engine: executionEngine})
 	}
@@ -112,6 +107,12 @@ func Serve(ctx context.Context, paths Paths) (returnErr error) {
 }
 
 type engineRecovery struct{ engine *orchestrator.Engine }
+
+type storeRecovery struct{ store *sqlite.Store }
+
+func (recovery storeRecovery) Recover(ctx context.Context) error {
+	return recovery.store.ReconcileLegacyExecution(ctx)
+}
 
 func (recovery engineRecovery) Recover(ctx context.Context) error {
 	if err := recovery.engine.Recover(ctx); err != nil {

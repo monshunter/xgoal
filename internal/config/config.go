@@ -15,9 +15,12 @@ import (
 )
 
 const (
-	APIVersion = "xgoal.dev/v1alpha1"
-	Kind       = "Project"
+	APIVersion                        = "xgoal.dev/v1alpha1"
+	Kind                              = "Project"
+	WorkspaceProviderCurrentDirectory = "current-directory"
 )
+
+var ErrMigrationRequired = errors.New("CONFIG_MIGRATION_REQUIRED: workspace.provider git-worktree is no longer executable; review the current-directory contract, update xgoal.yaml to current-directory, and restart the daemon; historical status and reports remain readable")
 
 type Config struct {
 	APIVersion    string        `yaml:"apiVersion" json:"apiVersion"`
@@ -244,8 +247,9 @@ func (c Config) Validate() error {
 	if err := validateAgents(c.Agents); err != nil {
 		return err
 	}
-	if c.Workspace.Provider != "" && c.Workspace.Provider != "git-worktree" {
-		return fmt.Errorf("workspace.provider must be git-worktree when set")
+	legacyWorkspace := c.Workspace.Provider == "git-worktree"
+	if c.Workspace.Provider != "" && c.Workspace.Provider != WorkspaceProviderCurrentDirectory && !legacyWorkspace {
+		return fmt.Errorf("workspace.provider must be current-directory when set")
 	}
 	if c.Workspace.CleanupCompletedAfter.Duration < 0 {
 		return fmt.Errorf("workspace.cleanupCompletedAfter must be non-negative")
@@ -277,7 +281,16 @@ func (c Config) Validate() error {
 	if err := validatePolicy(c.Policy); err != nil {
 		return err
 	}
-	return validateReport(c.Report)
+	if err := validateReport(c.Report); err != nil {
+		return err
+	}
+	// Migration is a recognized, otherwise-valid historical configuration.
+	// Do not turn unknown fields or unrelated validation failures into a
+	// read-only daemon startup that appears to have accepted those errors.
+	if legacyWorkspace {
+		return ErrMigrationRequired
+	}
+	return nil
 }
 
 func validateAgents(agents []Agent) error {

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 )
 
 type State string
@@ -21,6 +22,10 @@ const (
 	Observed      State = "OBSERVED"
 	Failed        State = "FAILED"
 )
+
+const CurrentDirectory = "current-directory"
+
+var ErrExecutionMigrationRequired = errors.New("EXECUTION_MIGRATION_REQUIRED: legacy worktree promotion is read-only; preserve its history and resolve migration before execution")
 
 type Request struct {
 	ID                 string    `json:"id"`
@@ -42,6 +47,12 @@ type Request struct {
 	CandidateTree      string    `json:"candidate_tree"`
 	ValidationWorktree string    `json:"validation_worktree"`
 	CommitAt           time.Time `json:"commit_at"`
+	// Added fields are absent from legacy canonical requests. Never populate
+	// them while reading historical effects or recomputing their hashes.
+	ExecutionModel   string                    `json:"execution_model,omitempty"`
+	ExecutionPath    string                    `json:"execution_path,omitempty"`
+	CheckoutIdentity *gitrepo.CheckoutIdentity `json:"checkout_identity,omitempty"`
+	ExcludePaths     []string                  `json:"exclude_paths,omitempty"`
 }
 
 type Record struct {
@@ -75,9 +86,31 @@ func (request Request) Validate() error {
 	}
 	if request.GoalRevision <= 0 || request.LeaseGeneration <= 0 || !validHash(request.GoalRevisionHash, 64) || !validHash(request.ConfigHash, 64) || !validHash(request.BundleHash, 64) ||
 		!validObjectID(request.OldCommit) || !validObjectID(request.OldTree) || !validObjectID(request.CandidateTree) ||
-		!strings.HasPrefix(request.IntegrationRef, "refs/heads/") || !validLabel(request.IntegrationRef) ||
-		!filepath.IsAbs(request.ValidationWorktree) || filepath.Clean(request.ValidationWorktree) != request.ValidationWorktree || request.CommitAt.IsZero() {
-		return errors.New("promotion request contains an invalid revision, hash, ref, worktree, or timestamp")
+		!validLabel(request.IntegrationRef) || request.CommitAt.IsZero() {
+		return errors.New("promotion request contains an invalid revision, hash, ref, or timestamp")
+	}
+	switch request.ExecutionModel {
+	case "":
+		if !strings.HasPrefix(request.IntegrationRef, "refs/heads/") || !cleanAbsolute(request.ValidationWorktree) ||
+			request.ExecutionPath != "" || request.CheckoutIdentity != nil || len(request.ExcludePaths) != 0 {
+			return errors.New("legacy promotion contains invalid or mixed execution fields")
+		}
+	case CurrentDirectory:
+		identity := request.CheckoutIdentity
+		if filepath.Base(request.ID) != request.ID || request.ID == "." || request.ID == ".." || strings.ContainsRune(request.ID, '\\') ||
+			request.ValidationWorktree != "" || !cleanAbsolute(request.ExecutionPath) || identity == nil ||
+			identity.Root != request.ExecutionPath || identity.Validate() != nil ||
+			!validPrivateRef(request.IntegrationRef) || request.IntegrationRef != "refs/xgoal/goals/"+request.GoalID+"/integration" {
+			return errors.New("current-directory promotion must bind its checkout identity and private Goal ref")
+		}
+		for _, path := range request.ExcludePaths {
+			relative, err := filepath.Rel(path, request.ExecutionPath)
+			if !cleanAbsolute(path) || err != nil || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
+				return errors.New("promotion snapshot exclusions must be absolute and cannot contain the execution root")
+			}
+		}
+	default:
+		return errors.New("unknown promotion execution model")
 	}
 	return nil
 }
@@ -86,7 +119,11 @@ func (request Request) Hash() (string, error) {
 	if err := request.Validate(); err != nil {
 		return "", err
 	}
-	return canonical.Hash("promotion-request", "xgoal.promotion/v1alpha1", request)
+	version := "xgoal.promotion/v1alpha1"
+	if request.ExecutionModel == CurrentDirectory {
+		version = "xgoal.promotion/v2"
+	}
+	return canonical.Hash("promotion-request", version, request)
 }
 
 func EqualRequest(left, right Request) bool {
@@ -112,7 +149,7 @@ func (record Record) Valid() bool {
 }
 
 func (observation Observation) Validate() error {
-	if !strings.HasPrefix(observation.IntegrationRef, "refs/heads/") || !validObjectID(observation.IntegrationCommit) || !validObjectID(observation.IntegrationTree) {
+	if (!strings.HasPrefix(observation.IntegrationRef, "refs/heads/") && !validPrivateRef(observation.IntegrationRef)) || !validObjectID(observation.IntegrationCommit) || !validObjectID(observation.IntegrationTree) {
 		return errors.New("invalid promotion observation")
 	}
 	for key, value := range observation.Trailers {
@@ -121,6 +158,27 @@ func (observation Observation) Validate() error {
 		}
 	}
 	return nil
+}
+
+func cleanAbsolute(value string) bool {
+	return filepath.IsAbs(value) && filepath.Clean(value) == value && !strings.ContainsAny(value, "\r\n\x00")
+}
+
+func validPrivateRef(ref string) bool {
+	const prefix, suffix = "refs/xgoal/goals/", "/integration"
+	if !strings.HasPrefix(ref, prefix) || !strings.HasSuffix(ref, suffix) {
+		return false
+	}
+	goal := strings.TrimSuffix(strings.TrimPrefix(ref, prefix), suffix)
+	if !validLabel(goal) || strings.ContainsAny(goal, "/\\ ~^:?*[") || strings.HasPrefix(goal, ".") || strings.HasSuffix(goal, ".") || strings.HasSuffix(goal, ".lock") || strings.Contains(goal, "..") || strings.Contains(goal, "@{") {
+		return false
+	}
+	for _, character := range goal {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func validLabel(value string) bool {

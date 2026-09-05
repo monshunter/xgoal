@@ -913,12 +913,12 @@ v0.1 发布硬门槛：
 - [ ] **AC-BG-004**：所有 Provider 角色/主动 Probe 共享项目槽；停止/崩溃后旧进程和不响应 TERM 的子孙被回收或明确阻止新执行；未知 PID 不被误杀。
 - [ ] **AC-BG-005**：历史 IN_PROGRESS、半冻结 Goal、未决 Attempt/Lease/Work 经保守恢复得到确定结果/等待，不无限停留，重复恢复不重复副作用。
 - [ ] **AC-BG-006**：真实 CLI→daemon→Provider→Git→Validator→Report 通过；固定 Provider fixture 的确定性故障测试与真实 Provider smoke 分别标注；全量门禁及 macOS/Linux 平台证据可复核。
-- [ ] **AC-CWD-001**：实际 Planner/Implementer/Reviewer CWD 为当前主目录，Validator 与 bootstrap CWD 为其内部受信的相对目录，完整 Goal 前后 Git worktree 列表不变；代码结果直接可见。
-- [ ] **AC-CWD-002**：未归属的 staged/unstaged/untracked 修改拒绝接管且字节不变；系统操作保留用户 HEAD、符号分支和 index；两个连续 Goal 可采纳完全匹配的已验收结果。
-- [ ] **AC-CWD-003**：私有 index/Object Tree 正确覆盖 tracked/非忽略 untracked/binary/rename/mode/symlink/delete，忽略构建产物，拒绝元数据、Scope 越界和路径逃逸；不执行 Agent 的 Git filters/hooks。
-- [ ] **AC-CWD-004**：Validator/Reviewer 期间源 Tree 或 HEAD/index 漂移使 Evidence 无效；最终当前目录、私有集成 Tree、Evidence 和 Report 必须一致。
+- [x] **AC-CWD-001**：实际 Planner/Implementer/Reviewer CWD 为当前主目录，Validator 与 bootstrap CWD 为其内部受信的相对目录，完整 Goal 前后 Git worktree 列表不变；代码结果直接可见。
+- [x] **AC-CWD-002**：未归属的 staged/unstaged/untracked 修改拒绝接管且字节不变；系统操作保留用户 HEAD、符号分支和 index；两个连续 Goal 可采纳完全匹配的已验收结果。
+- [x] **AC-CWD-003**：私有 index/Object Tree 正确覆盖 tracked/非忽略 untracked/binary/rename/mode/symlink/delete，忽略构建产物，拒绝元数据、Scope 越界和路径逃逸；不执行 Agent 的 Git filters/hooks。
+- [x] **AC-CWD-004**：Validator/Reviewer 期间源 Tree 或 HEAD/index 漂移使 Evidence 无效；最终当前目录、私有集成 Tree、Evidence 和 Report 必须一致。
 - [ ] **AC-CWD-005**：失败/暂停/取消/daemon 中断保留文件，已观察现场可显式 retry；未知漂移得到可操作等待而非覆盖、删除或无限自动重试。
-- [ ] **AC-CWD-006**：旧配置给出迁移诊断；旧完成 Report/Evidence 保留可读，旧未完成目标不继续 worktree 执行；clean 不删除当前目录或历史 worktree。
+- [x] **AC-CWD-006**：旧配置给出迁移诊断；旧完成 Report/Evidence 保留可读，旧未完成目标不继续 worktree 执行；clean 不删除当前目录或历史 worktree。
 
 Evidence 由当前 Operation/Change Review 保存；未取得当前 Evidence 前保持未勾选。
 

@@ -3,19 +3,18 @@ package patch_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/protocol"
-	"github.com/monshunter/xgoal/internal/workspace"
 )
 
-func TestCaptureIgnoresAgentHistoryAndPreservesEveryFilesystemChange(t *testing.T) {
+func TestCapturePreservesEveryFilesystemChangeWithoutMovingHeadOrIndex(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -29,18 +28,7 @@ func TestCaptureIgnoresAgentHistoryAndPreservesEveryFilesystemChange(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := workspace.NewManager(filepath.Join(t.TempDir(), "runtime"), repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	work, err := manager.Create(ctx, workspace.Spec{
-		ID: "workspace_1", AttemptID: "attempt_1", Kind: workspace.Attempt,
-		BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: strings.Repeat("a", 64),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Cleanup(ctx, work.ID)
+	work := currentPatchCheckout(t, repository)
 
 	mustWrite(t, filepath.Join(work.Path, "tracked.txt"), []byte("modified\n"), 0o600)
 	if err := os.Remove(filepath.Join(work.Path, "deleted.txt")); err != nil {
@@ -59,15 +47,16 @@ func TestCaptureIgnoresAgentHistoryAndPreservesEveryFilesystemChange(t *testing.
 	if err := os.Symlink("tracked.txt", filepath.Join(work.Path, "link")); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, work.Path, "add", "-A")
-	runGit(t, work.Path, "-c", "user.name=Agent", "-c", "user.email=agent@example.invalid", "commit", "--no-verify", "-m", "agent-owned history")
 	mustWrite(t, filepath.Join(work.Path, "untracked-empty.txt"), nil, 0o600)
 
 	captured, err := patch.Capture(ctx, repository, patch.CaptureSpec{
-		AttemptID: "attempt_1", WorktreePath: work.Path, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
+		AttemptID: "attempt_1", ExecutionPath: work.Path, Identity: work.Identity, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Capture() error = %v", err)
+	}
+	if err := repository.CheckCheckoutIdentity(ctx, work.Identity); err != nil {
+		t.Fatal(err)
 	}
 	if err := captured.Bundle.Validate(); err != nil {
 		t.Fatalf("captured bundle invalid: %v", err)
@@ -133,23 +122,12 @@ func TestCaptureRejectsEscapingSymlinkAndBundleStoreRejectsTampering(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := workspace.NewManager(filepath.Join(t.TempDir(), "runtime"), repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	work, err := manager.Create(ctx, workspace.Spec{
-		ID: "workspace_escape", AttemptID: "attempt_escape", Kind: workspace.Attempt,
-		BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: strings.Repeat("b", 64),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Cleanup(ctx, work.ID)
+	work := currentPatchCheckout(t, repository)
 	if err := os.Symlink("../../outside", filepath.Join(work.Path, "escape")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := patch.Capture(ctx, repository, patch.CaptureSpec{
-		AttemptID: "attempt_escape", WorktreePath: work.Path, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
+		AttemptID: "attempt_escape", ExecutionPath: work.Path, Identity: work.Identity, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
 	}); err == nil {
 		t.Fatal("Capture() accepted escaping symlink")
 	}
@@ -158,7 +136,7 @@ func TestCaptureRejectsEscapingSymlinkAndBundleStoreRejectsTampering(t *testing.
 	}
 	mustWrite(t, filepath.Join(work.Path, "safe.txt"), []byte("safe"), 0o600)
 	captured, err := patch.Capture(ctx, repository, patch.CaptureSpec{
-		AttemptID: "attempt_escape", WorktreePath: work.Path, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
+		AttemptID: "attempt_escape", ExecutionPath: work.Path, Identity: work.Identity, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,10 +186,42 @@ func mustWrite(t *testing.T, path string, content []byte, mode os.FileMode) {
 func runGit(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
-	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v error = %v\n%s", arguments, err, output)
 	}
 	return string(output)
+}
+
+func currentPatchCheckout(t *testing.T, repository *gitrepo.Repository) struct {
+	Path     string
+	Identity gitrepo.CheckoutIdentity
+} {
+	t.Helper()
+	identity, err := repository.ReadCheckoutIdentity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return struct {
+		Path     string
+		Identity gitrepo.CheckoutIdentity
+	}{repository.Root(), identity}
+}
+func TestCaptureRejectsAgentChangesToUserGitMetadata(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "repo")
+	initializePatchRepository(t, root)
+	repository, err := gitrepo.Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := currentPatchCheckout(t, repository)
+	mustWrite(t, filepath.Join(root, "tracked.txt"), []byte("agent change"), 0600)
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "-c", "user.name=Agent", "-c", "user.email=agent@invalid", "commit", "--no-verify", "-m", "unauthorized commit")
+	_, err = patch.Capture(ctx, repository, patch.CaptureSpec{AttemptID: "attempt_metadata", ExecutionPath: work.Path, Identity: work.Identity, BaseCommit: work.Identity.HeadCommit, BaseTree: work.Identity.HeadTree, MaxFileBytes: 1 << 20})
+	if !errors.Is(err, gitrepo.ErrCheckoutChanged) {
+		t.Fatalf("metadata change was accepted: %v", err)
+	}
 }

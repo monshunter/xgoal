@@ -2,6 +2,8 @@ package validator_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +16,6 @@ import (
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/validator"
-	"github.com/monshunter/xgoal/internal/workspace"
 )
 
 func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
@@ -49,24 +50,16 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 	}
 
 	runtimeRoot := filepath.Join(t.TempDir(), "runtime")
-	manager, err := workspace.NewManager(runtimeRoot, repository)
+	identity, err := repository.ReadCheckoutIdentity(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	worktree, err := manager.Create(ctx, workspace.Spec{
-		ID: "workspace_validator", AttemptID: "attempt_validator", Kind: workspace.Validation,
-		BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: registry.ConfigHash(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Cleanup(ctx, worktree.ID)
 	provider, err := environment.NewLocal(runtimeRoot, repository, clock.Real{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	handle, err := provider.Prepare(ctx, environment.Spec{
-		ID: "environment_validator", WorktreePath: worktree.Path, BaseCommit: base.Commit, BaseTree: base.Tree,
+		ID: "environment_validator", WorktreePath: repository.Root(), BaseCommit: base.Commit, BaseTree: base.Tree, Identity: identity,
 		ConfigHash: registry.ConfigHash(), GoalRevisionHash: strings.Repeat("a", 64),
 		ToolProbes: []environment.ToolProbe{{Name: "go", Argv: []string{"go", "version"}, Required: true}},
 	})
@@ -87,13 +80,6 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(worktree.Path, "xgoal.yaml"), []byte("agent changed config\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(worktree.Path, "scripts", "trusted.sh"), []byte("#!/bin/sh\nprintf attacked > attacked.txt\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	tests := []struct {
 		id   string
 		want protocol.CommandResult
@@ -106,7 +92,7 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 		{id: "go-fail", want: protocol.CommandFailed},
 		{id: "expected-nonzero", want: protocol.CommandPassed},
 		{id: "timeout", want: protocol.CommandTimedOut},
-		{id: "trusted-script", want: protocol.CommandUnavailable},
+		{id: "trusted-script", want: protocol.CommandPassed},
 	}
 	for index, test := range tests {
 		receipt, err := runner.Run(ctx, validator.CommandRequest{
@@ -148,6 +134,16 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 				t.Error("Run() overwrote immutable logs for a duplicate run id")
 			}
 		}
+	}
+	if err := os.WriteFile(filepath.Join(repository.Root(), "xgoal.yaml"), []byte("agent changed config\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository.Root(), "scripts", "trusted.sh"), []byte("#!/bin/sh\nprintf attacked > attacked.txt\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := runner.Run(ctx, validator.CommandRequest{RunID: "run_tampered", ValidatorID: "trusted-script", GoalRevisionHash: strings.Repeat("a", 64), ConfigHash: registry.ConfigHash(), TreeHash: base.Tree, EnvironmentHash: environmentHash, MaxOutputBytes: 1 << 20})
+	if !errors.Is(err, environment.ErrCheckoutDrift) || rejected.Result == protocol.CommandPassed {
+		t.Fatalf("tampered checkout accepted: %+v / %v", rejected, err)
 	}
 	if err := os.WriteFile(filepath.Join(runtimeRoot, "validator", "logs", "run_go-version.stdout.log"), []byte("tampered"), 0o600); err != nil {
 		t.Fatal(err)
@@ -192,7 +188,7 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 	if err := os.Rename(externalValidatorRoot, validatorRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(worktree.Path, "attacked.txt")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(repository.Root(), "attacked.txt")); !os.IsNotExist(err) {
 		t.Fatalf("modified trusted script executed: %v", err)
 	}
 }
@@ -295,6 +291,82 @@ validators:
 	runValidatorGit(t, path, "init", "-b", "main")
 	runValidatorGit(t, path, "add", "xgoal.yaml", "scripts/trusted.sh")
 	runValidatorGit(t, path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--no-verify", "-m", "fixture")
+}
+
+func TestValidatorRejectsSourceMutationDespiteZeroExit(t *testing.T) {
+	for _, ignored := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ignored=%t", ignored), func(t *testing.T) {
+			ctx := context.Background()
+			root := filepath.Join(t.TempDir(), "repo")
+			initializeValidatorRepository(t, root)
+			if err := os.WriteFile(filepath.Join(root, "scripts", "trusted.sh"), []byte("#!/bin/sh\nprintf changed > generated.txt\nexit 0\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if ignored {
+				if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("generated.txt\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runValidatorGit(t, root, "add", "--all")
+			runValidatorGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--no-verify", "-m", "validator fixture")
+			repository, err := gitrepo.Open(ctx, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base, err := repository.ResolveRevision(ctx, "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := repository.ReadCheckoutIdentity(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry, err := validator.LoadRegistry(ctx, repository, base.Commit, "xgoal.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtimeRoot := t.TempDir()
+			provider, err := environment.NewLocal(runtimeRoot, repository, clock.Real{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handle, err := provider.Prepare(ctx, environment.Spec{ID: "mutation", WorktreePath: repository.Root(), BaseCommit: base.Commit, BaseTree: base.Tree, Identity: identity, ConfigHash: registry.ConfigHash(), GoalRevisionHash: strings.Repeat("a", 64), ToolProbes: []environment.ToolProbe{{Name: "git", Argv: []string{"git", "--version"}, Required: true}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer provider.Cleanup(ctx, handle)
+			snapshot, err := provider.Snapshot(ctx, handle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			environmentHash, err := snapshot.Hash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner, err := validator.NewCommandRunner(runtimeRoot, registry, provider, handle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := runner.Run(ctx, validator.CommandRequest{RunID: "mutation", ValidatorID: "trusted-script", GoalRevisionHash: strings.Repeat("a", 64), ConfigHash: registry.ConfigHash(), TreeHash: base.Tree, EnvironmentHash: environmentHash, MaxOutputBytes: 1 << 20})
+			if ignored {
+				if err != nil || receipt.Result != protocol.CommandPassed {
+					t.Fatalf("ignored output rejected: %+v / %v", receipt, err)
+				}
+			} else if !errors.Is(err, environment.ErrCheckoutDrift) || receipt.Result != protocol.CommandFailed || receipt.ExitCode != 0 {
+				t.Fatalf("source mutation recorded as passed: %+v / %v", receipt, err)
+			}
+			stored, err := validator.ReadReceipt(runtimeRoot, receipt.ID)
+			if err != nil || stored.Result != receipt.Result {
+				t.Fatalf("drift receipt was not preserved: %+v / %v", stored, err)
+			}
+			if value, err := os.ReadFile(filepath.Join(root, "generated.txt")); err != nil || string(value) != "changed" {
+				t.Fatalf("validator output was reverted: %q / %v", value, err)
+			}
+			if err := repository.CheckCheckoutIdentity(ctx, identity); err != nil {
+				t.Fatalf("validator changed Git metadata: %v", err)
+			}
+		})
+	}
 }
 
 func runValidatorGit(t *testing.T, directory string, arguments ...string) string {

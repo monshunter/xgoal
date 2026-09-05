@@ -147,7 +147,7 @@ orchestration:
   integrationBranchPrefix: xgoal/
 agents:
 %sworkspace:
-  provider: git-worktree
+  provider: current-directory
   keepFailed: true
   cleanupCompletedAfter: 168h
 runtime:

@@ -26,6 +26,7 @@ import (
 
 type CommandEnvironment interface {
 	RunCommand(context.Context, environment.Handle, environment.CommandSpec) (supervisor.Execution, error)
+	VerifyTree(context.Context, environment.Handle, string) error
 }
 
 type CommandRunner struct {
@@ -92,10 +93,16 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	exitCode := -1
 	var execution supervisor.Execution
 	var runErr error
+	var checkoutErr error
 	limiter := &outputLimiter{remaining: request.MaxOutputBytes}
+	preflightContext, stopPreflight := context.WithTimeout(ctx, 30*time.Second)
+	checkoutErr = runner.environment.VerifyTree(preflightContext, runner.handle, request.TreeHash)
+	stopPreflight()
 	runContext, cancel := context.WithTimeout(ctx, definition.Timeout)
 	limiter.cancel = cancel
-	if err := verifyTrustedExecutable(runner.handle.Worktree, definition); err != nil {
+	if checkoutErr != nil {
+		runErr = checkoutErr
+	} else if err := verifyTrustedExecutable(runner.handle.Worktree, definition); err != nil {
 		runErr = err
 	} else {
 		execution, runErr = runner.environment.RunCommand(runContext, runner.handle, environment.CommandSpec{
@@ -107,6 +114,17 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 		result = classifyCommand(runContext, execution, runErr, limiter.exceeded, definition.ExpectedExitCodes)
 	}
 	cancel()
+	verifyContext, stopVerify := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := runner.environment.VerifyTree(verifyContext, runner.handle, request.TreeHash); err != nil {
+		checkoutErr = errors.Join(checkoutErr, err)
+		if !execution.StartedAt.IsZero() {
+			result = protocol.CommandFailed
+		}
+	}
+	stopVerify()
+	if checkoutErr != nil {
+		_, _ = fmt.Fprintf(&limitedLog{file: stderr, limiter: limiter}, "\nxgoal checkout verification failed: %v\n", checkoutErr)
+	}
 	closeErr := errors.Join(syncAndClose(stdout), syncAndClose(stderr))
 	finishedAt := time.Now().UTC()
 	if !execution.StartedAt.IsZero() {
@@ -132,6 +150,9 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	}
 	if err := writeReceipt(runner.root, receipt); err != nil {
 		return protocol.CommandReceipt{}, err
+	}
+	if checkoutErr != nil {
+		return receipt, checkoutErr
 	}
 	if ctx.Err() != nil && !errors.Is(runErr, context.DeadlineExceeded) {
 		return receipt, ctx.Err()

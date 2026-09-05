@@ -55,6 +55,6 @@ Objective: 落实项目单实例与当前工作目录后台执行设计，移除
 Status: 正在处理
 Plans:
 - [x] [PLAN-009：统一项目身份与 Daemon 生命周期](docs/plans/PLAN-009.md)
-- [ ] [PLAN-011：改为当前工作目录执行并移除 Git worktree](docs/plans/PLAN-011.md)
+- [x] [PLAN-011：改为当前工作目录执行并移除 Git worktree](docs/plans/PLAN-011.md)
 - [ ] [PLAN-010：持久后台规划与跨项目恢复验收](docs/plans/PLAN-010.md)
 ---

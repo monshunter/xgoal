@@ -15,7 +15,6 @@ import (
 	"github.com/monshunter/xgoal/internal/clock"
 	"github.com/monshunter/xgoal/internal/environment"
 	"github.com/monshunter/xgoal/internal/gitrepo"
-	"github.com/monshunter/xgoal/internal/workspace"
 )
 
 func TestLocalProviderSnapshotsAllowlistedL0EnvironmentAndManagesServices(t *testing.T) {
@@ -31,18 +30,10 @@ func TestLocalProviderSnapshotsAllowlistedL0EnvironmentAndManagesServices(t *tes
 		t.Fatal(err)
 	}
 	runtimeRoot := filepath.Join(t.TempDir(), "runtime")
-	manager, err := workspace.NewManager(runtimeRoot, repository)
+	identity, err := repository.ReadCheckoutIdentity(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	worktree, err := manager.Create(ctx, workspace.Spec{
-		ID: "workspace_env", AttemptID: "attempt_env", Kind: workspace.Validation,
-		BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: strings.Repeat("a", 64),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Cleanup(ctx, worktree.ID)
 
 	provider, err := environment.NewLocal(runtimeRoot, repository, clock.NewFake(time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)))
 	if err != nil {
@@ -61,7 +52,7 @@ func TestLocalProviderSnapshotsAllowlistedL0EnvironmentAndManagesServices(t *tes
 	t.Setenv("XGOAL_ENV_READY", readyPath)
 	t.Setenv("XGOAL_ENV_SECRET", "must-not-be-forwarded")
 	handle, err := provider.Prepare(ctx, environment.Spec{
-		ID: "environment_1", WorktreePath: worktree.Path, BaseCommit: base.Commit, BaseTree: base.Tree,
+		ID: "environment_1", WorktreePath: repository.Root(), BaseCommit: base.Commit, BaseTree: base.Tree, Identity: identity,
 		ConfigHash: strings.Repeat("b", 64), GoalRevisionHash: strings.Repeat("c", 64),
 		EnvironmentAllowlist: []string{"XGOAL_ENV_HELPER", "XGOAL_ENV_READY"},
 		Lockfiles:            []string{"go.sum"},
@@ -117,11 +108,14 @@ func TestLocalProviderSnapshotsAllowlistedL0EnvironmentAndManagesServices(t *tes
 	if err := provider.Cleanup(ctx, handle); err != nil {
 		t.Fatalf("Cleanup() error = %v", err)
 	}
-	if _, err := os.Lstat(handle.Root); !os.IsNotExist(err) {
-		t.Fatalf("environment root remains after cleanup: %v", err)
+	if _, err := os.Stat(filepath.Join(handle.Root, "logs", "service_1.stdout.log")); err != nil {
+		t.Fatalf("environment cleanup discarded diagnostic logs: %v", err)
 	}
-	if _, err := os.Stat(worktree.Path); err != nil {
-		t.Fatalf("environment cleanup removed worktree: %v", err)
+	if _, err := provider.Snapshot(ctx, handle); err == nil {
+		t.Fatal("cleanup did not revoke the environment handle")
+	}
+	if _, err := os.Stat(repository.Root()); err != nil {
+		t.Fatalf("environment cleanup removed current source: %v", err)
 	}
 }
 
@@ -136,6 +130,63 @@ func TestEnvironmentServiceHelper(t *testing.T) {
 		os.Exit(6)
 	}
 	time.Sleep(time.Hour)
+}
+
+func TestLocalProviderUsesCurrentInputTreeWithoutMovingUserHEADOrIndex(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "repo")
+	initializeEnvironmentRepository(t, root)
+	repository, err := gitrepo.Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := repository.ResolveRevision(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBefore, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.sum"), []byte("accepted current content\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	privateIndex := filepath.Join(t.TempDir(), "index")
+	var candidate string
+	for _, args := range [][]string{{"read-tree", base.Tree}, {"add", "--", "go.sum"}, {"write-tree"}} {
+		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		command.Env = append(os.Environ(), "GIT_INDEX_FILE="+privateIndex)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("candidate setup: %s: %v", output, err)
+		}
+		candidate = strings.TrimSpace(string(output))
+	}
+	provider, err := environment.NewLocal(t.TempDir(), repository, clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := repository.ReadCheckoutIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := provider.Prepare(ctx, environment.Spec{ID: "current_input", WorktreePath: repository.Root(), BaseCommit: base.Commit, BaseTree: candidate, Identity: identity,
+		ConfigHash: strings.Repeat("a", 64), GoalRevisionHash: strings.Repeat("b", 64), ToolProbes: []environment.ToolProbe{{Name: "git", Argv: []string{"git", "--version"}, Required: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Cleanup(ctx, handle)
+	snapshot, err := provider.Snapshot(ctx, handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.BaseCommit != base.Commit || snapshot.BaseTree != candidate || handle.Worktree != repository.Root() {
+		t.Fatalf("wrong current-directory environment: %+v / %+v", snapshot, handle)
+	}
+	indexAfter, _ := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if string(indexBefore) != string(indexAfter) || strings.TrimSpace(runEnvironmentGit(t, root, "rev-parse", "HEAD")) != base.Commit {
+		t.Fatal("environment changed user's HEAD/index")
+	}
 }
 
 func initializeEnvironmentRepository(t *testing.T, path string) {

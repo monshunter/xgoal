@@ -238,11 +238,23 @@ func (s *Store) ResolveExpiredLease(
 		if err := domain.ValidateLeaseTransition(lease.State, domain.LeaseExpired); err != nil {
 			return err
 		}
-		if err := domain.ValidateAttemptTransition(attempt.State, domain.AttemptInterrupted); err != nil {
+		var pending int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM promotions WHERE attempt_id=? AND state NOT IN ('OBSERVED','FAILED')`, attempt.ID).Scan(&pending); err != nil {
 			return err
 		}
-		if err := domain.ValidateWorkTransition(work.State, domain.WorkReconciling); err != nil {
-			return err
+		if pending != 0 {
+			return errors.New("pending promotion must be recovered before expiring its lease")
+		}
+		preserveAttempt := attempt.State == domain.AttemptFailed || attempt.State == domain.AttemptTimedOut || attempt.State == domain.AttemptInterrupted || attempt.State == domain.AttemptInvalidOutput || attempt.State == domain.AttemptQuarantined
+		if !preserveAttempt {
+			if err := domain.ValidateAttemptTransition(attempt.State, domain.AttemptInterrupted); err != nil {
+				return err
+			}
+		}
+		if work.State != domain.WorkReconciling {
+			if err := domain.ValidateWorkTransition(work.State, domain.WorkReconciling); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `
 UPDATE leases
@@ -256,36 +268,44 @@ WHERE id = ? AND generation = ? AND version = ? AND state = ?`,
 		); err != nil {
 			return fmt.Errorf("expire lease %q: %w", id, err)
 		}
-		if _, err := tx.ExecContext(ctx, `
+		if !preserveAttempt {
+			if _, err := tx.ExecContext(ctx, `
 UPDATE attempts
 SET state = ?, version = version + 1, updated_at = ?
 WHERE id = ? AND version = ?`,
-			domain.AttemptInterrupted,
-			now.Format(time.RFC3339Nano),
-			attempt.ID,
-			attempt.Version,
-		); err != nil {
-			return fmt.Errorf("interrupt attempt %q: %w", attempt.ID, err)
+				domain.AttemptInterrupted,
+				now.Format(time.RFC3339Nano),
+				attempt.ID,
+				attempt.Version,
+			); err != nil {
+				return fmt.Errorf("interrupt attempt %q: %w", attempt.ID, err)
+			}
 		}
-		if _, err := tx.ExecContext(ctx, `
+		if work.State != domain.WorkReconciling {
+			if _, err := tx.ExecContext(ctx, `
 UPDATE work_items
 SET state = ?, version = version + 1, updated_at = ?
 WHERE id = ? AND version = ?`,
-			domain.WorkReconciling,
-			now.Format(time.RFC3339Nano),
-			work.ID,
-			work.Version,
-		); err != nil {
-			return fmt.Errorf("reconcile work item %q: %w", work.ID, err)
+				domain.WorkReconciling,
+				now.Format(time.RFC3339Nano),
+				work.ID,
+				work.Version,
+			); err != nil {
+				return fmt.Errorf("reconcile work item %q: %w", work.ID, err)
+			}
 		}
 		if err := s.appendEvent(ctx, tx, "lease", lease.ID, preparedLeaseEvent); err != nil {
 			return err
 		}
-		if err := s.appendEvent(ctx, tx, "attempt", attempt.ID, preparedAttemptEvent); err != nil {
-			return err
+		if !preserveAttempt {
+			if err := s.appendEvent(ctx, tx, "attempt", attempt.ID, preparedAttemptEvent); err != nil {
+				return err
+			}
 		}
-		if err := s.appendEvent(ctx, tx, "work", work.ID, preparedWorkEvent); err != nil {
-			return err
+		if work.State != domain.WorkReconciling {
+			if err := s.appendEvent(ctx, tx, "work", work.ID, preparedWorkEvent); err != nil {
+				return err
+			}
 		}
 		lease.State = domain.LeaseExpired
 		lease.Version++

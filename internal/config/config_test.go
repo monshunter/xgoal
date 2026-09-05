@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,30 @@ func TestLoadValidConfig(t *testing.T) {
 	}
 	if got := cfg.Agents[0].Roles[0]; got != "implementer" {
 		t.Fatalf("role = %q, want implementer", got)
+	}
+}
+
+func TestWorkspaceProviderMigrationDoesNotHideOtherConfigErrors(t *testing.T) {
+	for _, provider := range []string{"current-directory", "git-worktree"} {
+		t.Run(provider, func(t *testing.T) {
+			input := strings.Replace(validConfig, "runtime:\n", "workspace: {provider: "+provider+"}\nruntime:\n", 1)
+			cfg, err := config.Load(strings.NewReader(input))
+			if provider == "current-directory" {
+				if err != nil || cfg.Workspace.Provider != provider {
+					t.Fatalf("current directory config: %+v, %v", cfg.Workspace, err)
+				}
+				return
+			}
+			if !errors.Is(err, config.ErrMigrationRequired) {
+				t.Fatalf("legacy provider did not require migration: %v", err)
+			}
+			for _, invalid := range []string{input + "unknownField: true\n", strings.Replace(input, "projectNetwork: deny", "projectNetwork: invalid", 1), strings.Replace(input, "validators: []", "validators: [{id: missing-command}]", 1)} {
+				_, err := config.Load(strings.NewReader(invalid))
+				if err == nil || errors.Is(err, config.ErrMigrationRequired) {
+					t.Fatalf("legacy provider hid another invalid configuration: %v", err)
+				}
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/promotion"
 	"github.com/monshunter/xgoal/internal/protocol"
+	basestore "github.com/monshunter/xgoal/internal/store"
 )
 
 func TestPromotionJournalPreflightAndEffectObservation(t *testing.T) {
@@ -42,6 +44,17 @@ func TestPromotionJournalPreflightAndEffectObservation(t *testing.T) {
 	if err != nil || record.State != promotion.RefUpdated {
 		t.Fatalf("RecordRefUpdate() = %+v, %v", record, err)
 	}
+	beforeCancel, err := store.WorkItem(ctx, request.WorkItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CancelWork(ctx, beforeCancel.ID, beforeCancel.Version, EventInput{Type: "WorkCancelled", ActorType: "human", Payload: map[string]any{}}); !errors.Is(err, basestore.ErrConflict) {
+		t.Fatalf("pending promotion cancel=%v", err)
+	}
+	afterCancel, err := store.WorkItem(ctx, request.WorkItemID)
+	if err != nil || afterCancel.State != beforeCancel.State || afterCancel.Version != beforeCancel.Version {
+		t.Fatalf("cancel changed pending promotion work: %+v %v", afterCancel, err)
+	}
 	observation := promotion.Observation{
 		IntegrationRef: request.IntegrationRef, IntegrationCommit: commit, IntegrationTree: request.CandidateTree,
 		Trailers: map[string]string{
@@ -49,9 +62,28 @@ func TestPromotionJournalPreflightAndEffectObservation(t *testing.T) {
 			"XGoal-Attempt": request.AttemptID, "XGoal-Evidence-Set": request.EvidenceSetID,
 		},
 	}
+	gate, err := store.CreateGate(ctx, GateDraft{ID: "recovery_success", GoalID: request.GoalID, WorkItemID: request.WorkItemID, AttemptID: request.AttemptID, ReasonCode: "promotion_recovery_required", Facts: []any{}, Unknowns: []any{}, Options: []any{"restore"}, Recommendation: "restore", Action: domain.ActionReadFile, Scope: []string{"/**"}, ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), MaxUses: 1, Required: true}, EventInput{Type: "GateOpened", ActorType: "kernel", Payload: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := store.RecordWorker(ctx, WorkerProcess{AttemptID: request.AttemptID, PID: 1234, PGID: 1234, StartIdentity: "fixture-process-start", State: WorkerRunning, Version: 1}, EventInput{Type: "WorkerRecorded", ActorType: "kernel", Payload: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveWorkerRecovery(ctx, request.AttemptID, worker.Version, WorkerExited, "fixture process absent", EventInput{Type: "WorkerRecovered", ActorType: "kernel", Payload: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	stillOwned, err := store.Lease(ctx, request.LeaseID)
+	if err != nil || stillOwned.State != domain.LeaseActive {
+		t.Fatalf("pending promotion lease = %+v, %v", stillOwned, err)
+	}
 	record, err = store.Observe(ctx, request.ID, observation)
 	if err != nil || record.State != promotion.Observed {
 		t.Fatalf("Observe() = %+v, %v", record, err)
+	}
+	resolved, err := store.Gate(ctx, gate.ID)
+	if err != nil || resolved.State != domain.GateApproved || resolved.Used != resolved.MaxUses || resolved.DecidedBy != "kernel" {
+		t.Fatalf("recovery blocker = %+v, %v", resolved, err)
 	}
 	if recoverable, err := store.RecoverablePromotions(ctx); err != nil || len(recoverable) != 0 {
 		t.Fatalf("terminal promotion remained recoverable = %+v, %v", recoverable, err)

@@ -121,38 +121,12 @@ END;`); err != nil {
 		t.Fatalf("idempotent RecordWorkspace() = created=%v, err=%v", created, err)
 	}
 
-	if err := os.WriteFile(filepath.Join(workspaceSnapshot.Path, "base.txt"), []byte("changed\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	captured, err := patch.Capture(ctx, repository, patch.CaptureSpec{
-		AttemptID: attempt.ID, WorktreePath: workspaceSnapshot.Path,
-		BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	patchStore, err := patch.NewStore(runtimeRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundlePath, err := patchStore.Save(captured)
-	if err != nil {
-		t.Fatal(err)
-	}
-	patchRecord, created, err := store.RecordPatchBundle(ctx, captured.Bundle, bundlePath)
-	if err != nil || !created || patchRecord.Bundle.BundleHash != captured.Bundle.BundleHash {
-		t.Fatalf("RecordPatchBundle() = %+v, %v, %v", patchRecord, created, err)
-	}
-	if _, created, err := store.RecordPatchBundle(ctx, captured.Bundle, bundlePath); err != nil || created {
-		t.Fatalf("idempotent RecordPatchBundle() = created=%v, err=%v", created, err)
-	}
-
 	provider, err := environment.NewLocal(runtimeRoot, repository, source)
 	if err != nil {
 		t.Fatal(err)
 	}
 	handle, err := provider.Prepare(ctx, environment.Spec{
-		ID: "environment_artifact", WorktreePath: workspaceSnapshot.Path,
+		ID: "environment_artifact", WorktreePath: workspaceSnapshot.Path, Identity: workspaceSnapshot.Identity, ExcludePaths: workspaceSnapshot.ExcludePaths,
 		BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: registry.ConfigHash(),
 		GoalRevisionHash: revision.Hash,
 		ToolProbes:       []environment.ToolProbe{{Name: "go", Argv: []string{"go", "version"}, Required: true}},
@@ -186,6 +160,57 @@ END;`); err != nil {
 	definition, exists := registry.Definition("go-version")
 	if !exists {
 		t.Fatal("go-version definition missing")
+	}
+
+	if err := os.WriteFile(filepath.Join(workspaceSnapshot.Path, "base.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captured, err := patch.Capture(ctx, repository, patch.CaptureSpec{
+		AttemptID: attempt.ID, ExecutionPath: workspaceSnapshot.Path, Identity: workspaceSnapshot.Identity, ExcludePaths: workspaceSnapshot.ExcludePaths,
+		BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchStore, err := patch.NewStore(runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundlePath, err := patchStore.Save(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchRecord, created, err := store.RecordPatchBundle(ctx, captured.Bundle, bundlePath)
+	if err != nil || !created || patchRecord.Bundle.BundleHash != captured.Bundle.BundleHash {
+		t.Fatalf("RecordPatchBundle() = %+v, %v, %v", patchRecord, created, err)
+	}
+	if _, created, err := store.RecordPatchBundle(ctx, captured.Bundle, bundlePath); err != nil || created {
+		t.Fatalf("idempotent RecordPatchBundle() = created=%v, err=%v", created, err)
+	}
+
+	candidate, err := repository.SnapshotTree(ctx, gitrepo.SnapshotSpec{BaseTree: workspaceSnapshot.BaseTree, ExcludePaths: workspaceSnapshot.ExcludePaths, MaxFileBytes: 1 << 20})
+	candidateTree := candidate.Tree
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := validator.NewCommandRunner(runtimeRoot, registry, provider, handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := runner.Run(ctx, validator.CommandRequest{
+		RunID: "validator_run_artifact", ValidatorID: "go-version",
+		GoalRevisionHash: revision.Hash, ConfigHash: registry.ConfigHash(), TreeHash: candidateTree,
+		EnvironmentHash: environmentRecord.Hash, MaxOutputBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRecord, created, err := store.RecordValidatorRun(ctx, attempt.ID, workspaceSnapshot.ID, receipt)
+	if err != nil || !created || runRecord.Hash == "" {
+		t.Fatalf("RecordValidatorRun() = %+v, %v, %v", runRecord, created, err)
+	}
+	if _, created, err := store.RecordValidatorRun(ctx, attempt.ID, workspaceSnapshot.ID, receipt); err != nil || created {
+		t.Fatalf("idempotent RecordValidatorRun() = created=%v, err=%v", created, err)
 	}
 	if err := os.WriteFile(filepath.Join(repositoryPath, "unrelated.txt"), []byte("new base\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -234,29 +259,6 @@ END;`); err != nil {
 	}
 	if registered, err := store.RecordValidatorRegistry(ctx, thirdRegistry); err != nil || registered != 1 {
 		t.Fatalf("RecordValidatorRegistry() across config = %d, %v", registered, err)
-	}
-	candidateTree, err := repository.IndexAndWriteTree(ctx, workspaceSnapshot.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner, err := validator.NewCommandRunner(runtimeRoot, registry, provider, handle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := runner.Run(ctx, validator.CommandRequest{
-		RunID: "validator_run_artifact", ValidatorID: "go-version",
-		GoalRevisionHash: revision.Hash, ConfigHash: registry.ConfigHash(), TreeHash: candidateTree,
-		EnvironmentHash: environmentRecord.Hash, MaxOutputBytes: 1 << 20,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runRecord, created, err := store.RecordValidatorRun(ctx, attempt.ID, workspaceSnapshot.ID, receipt)
-	if err != nil || !created || runRecord.Hash == "" {
-		t.Fatalf("RecordValidatorRun() = %+v, %v, %v", runRecord, created, err)
-	}
-	if _, created, err := store.RecordValidatorRun(ctx, attempt.ID, workspaceSnapshot.ID, receipt); err != nil || created {
-		t.Fatalf("idempotent RecordValidatorRun() = created=%v, err=%v", created, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

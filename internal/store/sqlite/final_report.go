@@ -82,6 +82,22 @@ func (s *Store) FinalizeGoal(
 		if goal.Version != expectedGoalVersion {
 			return fmt.Errorf("goal %q: %w", goalID, basestore.ErrConflict)
 		}
+		if s.info.SchemaVersion >= 8 {
+			var model string
+			if err := tx.QueryRowContext(ctx, `SELECT execution_model FROM goals WHERE id=?`, goalID).Scan(&model); err != nil {
+				return err
+			}
+			if model != "current-directory" {
+				return ErrExecutionMigrationRequired
+			}
+			checkout, err := readCheckout(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if checkout.GoalID != goalID || checkout.WorkID != "" || checkout.AcceptedCommit != decoded.Final.Commit || checkout.AcceptedTree != facts.IntegrationTree || checkout.AcceptedTree != facts.ExpectedTree {
+				return ErrCheckoutConflict
+			}
+		}
 		revision, err := readGoalRevision(ctx, tx, goal.ActiveRevisionID)
 		if err != nil {
 			return err

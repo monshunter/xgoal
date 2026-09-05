@@ -17,7 +17,7 @@ func (s *Store) RunnableGoalIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id
 FROM goals
-WHERE state IN (?, ?) AND active_revision_id <> ''
+WHERE execution_model = 'current-directory' AND state IN (?, ?) AND active_revision_id <> ''
 ORDER BY created_at, id`, domain.GoalRunning, domain.GoalVerifying)
 	if err != nil {
 		return nil, fmt.Errorf("list runnable goals: %w", err)

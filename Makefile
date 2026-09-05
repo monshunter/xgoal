@@ -41,7 +41,7 @@ sqlite-cross-build:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o /dev/null ./internal/store/sqlite
 
 m2-failure-matrix:
-	go test ./internal/patch -run 'TestCaptureIgnoresAgentHistoryAndPreservesEveryFilesystemChange|TestReplayRejectsConflictAndScopeViolationBeforeMutation|TestReplayRejectsSymlinkParentBeforeMutation' -count=1
+	go test ./internal/patch -run 'TestCapturePreservesEveryFilesystemChangeWithoutMovingHeadOrIndex|TestReplayRejectsConflictAndScopeViolationBeforeMutation|TestReplayRejectsSymlinkParentBeforeMutation' -count=1
 	go test ./internal/store/sqlite -run 'TestPromotionPreflightRejectsStaleEvidenceAndFailureClosesEffect|TestM2ArtifactsPersistAndFailClosedOnDiskTamperingAcrossRestart|TestM2MigrationUpgradesM1StoreAndPreservesStateWithBackup' -count=1
 	go test ./internal/promotion -run 'TestPromotionRecoversAfterRefUpdateWithoutCreatingDuplicateCommit' -count=1
 

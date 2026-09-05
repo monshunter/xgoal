@@ -65,6 +65,14 @@ func (manager *Manager) Promote(ctx context.Context, request Request) (Observati
 	if err := request.Validate(); err != nil {
 		return Observation{}, err
 	}
+	if request.ExecutionModel != CurrentDirectory {
+		return Observation{}, ErrExecutionMigrationRequired
+	}
+	// Recovery has the same filesystem prerequisite as a first invocation.
+	// In particular, an existing marker never authorizes accepting a stale tree.
+	if err := manager.verifyCandidate(ctx, request); err != nil {
+		return Observation{}, err
+	}
 	record, _, err := manager.journal.Ensure(ctx, request)
 	if err != nil {
 		return Observation{}, err
@@ -72,13 +80,16 @@ func (manager *Manager) Promote(ctx context.Context, request Request) (Observati
 	if !record.Valid() || !EqualRequest(record.Request, request) {
 		return Observation{}, errors.New("promotion journal returned a mismatched record")
 	}
+	if record.State == Failed {
+		return Observation{}, errors.New("failed promotion requires an explicit new attempt")
+	}
 	requestHash, err := request.Hash()
 	if err != nil {
 		return Observation{}, err
 	}
 	storedMarker, markerExists, err := manager.readMarker(request, requestHash)
 	if err != nil {
-		return Observation{}, manager.fail(ctx, request.ID, err)
+		return Observation{}, err
 	}
 	if !markerExists {
 		if err := manager.journal.Preflight(ctx, request); err != nil {
@@ -96,35 +107,46 @@ func (manager *Manager) Promote(ctx context.Context, request Request) (Observati
 		}
 		storedMarker, err = manager.writeMarker(request, requestHash, created)
 		if err != nil {
-			return Observation{}, manager.fail(ctx, request.ID, err)
+			return Observation{}, err
 		}
+	}
+	if _, err := manager.readPromotionCommit(ctx, request, storedMarker); err != nil {
+		return Observation{}, err
 	}
 	if _, err := manager.journal.RecordCommit(ctx, request.ID, storedMarker.Commit); err != nil {
 		return Observation{}, err
 	}
 	current, err := manager.repository.ResolveRef(ctx, request.IntegrationRef)
 	if err != nil {
-		return Observation{}, manager.fail(ctx, request.ID, err)
+		return Observation{}, err
 	}
 	switch current.Commit {
 	case request.OldCommit:
 		if err := manager.journal.Preflight(ctx, request); err != nil {
 			return Observation{}, manager.fail(ctx, request.ID, err)
 		}
-		if err := manager.repository.UpdateRefCAS(ctx, request.IntegrationRef, storedMarker.Commit, request.OldCommit); err != nil {
+		if err := manager.verifyCandidate(ctx, request); err != nil {
 			return Observation{}, manager.fail(ctx, request.ID, err)
+		}
+		if err := manager.repository.UpdateRefCAS(ctx, request.IntegrationRef, storedMarker.Commit, request.OldCommit); err != nil {
+			// CAS can have succeeded before its read-back failed. Preserve the
+			// intent so recovery can prove which external effect occurred.
+			return Observation{}, err
 		}
 	case storedMarker.Commit:
 		// The external effect completed before its database observation.
 	default:
-		return Observation{}, manager.fail(ctx, request.ID, fmt.Errorf("%w: integration ref moved to %s", gitrepo.ErrRefConflict, current.Commit))
+		return Observation{}, fmt.Errorf("%w: integration ref moved to %s", gitrepo.ErrRefConflict, current.Commit)
 	}
 	if _, err := manager.journal.RecordRefUpdate(ctx, request.ID, storedMarker.Commit); err != nil {
 		return Observation{}, err
 	}
 	observation, err := manager.observe(ctx, request, storedMarker)
 	if err != nil {
-		return Observation{}, manager.fail(ctx, request.ID, err)
+		// The private ref already changed. A drifted checkout must leave the
+		// effect pending and the scene intact, never turn it into an untracked
+		// failed effect or advance the accepted checkout state.
+		return Observation{}, err
 	}
 	if _, err := manager.journal.Observe(ctx, request.ID, observation); err != nil {
 		return Observation{}, err
@@ -133,21 +155,20 @@ func (manager *Manager) Promote(ctx context.Context, request Request) (Observati
 }
 
 func (manager *Manager) verifyCandidate(ctx context.Context, request Request) error {
-	worktree, err := manager.repository.InspectWorktree(ctx, request.ValidationWorktree)
+	if request.ExecutionModel != CurrentDirectory || request.CheckoutIdentity == nil {
+		return ErrExecutionMigrationRequired
+	}
+	if request.ExecutionPath != manager.repository.Root() || request.CheckoutIdentity.CommonDir != manager.repository.CommonDir() {
+		return errors.New("promotion checkout does not belong to this repository")
+	}
+	base, err := manager.repository.ResolveRevision(ctx, request.OldCommit)
 	if err != nil {
 		return err
 	}
-	if worktree.HeadCommit != request.OldCommit || worktree.HeadTree != request.OldTree {
-		return errors.New("validation worktree no longer matches promotion base")
+	if base.Tree != request.OldTree {
+		return errors.New("promotion base commit and tree do not match")
 	}
-	tree, err := manager.repository.IndexAndWriteTree(ctx, worktree.Path)
-	if err != nil {
-		return err
-	}
-	if tree != request.CandidateTree {
-		return errors.New("validation worktree candidate tree changed")
-	}
-	return nil
+	return manager.repository.CheckSnapshot(ctx, gitrepo.SnapshotSpec{BaseTree: request.OldTree, ExcludePaths: request.ExcludePaths}, *request.CheckoutIdentity, request.CandidateTree)
 }
 
 func (manager *Manager) observe(ctx context.Context, request Request, stored marker) (Observation, error) {
@@ -155,21 +176,31 @@ func (manager *Manager) observe(ctx context.Context, request Request, stored mar
 	if err != nil {
 		return Observation{}, err
 	}
-	commit, err := manager.repository.ReadCommit(ctx, stored.Commit)
+	commit, err := manager.readPromotionCommit(ctx, request, stored)
 	if err != nil {
 		return Observation{}, err
 	}
-	if ref.Commit != stored.Commit || ref.Tree != request.CandidateTree || commit.Tree != request.CandidateTree || commit.Parent != request.OldCommit {
+	if ref.Commit != stored.Commit || ref.Tree != request.CandidateTree {
 		return Observation{}, errors.New("promotion Git read-back does not match commit, tree, parent, and ref")
 	}
-	wantTrailers := promotionTrailers(request)
-	if !equalStrings(commit.Trailers, wantTrailers) || !equalStrings(stored.Trailers, wantTrailers) {
-		return Observation{}, errors.New("promotion Git trailers do not match request")
+	if err := manager.verifyCandidate(ctx, request); err != nil {
+		return Observation{}, err
 	}
 	return Observation{
 		IntegrationRef: request.IntegrationRef, IntegrationCommit: commit.ID,
-		IntegrationTree: commit.Tree, Trailers: wantTrailers,
+		IntegrationTree: commit.Tree, Trailers: promotionTrailers(request),
 	}, nil
+}
+
+func (manager *Manager) readPromotionCommit(ctx context.Context, request Request, stored marker) (gitrepo.Commit, error) {
+	commit, err := manager.repository.ReadCommit(ctx, stored.Commit)
+	if err != nil {
+		return gitrepo.Commit{}, err
+	}
+	if commit.Tree != request.CandidateTree || commit.Parent != request.OldCommit || !equalStrings(commit.Trailers, promotionTrailers(request)) || !equalStrings(stored.Trailers, promotionTrailers(request)) {
+		return gitrepo.Commit{}, errors.New("promotion commit tree, parent, or trailers do not match request")
+	}
+	return commit, nil
 }
 
 func (manager *Manager) fail(ctx context.Context, id string, cause error) error {
@@ -265,7 +296,7 @@ func (manager *Manager) writeMarker(request Request, requestHash string, commit 
 }
 
 func validateMarker(stored marker, request Request, requestHash string) error {
-	if stored.ProtocolVersion != markerVersion || stored.PromotionID != request.ID || stored.RequestHash != requestHash ||
+	if stored.ProtocolVersion != markerVersion || stored.PromotionID != request.ID || stored.RequestHash != requestHash || !validObjectID(stored.Commit) ||
 		stored.Tree != request.CandidateTree || stored.Parent != request.OldCommit || !equalStrings(stored.Trailers, promotionTrailers(request)) {
 		return errors.New("promotion marker does not match request")
 	}

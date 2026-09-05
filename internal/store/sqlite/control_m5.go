@@ -415,6 +415,13 @@ func (s *Store) ActivateReplan(ctx context.Context, id string, expectedPlanVersi
 		if goal.Version != expectedGoalVersion || goal.ActiveRevisionID != revision.ID || (goal.State != domain.GoalRunning && goal.State != domain.GoalWaiting) {
 			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
 		}
+		checkout, checkoutErr := readCheckout(ctx, tx)
+		if checkoutErr == nil && checkout.GoalID == goal.ID && checkout.WorkID != "" {
+			return fmt.Errorf("resolve the current checkout scene before replanning: %w", ErrCheckoutConflict)
+		}
+		if checkoutErr != nil && !errors.Is(checkoutErr, basestore.ErrNotFound) {
+			return checkoutErr
+		}
 		var activeLeases int
 		if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*)

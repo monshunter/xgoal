@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/finalize"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/goalcompile"
 	"github.com/monshunter/xgoal/internal/orchestrator"
 	finalreport "github.com/monshunter/xgoal/internal/report"
@@ -22,7 +24,22 @@ import (
 )
 
 func TestEngineRunsTwoWorkItemsThroughReviewPromotionAndFinalReport(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	runCurrentDirectoryFixture(t, "complete")
+}
+
+func TestEngineRejectsFinalValidationPrivateRefMutation(t *testing.T) {
+	runCurrentDirectoryFixture(t, "final-ref")
+}
+
+func TestEngineRejectsValidatorAndReviewerSourceMutations(t *testing.T) {
+	for _, phase := range []string{"validator", "reviewer"} {
+		t.Run(phase, func(t *testing.T) { runCurrentDirectoryFixture(t, phase) })
+	}
+}
+
+func runCurrentDirectoryFixture(t *testing.T, behavior string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -62,7 +79,7 @@ agents:
     providerTransport: allow
     credentialSource: cli-session
     activeProbe: disabled
-workspace: {provider: git-worktree, keepFailed: true, cleanupCompletedAfter: 1h}
+workspace: {provider: current-directory, keepFailed: true, cleanupCompletedAfter: 1h}
 runtime: {provider: local-process, isolationLevelRequired: L0, projectNetwork: deny, projectSecrets: deny}
 scopePolicy:
   deny: ["/.git/**", "/.env"]
@@ -88,6 +105,17 @@ review:
 policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
 report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}
 `, codex, claude)
+	if behavior == "final-ref" {
+		configurationText = strings.Replace(configurationText, "test -f one.txt", "test -f one.txt; if test -f two.txt; then git update-ref --no-deref refs/xgoal/goals/goal_e2e/integration HEAD; fi", 1)
+	}
+	if behavior == "validator" {
+		configurationText = strings.Replace(configurationText, "test -f one.txt", "test -f one.txt; printf validator-mutation > one.txt", 1)
+	}
+	if behavior == "reviewer" {
+		if err := os.WriteFile(filepath.Join(root, "review-mutation"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(project, "xgoal.yaml"), []byte(configurationText), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -145,13 +173,116 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if err != nil {
 		t.Fatal(err)
 	}
+	repository, err := gitrepo.Open(ctx, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalIdentity, err := repository.ReadCheckoutIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := engine.RunGoal(ctx, goalID); err != nil {
 		status, _ := store.GoalStatus(context.Background(), goalID)
 		t.Fatalf("RunGoal() error = %v; status = %+v", err, status)
 	}
+	failed, err := store.GoalStatus(ctx, goalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Goal.State != domain.GoalWaiting || len(failed.Attempts) != 1 {
+		t.Fatalf("failed attempt must wait for explicit checkout retry: %+v", failed)
+	}
+	checkout, err := store.Checkout(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkout.ObservedTree == checkout.AcceptedTree {
+		t.Fatal("scope-safe partial source was not captured as failed scene")
+	}
+	if content, err := os.ReadFile(filepath.Join(project, "one.txt")); err != nil || string(content) != "partial\n" {
+		t.Fatalf("failure scene was not preserved: %q %v", content, err)
+	}
+	failedWork, err := store.WorkItem(ctx, checkout.WorkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "one.txt"), []byte("operator edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := repository.SnapshotTree(ctx, gitrepo.SnapshotSpec{BaseTree: checkout.AcceptedTree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RetryCheckoutWork(ctx, failedWork.ID, failedWork.Version, originalIdentity, changed.Tree,
+		sqlite.EventInput{Type: "WorkRetryRequested", ActorType: "human", Payload: map[string]any{"reason": "must reject drift"}}); !errors.Is(err, sqlite.ErrCheckoutConflict) {
+		t.Fatalf("retry adopted externally changed files: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "one.txt"), []byte("partial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RetryCheckoutWork(ctx, failedWork.ID, failedWork.Version, originalIdentity, checkout.ObservedTree,
+		sqlite.EventInput{Type: "WorkRetryRequested", ActorType: "human", Payload: map[string]any{"reason": "retry failed fixture with preserved scene"}}); err != nil {
+		t.Fatal(err)
+	}
+	runErr := engine.RunGoal(ctx, goalID)
+	if behavior == "final-ref" {
+		if !errors.Is(runErr, gitrepo.ErrRefConflict) {
+			t.Fatalf("final ref drift was not rejected: %v", runErr)
+		}
+		status, err := store.GoalStatus(ctx, goalID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Goal.State == domain.GoalCompleted || status.Goal.FinalReportHash != "" {
+			t.Fatalf("final ref drift produced a completed report: %+v", status.Goal)
+		}
+		if err := repository.CheckCheckoutIdentity(ctx, originalIdentity); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if runErr != nil {
+		status, _ := store.GoalStatus(context.Background(), goalID)
+		t.Fatalf("explicit retry RunGoal() error = %v; status = %+v", runErr, status)
+	}
 	status, err := store.GoalStatus(ctx, goalID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if behavior != "complete" {
+		if status.Goal.State != domain.GoalWaiting || len(status.Attempts) != 2 {
+			t.Fatalf("phase mutation did not stop execution: %+v", status)
+		}
+		for _, work := range status.WorkItems {
+			if work.State == domain.WorkCompleted {
+				t.Fatal("drifted candidate completed a Work")
+			}
+		}
+		if git(t, project, "rev-parse", "refs/xgoal/goals/"+goalID+"/integration") != originalIdentity.HeadCommit {
+			t.Fatal("drifted candidate advanced private integration")
+		}
+		if err := repository.CheckCheckoutIdentity(ctx, originalIdentity); err != nil {
+			t.Fatal(err)
+		}
+		latest, err := store.Checkout(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := repository.SnapshotTree(ctx, gitrepo.SnapshotSpec{BaseTree: latest.AcceptedTree})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual.Tree == latest.ObservedTree || latest.AcceptedTree != originalIdentity.HeadTree {
+			t.Fatal("phase mutation was adopted as an owned or accepted scene")
+		}
+		work, err := store.WorkItem(ctx, latest.WorkID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.RetryCheckoutWork(ctx, work.ID, work.Version, actual.Identity, actual.Tree, sqlite.EventInput{Type: "WorkRetryRequested", ActorType: "human", Payload: map[string]any{"reason": "must not adopt phase drift"}}); !errors.Is(err, sqlite.ErrCheckoutConflict) {
+			t.Fatalf("retry adopted phase mutation: %v", err)
+		}
+		return
 	}
 	if status.Goal.State != domain.GoalCompleted || len(status.WorkItems) != 2 || len(status.Attempts) != 3 {
 		var diagnostics []domain.Event
@@ -166,6 +297,20 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 			t.Fatalf("work %s state = %s", work.ID, work.State)
 		}
 	}
+	if err := repository.CheckCheckoutIdentity(ctx, originalIdentity); err != nil {
+		t.Fatalf("user Git identity changed: %v", err)
+	}
+	if got := git(t, project, "worktree", "list", "--porcelain"); strings.Count(got, "worktree ") != 1 {
+		t.Fatalf("xgoal created a worktree: %s", got)
+	}
+	for _, name := range []string{"one.txt", "two.txt"} {
+		if _, err := os.Stat(filepath.Join(project, name)); err != nil {
+			t.Fatalf("result missing from current directory: %s: %v", name, err)
+		}
+	}
+	if git(t, project, "rev-parse", "refs/xgoal/goals/"+goalID+"/integration^{tree}") != status.Goal.FinalTree {
+		t.Fatal("private audit ref does not match final result")
+	}
 	packets, err := workpacket.NewStore(state)
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +320,9 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		artifact, loadErr := packets.Load(attempt.ID)
 		if loadErr != nil {
 			t.Fatalf("load packet %s: %v", attempt.ID, loadErr)
+		}
+		if artifact.Packet.Project.Workspace != project {
+			t.Fatalf("provider CWD differs from current root: %s", artifact.Packet.Project.Workspace)
 		}
 		if artifact.Packet.Environment.OS == "" || artifact.Packet.Environment.Arch == "" || artifact.Packet.Environment.GitCommit == "" || artifact.Packet.Environment.ToolVersions["codex-cli"] == "" {
 			t.Fatalf("packet %s lacks attributable environment facts: %+v", attempt.ID, artifact.Packet.Environment)
@@ -223,13 +371,14 @@ if [ "${1:-}" = "login" ]; then echo 'Logged in'; exit 0; fi
 counter="$(dirname "$0")/codex-execution-count"
 if [ ! -f "$counter" ]; then
   : > "$counter"
+  printf 'partial\n' > one.txt
   printf '%s\n' '{"type":"thread.started","thread_id":"codex-invalid-session"}'
   printf '%s\n' '{"type":"turn.started"}'
   printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"protocol_version\":\"bad\",\"status\":\"completed\",\"summary\":\"invalid first attempt\"}"}}'
   printf '%s\n' '{"type":"turn.completed"}'
   exit 0
 fi
-if [ ! -f one.txt ]; then printf 'one\n' > one.txt; changed=one.txt; else printf 'two\n' > two.txt; changed=two.txt; fi
+if [ "$(cat one.txt 2>/dev/null || true)" != "one" ]; then printf 'one\n' > one.txt; changed=one.txt; else printf 'two\n' > two.txt; changed=two.txt; fi
 sleep 0.1
 session="codex-session-$$"
 printf '%s\n' "{\"type\":\"thread.started\",\"thread_id\":\"$session\"}"
@@ -251,6 +400,7 @@ set -eu
 if [ "${1:-}" = "--version" ]; then echo '1.0 (Claude Code)'; exit 0; fi
 if [ "${1:-}" = "--help" ]; then echo '--print --output-format --json-schema --permission-mode --tools --allowedTools --resume'; exit 0; fi
 if [ "${1:-}" = "auth" ]; then echo '{"loggedIn": true}'; exit 0; fi
+if [ -f "$(dirname "$0")/review-mutation" ]; then printf 'reviewer-mutation' > one.txt; exit 7; fi
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"claude-review-fixture"}'
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-review-fixture","structured_output":{"protocol_version":"xgoal.review-result/v1alpha1","review_status":"approved","findings":[],"suggested_validators":[]}}'
 `

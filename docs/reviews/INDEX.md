@@ -47,4 +47,5 @@
 | REVIEW-042-spec-current-directory | REVIEW-042：当前工作目录与持久后台执行 Spec Review | [REVIEW-042-spec-current-directory.md](REVIEW-042-spec-current-directory.md) |
 | REVIEW-043-design-current-directory | REVIEW-043：当前工作目录、持久后台与历史兼容 Design Review | [REVIEW-043-design-current-directory.md](REVIEW-043-design-current-directory.md) |
 | REVIEW-044-change-project-daemon-isolation | REVIEW-044：PLAN-009 项目隔离与 Daemon 生命周期 Change Review | [REVIEW-044-change-project-daemon-isolation.md](REVIEW-044-change-project-daemon-isolation.md) |
+| REVIEW-045-change-current-directory | REVIEW-045：PLAN-011 当前主目录执行 Change Review | [REVIEW-045-change-current-directory.md](REVIEW-045-change-current-directory.md) |
 <!-- AGENT-HARNESS:END INDEX -->

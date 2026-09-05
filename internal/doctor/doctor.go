@@ -78,10 +78,15 @@ func Inspect(ctx context.Context, paths app.Paths) map[string]any {
 	if daemonErr != nil {
 		unmet = append(unmet, "daemon: "+daemonErr.Error())
 	}
+	configError := ""
+	if configErr != nil {
+		configError = configErr.Error()
+	}
 	return map[string]any{
 		"project_id": paths.ProjectID, "project_root": paths.ProjectRoot, "state_dir": paths.StateDir, "socket_path": paths.SocketPath, "repository_identity": paths.RepositoryIdentity,
 		"store": store, "daemon": daemonStatus, "os": runtime.GOOS, "arch": runtime.GOARCH, "git": gitFacts, "tools": tools, "config_hash": configHash,
 		"agent_profiles": profiles, "validators": validators, "unmet_capabilities": unmet,
+		"configuration_compatible": configErr == nil, "config_error": configError, "config_migration_required": errors.Is(configErr, config.ErrMigrationRequired),
 		"provider_transport": "trusted_profiles_only", "provider_credential_status": "passive_not_inspected", "active_probe_evidence": "none", "project_network_policy": network, "project_secrets_policy": secrets, "isolation_level": "L0",
 		"isolation_limit":  "local-process L0 shares host resources, user home, network, credentials and provider quotas",
 		"shared_resources": []string{"CPU", "memory", "disk", "ports", "external databases and Docker", "provider credentials and quotas"}, "model_calls": 0,

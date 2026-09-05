@@ -181,6 +181,13 @@ func seedFinalizableReport(t *testing.T, store *Store, root string, source *cloc
 		ScopePolicyPassed: true, FinalValidationSetCurrent: true, FinalEvidenceSetID: set.ID,
 		FinalReportHash: artifact.ReportHash, HumanAcceptanceSatisfied: true,
 	}
+	if store.Info().SchemaVersion >= 8 {
+		identity := testCheckoutIdentity(t)
+		identity.HeadCommit, identity.HeadTree, identity.IndexTree = reportValue.Final.Commit, tree, tree
+		if _, err := store.AdmitCheckout(ctx, goal.ID, identity, tree); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return goal, facts, files
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/supervisor"
 )
@@ -39,6 +40,8 @@ type Spec struct {
 	Lockfiles            []string
 	ToolProbes           []ToolProbe
 	BootstrapHash        string
+	Identity             gitrepo.CheckoutIdentity
+	ExcludePaths         []string
 }
 
 type Handle struct {

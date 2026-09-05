@@ -16,7 +16,7 @@ M6 历史设计与验收保留其原版本含义。OBJ-003 将本设计修订为
 
 ## 2. Final Report 模型
 
-`internal/report` 定义 `xgoal.final-report/v1`：Goal 原文/Revision/Config、Work/Attempt/角色、Final Commit/Tree/Scope/Design Decisions、逐 AC Evidence、Validator command/receipt/reproduction、Gate/Finding、运行时长/次数、限制/取消范围与时间。当前目录执行的报告还绑定项目身份、执行根及 Git 身份，说明 Final Commit 是私有审计引用、用户 HEAD/index 未被提交或切换，交付文件位于当前目录。Fact/Claim/Inference/Decision 均显式标 Authority。
+`internal/report` 定义 `xgoal.final-report/v1`：Goal 原文/Revision/Config、Work/Attempt/角色、Final Commit/Tree/Scope/Design Decisions、逐 AC Evidence、Validator command/receipt/reproduction、Gate/Finding、运行时长/次数、限制/取消范围与时间。报告直接绑定 Final Commit/Tree、Goal Revision 与 Evidence；项目身份、执行根和 Git 身份通过同一 SQLite 的 Goal/Attempt、Workspace 与 Checkout 记录追溯，不在报告协议重复保存完整执行状态。报告说明 Final Commit 是私有审计引用、用户 HEAD/index 未被提交或切换，交付文件位于当前目录。Fact/Claim/Inference/Decision 均显式标 Authority。
 
 JSON 使用 canonical 编码并计算 `json_hash`；Markdown 由固定顺序和 escaping 渲染，再计算 `markdown_hash`。`report_hash` 对两个内容 Hash、Goal Revision、Config、Final Tree 与 Evidence Set 做 canonical hash。文件只写入项目私有 state 的 `reports/<goal>/`，目录 `0700`、文件 `0600`。
 

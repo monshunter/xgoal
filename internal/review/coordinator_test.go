@@ -2,6 +2,7 @@ package review_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,7 +97,7 @@ validators:
 	if err := os.WriteFile(filepath.Join(attempt.Path, "accepted.txt"), []byte("accepted\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	captured, err := patch.Capture(ctx, repository, patch.CaptureSpec{AttemptID: "attempt_review", WorktreePath: attempt.Path, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20})
+	captured, err := patch.Capture(ctx, repository, patch.CaptureSpec{AttemptID: "attempt_review", ExecutionPath: attempt.Path, Identity: attempt.Identity, ExcludePaths: attempt.ExcludePaths, BaseCommit: base.Commit, BaseTree: base.Tree, MaxFileBytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +117,7 @@ validators:
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := patch.Replay(ctx, repository, patch.ReplaySpec{WorktreePath: validation.Path, IntegrationCommit: base.Commit, IntegrationTree: base.Tree, Captured: captured, Policy: policy, MaxFileBytes: 1 << 20})
+	replayed, err := patch.Replay(ctx, repository, patch.ReplaySpec{ExecutionPath: validation.Path, Identity: validation.Identity, ExcludePaths: validation.ExcludePaths, IntegrationCommit: base.Commit, IntegrationTree: base.Tree, Captured: captured, Policy: policy, MaxFileBytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ validators:
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := provider.Prepare(ctx, environment.Spec{ID: "environment_review", WorktreePath: validation.Path, BaseCommit: base.Commit, BaseTree: base.Tree, ConfigHash: registry.ConfigHash(), GoalRevisionHash: strings.Repeat("a", 64)})
+	handle, err := provider.Prepare(ctx, environment.Spec{ID: "environment_review", WorktreePath: validation.Path, BaseCommit: validation.Identity.HeadCommit, BaseTree: validation.InputTree, Identity: validation.Identity, ExcludePaths: validation.ExcludePaths, ConfigHash: registry.ConfigHash(), GoalRevisionHash: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ validators:
 		t.Fatal(err)
 	}
 	input := review.PrepareInput{ID: "review_coordinated", GoalRevisionHash: strings.Repeat("a", 64), PlanRevisionHash: strings.Repeat("b", 64), WorkItemID: "work_review", ImplementationAttemptID: "attempt_review", ImplementationProfileID: "codex-implementer", ImplementationSessionID: "codex-session", ReviewerProfileID: "claude-reviewer", CandidateTree: replayed.CandidateTree, ValidationWorkspace: validation, ValidatorRunIDs: []string{receipt.ID}, RequiredChecks: []string{"correctness", "scope"}}
-	artifact, err := coordinator.Prepare(input)
+	artifact, err := coordinator.Prepare(ctx, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,19 @@ validators:
 	drifted := input
 	drifted.ID = "review_drifted"
 	drifted.CandidateTree = strings.Repeat("f", 40)
-	if _, err := coordinator.Prepare(drifted); err == nil {
+	if _, err := coordinator.Prepare(ctx, drifted); err == nil {
 		t.Fatal("coordinator accepted a candidate tree not bound to receipt")
 	}
+	if err := os.WriteFile(filepath.Join(repositoryRoot, "accepted.txt"), []byte("edited after validation\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	drifted = input
+	drifted.ID = "review_source_drift"
+	if _, err := coordinator.Prepare(ctx, drifted); !errors.Is(err, gitrepo.ErrCheckoutChanged) {
+		t.Fatalf("review accepted stale validator evidence after source mutation: %v", err)
+	}
+	if err := repository.CheckCheckoutIdentity(ctx, validation.Identity); err != nil {
+		t.Fatal(err)
+	}
+
 }

@@ -18,7 +18,7 @@ JOIN work_items work ON work.id = attempt.work_item_id
 JOIN plan_revisions plan ON plan.id = work.plan_revision_id
 JOIN goal_revisions revision ON revision.id = plan.goal_revision_id
 JOIN goals goal ON goal.id = revision.goal_id
-WHERE workspace.state = ?
+WHERE workspace.execution_model = 'current-directory' AND workspace.state = ?
   AND goal.state = ?
   AND attempt.state IN ('SUCCEEDED','FAILED','TIMED_OUT','INTERRUPTED','INVALID_OUTPUT','QUARANTINED')
   AND NOT EXISTS (SELECT 1 FROM environment_snapshots environment WHERE environment.workspace_id = workspace.id)

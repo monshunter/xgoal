@@ -66,6 +66,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		); err != nil {
 			return fmt.Errorf("insert goal %q: %w", goal.ID, err)
 		}
+		if s.info.SchemaVersion >= 8 {
+			if _, err := tx.ExecContext(ctx, `UPDATE goals SET execution_model = 'current-directory' WHERE id = ?`, goal.ID); err != nil {
+				return err
+			}
+		}
 		return s.appendEvent(ctx, tx, "goal", goal.ID, prepared)
 	})
 }

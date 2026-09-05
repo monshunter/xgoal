@@ -6,9 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -19,11 +16,13 @@ import (
 )
 
 type CaptureSpec struct {
-	AttemptID    string
-	WorktreePath string
-	BaseCommit   string
-	BaseTree     string
-	MaxFileBytes int64
+	AttemptID     string
+	ExecutionPath string
+	Identity      gitrepo.CheckoutIdentity
+	ExcludePaths  []string
+	BaseCommit    string
+	BaseTree      string
+	MaxFileBytes  int64
 }
 
 type Captured struct {
@@ -42,9 +41,15 @@ func Capture(ctx context.Context, repository *gitrepo.Repository, spec CaptureSp
 	if repository == nil || !validComponent(spec.AttemptID) || spec.MaxFileBytes <= 0 || spec.BaseCommit == "" || spec.BaseTree == "" {
 		return Captured{}, errors.New("invalid patch capture spec")
 	}
-	worktree, err := repository.InspectWorktree(ctx, spec.WorktreePath)
+	identity, err := repository.InspectCheckout(ctx, spec.ExecutionPath)
 	if err != nil {
 		return Captured{}, err
+	}
+	if err := spec.Identity.Validate(); err != nil {
+		return Captured{}, err
+	}
+	if identity != spec.Identity {
+		return Captured{}, gitrepo.ErrCheckoutChanged
 	}
 	base, err := repository.ResolveRevision(ctx, spec.BaseCommit)
 	if err != nil {
@@ -57,9 +62,20 @@ func Capture(ctx context.Context, repository *gitrepo.Repository, spec CaptureSp
 	if err != nil {
 		return Captured{}, err
 	}
-	currentFiles, err := readWorkspaceFiles(worktree.Path, spec.MaxFileBytes)
+	snapshot, err := repository.SnapshotTree(ctx, gitrepo.SnapshotSpec{BaseTree: spec.BaseTree, ExcludePaths: spec.ExcludePaths, MaxFileBytes: spec.MaxFileBytes})
 	if err != nil {
 		return Captured{}, err
+	}
+	if snapshot.Identity != spec.Identity {
+		return Captured{}, gitrepo.ErrCheckoutChanged
+	}
+	currentFiles := make(map[string]fileState, len(snapshot.Files))
+	for _, file := range snapshot.Files {
+		canonicalPath, err := scope.NormalizeRepositoryPath(file.Path)
+		if err != nil {
+			return Captured{}, err
+		}
+		currentFiles[canonicalPath] = newFileState(canonicalPath, file.Mode, file.Content)
 	}
 	entries, objects, err := compareFiles(baseFiles, currentFiles)
 	if err != nil {
@@ -114,88 +130,6 @@ func readBaseFiles(ctx context.Context, repository *gitrepo.Repository, commit s
 			}
 		}
 		files[canonicalPath] = newFileState(canonicalPath, entry.Mode, content)
-	}
-	return files, nil
-}
-
-func readWorkspaceFiles(root string, maxFileBytes int64) (map[string]fileState, error) {
-	rawFiles := make(map[string]fileState)
-	allPaths := make([]string, 0)
-	err := filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(root, current)
-		if err != nil {
-			return err
-		}
-		if relative == "." {
-			return nil
-		}
-		repositoryPath := filepath.ToSlash(relative)
-		if repositoryPath == ".git" && !entry.IsDir() {
-			return nil
-		}
-		if _, err := scope.NormalizeRepositoryPath(repositoryPath); err != nil {
-			return fmt.Errorf("workspace path %q: %w", repositoryPath, err)
-		}
-		allPaths = append(allPaths, repositoryPath)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		var content []byte
-		var mode string
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(current)
-			if err != nil {
-				return fmt.Errorf("read symlink %q: %w", repositoryPath, err)
-			}
-			if err := scope.ValidateSymlinkTarget(repositoryPath, target); err != nil {
-				return fmt.Errorf("symlink %q: %w", repositoryPath, err)
-			}
-			content = []byte(target)
-			mode = "120000"
-		case info.Mode().IsRegular():
-			if info.Size() > maxFileBytes {
-				return fmt.Errorf("file %q size %d exceeds limit %d", repositoryPath, info.Size(), maxFileBytes)
-			}
-			content, err = os.ReadFile(current)
-			if err != nil {
-				return fmt.Errorf("read file %q: %w", repositoryPath, err)
-			}
-			if int64(len(content)) != info.Size() {
-				return fmt.Errorf("file %q changed while being read", repositoryPath)
-			}
-			mode = "100644"
-			if info.Mode().Perm()&0o111 != 0 {
-				mode = "100755"
-			}
-		default:
-			return fmt.Errorf("workspace contains unsupported file type at %q", repositoryPath)
-		}
-		rawFiles[repositoryPath] = newFileState(repositoryPath, mode, content)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	canonicalPaths, err := scope.CanonicalizePaths(allPaths)
-	if err != nil {
-		return nil, fmt.Errorf("workspace paths: %w", err)
-	}
-	files := make(map[string]fileState, len(rawFiles))
-	for canonicalPath, rawPath := range canonicalPaths {
-		state, exists := rawFiles[rawPath]
-		if !exists {
-			continue
-		}
-		state.path = canonicalPath
-		files[canonicalPath] = state
 	}
 	return files, nil
 }

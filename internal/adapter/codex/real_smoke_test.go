@@ -122,6 +122,8 @@ func TestM3RealCodexFastAndStandardImplementer(t *testing.T) {
 	})
 	assertRealSmokeRun(t, harness.runtimeRoot, fast, "fast.txt", "fast goal accepted\n")
 
+	// The two independent smoke goals use separate clean main checkouts.
+	harness = newRealSmokeHarness(t, ctx)
 	store, standardRevision, standardPlan, standardWork := seedRealStandardAttempt(t, ctx, harness)
 	standard := harness.run(t, realWorkSpec{
 		name: "standard", filename: "standard.txt", content: "standard implementer accepted\n",
@@ -330,7 +332,7 @@ func (harness realSmokeHarness) run(t *testing.T, spec realWorkSpec) realSmokeRu
 		advanceRealAttempt(t, harness.ctx, spec.store, *claimedLease, 4, domain.AttemptCollecting)
 	}
 	captured, err := patch.Capture(harness.ctx, harness.repository, patch.CaptureSpec{
-		AttemptID: spec.attemptID, WorktreePath: attemptWorkspace.Path,
+		AttemptID: spec.attemptID, ExecutionPath: attemptWorkspace.Path, Identity: attemptWorkspace.Identity, ExcludePaths: attemptWorkspace.ExcludePaths,
 		BaseCommit: harness.base.Commit, BaseTree: harness.base.Tree, MaxFileBytes: 1 << 20,
 	})
 	if err != nil {
@@ -366,7 +368,7 @@ func (harness realSmokeHarness) run(t *testing.T, spec realWorkSpec) realSmokeRu
 		t.Fatal(err)
 	}
 	replayed, err := patch.Replay(harness.ctx, harness.repository, patch.ReplaySpec{
-		WorktreePath: validationWorkspace.Path, IntegrationCommit: harness.base.Commit, IntegrationTree: harness.base.Tree,
+		ExecutionPath: validationWorkspace.Path, Identity: validationWorkspace.Identity, ExcludePaths: validationWorkspace.ExcludePaths, IntegrationCommit: harness.base.Commit, IntegrationTree: harness.base.Tree,
 		Captured: captured, Policy: policy, MaxFileBytes: 1 << 20,
 	})
 	if err != nil {
@@ -377,8 +379,8 @@ func (harness realSmokeHarness) run(t *testing.T, spec realWorkSpec) realSmokeRu
 		t.Fatal(err)
 	}
 	handleEnvironment, err := provider.Prepare(harness.ctx, environment.Spec{
-		ID: "environment_real_" + spec.name, WorktreePath: validationWorkspace.Path,
-		BaseCommit: harness.base.Commit, BaseTree: harness.base.Tree,
+		ID: "environment_real_" + spec.name, WorktreePath: validationWorkspace.Path, Identity: validationWorkspace.Identity, ExcludePaths: validationWorkspace.ExcludePaths,
+		BaseCommit: validationWorkspace.Identity.HeadCommit, BaseTree: validationWorkspace.InputTree,
 		ConfigHash: harness.registry.ConfigHash(), GoalRevisionHash: spec.goalHash,
 		ToolProbes: []environment.ToolProbe{{Name: "git", Argv: []string{"git", "--version"}, Required: true}},
 	})
