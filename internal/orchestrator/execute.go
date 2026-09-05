@@ -17,6 +17,7 @@ import (
 	"github.com/monshunter/xgoal/internal/environment"
 	"github.com/monshunter/xgoal/internal/evidence"
 	"github.com/monshunter/xgoal/internal/gitrepo"
+	"github.com/monshunter/xgoal/internal/harness"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/promotion"
 	"github.com/monshunter/xgoal/internal/protocol"
@@ -64,6 +65,10 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	runtimeAdapter := engine.adapters[profile.ID]
 	if runtimeAdapter == nil {
 		return fmt.Errorf("profile %q has no runtime adapter", profile.ID)
+	}
+	harnessInput, err := harness.Discover(engine.projectRoot, profile.Adapter, engine.config.Project.Harness)
+	if err != nil {
+		return engine.failUnclaimed(ctx, goal, work, revision, reconcile.AgentUnavailable, err, profile.ID)
 	}
 	capabilities, err := runtimeAdapter.Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
 	if err != nil {
@@ -126,6 +131,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return previousErr
 	}
 	packet := protocol.WorkPacket{
+		Harness:         &harnessInput,
 		ProtocolVersion: protocol.WorkPacketVersion,
 		Project:         protocol.PacketProject{Name: engine.config.Metadata.Name, BaseTree: integration.Tree, Workspace: attemptWorkspace.Path},
 		Goal:            protocol.PacketGoal{ID: goal.ID, Revision: revision.Revision, Summary: frozen.Contract.Summary, ContractHash: revision.Hash},
@@ -204,7 +210,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 
-	attemptEnvironment, environmentSnapshot, err := engine.prepareAttemptEnvironment(ctx, attemptWorkspace, revision, profile)
+	attemptEnvironment, environmentSnapshot, err := engine.prepareAttemptEnvironment(ctx, attemptWorkspace, revision)
 	if err != nil {
 		class := reconcile.EnvironmentPrepFailed
 		if errors.Is(err, errProjectNetworkGate) {
@@ -237,8 +243,13 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	if err != nil {
 		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
+	effective, err := profile.Effective(string(work.RecommendedRole), capabilities.Version)
+	if err != nil {
+		return fail(reconcile.AgentUnavailable, err, profile.ID, "")
+	}
 	invocation := adapter.Invocation{
-		InvocationID: invocationID, AttemptID: attemptID, WorkItemID: work.ID, ProfileID: profile.ID,
+		ExecutionConfig: &effective,
+		InvocationID:    invocationID, AttemptID: attemptID, WorkItemID: work.ID, ProfileID: profile.ID,
 		GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash, BaseTree: integration.Tree,
 		PacketHash: packetArtifact.Hash, Role: work.RecommendedRole, WorkDir: attemptWorkspace.Path,
 		PacketPath:   packetArtifact.Path,
@@ -246,12 +257,10 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		OutputSchema: schema, Environment: profileEnvironment(profile), Timeout: profile.Timeout.Duration,
 		MaxOutputBytes: maxAgentOutput, SessionPolicy: adapter.SessionFresh,
 	}
-	if profile.Adapter == "codex-cli" {
-		invocation.SandboxPolicy = sandboxFor(work.RecommendedRole)
-	} else {
-		invocation.PermissionMode = "dontAsk"
-		invocation.ToolPolicy = toolsFor(work.RecommendedRole)
-	}
+	invocation.SandboxPolicy = effective.Sandbox
+	invocation.PermissionMode = effective.PermissionMode
+	invocation.ToolPolicy = effective.Tools
+
 	handle, err := runtimeAdapter.Start(ctx, invocation, nil)
 	if err != nil {
 		return fail(classifyAgentError(err), err, profile.ID, "")
@@ -445,7 +454,7 @@ func (engine *Engine) integration(ctx context.Context, goalID string) (string, g
 	return ref, revision, err
 }
 
-func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot workspace.Snapshot, revision domain.GoalRevision, profile config.Agent) (environment.Handle, protocol.EnvironmentSnapshot, error) {
+func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot workspace.Snapshot, revision domain.GoalRevision) (environment.Handle, protocol.EnvironmentSnapshot, error) {
 	bootstrapHash := ""
 	if len(engine.config.Bootstrap.Commands) > 0 {
 		var err error
@@ -459,7 +468,7 @@ func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot wo
 		BaseCommit: snapshot.Identity.HeadCommit, BaseTree: snapshot.InputTree,
 		Identity: snapshot.Identity, ExcludePaths: snapshot.ExcludePaths,
 		ConfigHash: engine.configHash, GoalRevisionHash: revision.Hash,
-		EnvironmentAllowlist: profile.EnvironmentAllowlist, BootstrapHash: bootstrapHash,
+		BootstrapHash: bootstrapHash,
 	})
 	if err != nil {
 		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
@@ -471,7 +480,7 @@ func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot wo
 		}
 		commandContext, cancel := context.WithTimeout(ctx, command.Timeout.Duration)
 		execution, runErr := engine.environment.RunCommand(commandContext, handle, environment.CommandSpec{
-			Argv: command.Argv, CWD: command.CWD, EnvironmentAllowlist: profile.EnvironmentAllowlist,
+			Argv: command.Argv, CWD: command.CWD,
 			GracePeriod: time.Second, Stdout: ioDiscard{}, Stderr: ioDiscard{},
 		})
 		cancel()
@@ -591,7 +600,12 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 	if err != nil {
 		return err
 	}
-	if _, err := engine.adapters[profile.ID].Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second}); err != nil {
+	harnessInput, err := harness.Discover(engine.projectRoot, profile.Adapter, engine.config.Project.Harness)
+	if err != nil {
+		return err
+	}
+	capabilities, err := engine.adapters[profile.ID].Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
+	if err != nil {
 		return err
 	}
 	reviewID, err := randomID("review")
@@ -599,7 +613,8 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 		return err
 	}
 	packet, err := engine.reviews.Prepare(ctx, review.PrepareInput{
-		ID: reviewID, GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash,
+		Harness: &harnessInput,
+		ID:      reviewID, GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash,
 		WorkItemID: work.ID, ImplementationAttemptID: validationWorkspace.AttemptID,
 		ImplementationProfileID: implementer.ID, ImplementationSessionID: implementationSession,
 		ReviewerProfileID: profile.ID, CandidateTree: candidateTree,
@@ -617,15 +632,20 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 	if err != nil {
 		return err
 	}
+	effective, err := profile.Effective("reviewer", capabilities.Version)
+	if err != nil {
+		return err
+	}
 	execution, err := reviewer.Review(ctx, review.Invocation{
-		InvocationID: invocationID, ReviewID: reviewID, ReviewerProfileID: profile.ID,
+		ExecutionConfig: &effective,
+		InvocationID:    invocationID, ReviewID: reviewID, ReviewerProfileID: profile.ID,
 		ImplementationProfileID: implementer.ID, ImplementationSessionID: implementationSession,
 		GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash,
 		BaseTree: validationWorkspace.BaseTree, CandidateTree: candidateTree,
 		PacketHash: packet.Hash, WorkDir: validationWorkspace.Path, PacketPath: packet.Path,
 		Prompt:       "Independently review the immutable Review Packet at " + packet.Path + ". Treat validator receipts as evidence, inspect only the read-only candidate, and return the required structured ReviewResult.",
-		OutputSchema: schema, Environment: profileEnvironment(profile), PermissionMode: "dontAsk",
-		Tools: []string{"Read", "Glob", "Grep"}, Timeout: profile.Timeout.Duration, MaxOutputBytes: maxAgentOutput,
+		OutputSchema: schema, Environment: profileEnvironment(profile), PermissionMode: effective.PermissionMode,
+		Tools: effective.Tools, Timeout: profile.Timeout.Duration, MaxOutputBytes: maxAgentOutput,
 	}, nil)
 	verificationContext, stopVerification := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	checkoutErr := engine.checkWorkspaceTree(verificationContext, validationWorkspace, candidateTree)

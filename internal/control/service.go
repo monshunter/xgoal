@@ -27,6 +27,7 @@ import (
 	"github.com/monshunter/xgoal/internal/finalize"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/goalcompile"
+	"github.com/monshunter/xgoal/internal/harness"
 	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/protocol"
 	finalreport "github.com/monshunter/xgoal/internal/report"
@@ -502,7 +503,11 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 		unmet = append(unmet, service.executionBlocker())
 	} else {
 		for _, profile := range service.configuration.Agents {
-			profiles = append(profiles, service.passiveProfile(ctx, profile))
+			facts := service.passiveProfile(ctx, profile)
+			profiles = append(profiles, facts)
+			if diagnostic, ok := facts["harness_error"].(string); ok && diagnostic != "" {
+				unmet = append(unmet, diagnostic)
+			}
 		}
 		for _, definition := range service.configuration.Validators {
 			available := false
@@ -524,12 +529,16 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 			}
 		}
 	}
+	selections := map[string]config.ProfileSelection{}
+	if service.configuration != nil {
+		selections = service.configuration.RoleSelections()
+	}
 	boundary := service.executionBoundary()
 	return map[string]any{
 		"project_root": service.projectRoot, "store": service.store.Info(), "tools": tools,
 		"os": runtime.GOOS, "arch": runtime.GOARCH, "git": gitFacts, "config_hash": service.configHash,
 		"execution_available": service.executionBlocker() == "", "execution_blocker": service.executionBlocker(),
-		"agent_profiles": profiles, "validators": validators, "unmet_capabilities": unmet,
+		"agent_profiles": profiles, "role_selections": selections, "validators": validators, "unmet_capabilities": unmet,
 		"provider_transport": boundary["provider_transport"], "provider_credential_status": "passive_not_inspected",
 		"active_probe_evidence": "none", "project_network_policy": boundary["project_network_policy"], "project_secrets_policy": boundary["project_secrets_policy"], "isolation_level": boundary["isolation_level"],
 		"isolation_limit": "local-process L0 cannot strongly isolate the user home or network", "model_calls": 0,
@@ -562,6 +571,11 @@ func (service *Service) executionBoundary() map[string]any {
 
 func (service *Service) passiveProfile(ctx context.Context, profile config.Agent) map[string]any {
 	result := map[string]any{"id": profile.ID, "adapter": profile.Adapter, "roles": profile.Roles, "provider_transport": profile.ProviderTransport, "credential_source": profile.CredentialSource, "project_network": service.configuration.Runtime.ProjectNetwork, "isolation_level": "L0", "probe": adapter.ProbePassive}
+	harnessInput, harnessErr := harness.Discover(service.projectRoot, profile.Adapter, service.configuration.Project.Harness)
+	result["harness"] = harnessInput
+	if harnessErr != nil {
+		result["harness_error"] = harnessErr.Error()
+	}
 	environment := make(map[string]string)
 	for _, name := range profile.EnvironmentAllowlist {
 		if value, exists := os.LookupEnv(name); exists {
@@ -579,6 +593,7 @@ func (service *Service) passiveProfile(ctx context.Context, profile config.Agent
 	default:
 		err = errors.New("passive probe is unavailable for this adapter")
 	}
+	result["effective_roles"] = profile.EffectiveRoles(capabilities.Version)
 	if err == nil {
 		result["available"] = true
 		result["capabilities"] = capabilities
@@ -646,7 +661,7 @@ func (service *Service) runActiveProbe(ctx context.Context, operation api.Operat
 		return 0, nil, err
 	}
 	ctx = supervisor.WithOwner(ctx, service.store, supervisor.Owner{Kind: "probe", ID: probeID, Generation: 1})
-	capabilities, err := runtimeAdapter.Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbeActiveContract, ProfileID: selected.ID, ProviderTransport: true, Timeout: timeout})
+	capabilities, err := runtimeAdapter.Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbeActiveContract, ProfileID: selected.ID, Model: selected.Model, ReasoningEffort: selected.ReasoningEffort, ProviderTransport: true, Timeout: timeout})
 	if err != nil {
 		return 0, nil, &api.APIError{Status: http.StatusServiceUnavailable, Code: "ACTIVE_PROBE_FAILED", Message: err.Error()}
 	}

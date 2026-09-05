@@ -122,7 +122,7 @@ func TestEmbeddedSchemasAreValidAndVersioned(t *testing.T) {
 		version string
 		digest  string
 	}{
-		protocol.SchemaWorkPacket:  {version: protocol.WorkPacketVersion, digest: "5faf4e8b03c9a64bad06bb3caa6543d9b3b6fca859c6b41b5f4159e7c3da1085"},
+		protocol.SchemaWorkPacket:  {version: protocol.WorkPacketVersion, digest: "f7befde5b09d74a8952761e4ea3101b8e76f6c119e2bc1defa85bd01a7bd4f4e"},
 		protocol.SchemaAgentResult: {version: protocol.AgentResultVersion, digest: "a71b93ea2850db6cac218d66564b8c94bc84f5552d2dc5594893e30edeca8303"},
 		protocol.SchemaAgentEvent:  {version: protocol.AgentEventVersion, digest: "bfb4de3beade4c1b1ee92633641cc4de7c05b54441a2ff0b4dd1d3ea5d193509"},
 		protocol.SchemaEvidence:    {version: protocol.EvidenceVersion, digest: "91cde100ace57970ae14e060496c886db3ad7549c3b673c03ed71390dc163663"},
@@ -134,7 +134,7 @@ func TestEmbeddedSchemasAreValidAndVersioned(t *testing.T) {
 			version: protocol.EnvironmentSnapshotVersion, digest: "f549c2e9f6704dbef91d1932caca27fde117764114d21ea1c0967f42f55a5983",
 		},
 		protocol.SchemaReviewPacket: {
-			version: protocol.ReviewPacketVersion, digest: "156f17e817c93789bfb2a6d7c5f49a042af580ec6c376105ad69e44e8de85f91",
+			version: protocol.ReviewPacketVersion, digest: "f5465ce1851b3e77a3c4077833077c6c5a78860bf9891b2aad2a8875725c3341",
 		},
 		protocol.SchemaReviewResult: {
 			version: protocol.ReviewResultVersion, digest: "1a988670afb88424ab8faf92c2ba03f04f90284d35c087599f3f465f4337b961",

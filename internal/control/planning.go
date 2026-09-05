@@ -71,17 +71,10 @@ func (service *Service) planningRequest(input createGoalRequest) (planner.Reques
 		request.BlockedReason = "a valid xgoal.yaml is required; configure the project, restart the daemon, then use goal plan with the current version and a reason"
 		return request, nil
 	}
-	for _, profile := range service.configuration.Agents {
-		for _, role := range profile.Roles {
-			if role == string(domain.RolePlanner) {
-				request.ProfileID = profile.ID
-				break
-			}
-		}
-		if request.ProfileID != "" {
-			break
-		}
+	if profile, _, err := service.configuration.SelectProfile("planner", ""); err == nil {
+		request.ProfileID = profile.ID
 	}
+
 	if request.ProfileID == "" {
 		if request.Proposal != nil {
 			request.ProfileID = "kernel"

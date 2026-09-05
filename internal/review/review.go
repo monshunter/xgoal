@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	baseadapter "github.com/monshunter/xgoal/internal/adapter"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/protocol"
@@ -18,6 +19,7 @@ import (
 )
 
 type Invocation struct {
+	ExecutionConfig         *config.ExecutionConfig
 	InvocationID            string
 	ReviewID                string
 	ReviewerProfileID       string
@@ -50,6 +52,7 @@ type Adapter interface {
 }
 
 type PrepareInput struct {
+	Harness                 *protocol.HarnessInput
 	ID                      string
 	GoalRevisionHash        string
 	PlanRevisionHash        string
@@ -121,6 +124,7 @@ func (coordinator *Coordinator) Prepare(ctx context.Context, input PrepareInput)
 		})
 	}
 	packet := protocol.ReviewPacket{
+		Harness:         input.Harness,
 		ProtocolVersion: protocol.ReviewPacketVersion, ID: input.ID,
 		GoalRevisionHash: input.GoalRevisionHash, PlanRevisionHash: input.PlanRevisionHash,
 		WorkItemID: input.WorkItemID, ImplementationAttemptID: input.ImplementationAttemptID,
@@ -134,12 +138,22 @@ func (coordinator *Coordinator) Prepare(ctx context.Context, input PrepareInput)
 }
 
 func ValidateInvocation(invocation Invocation) (protocol.ReviewPacket, error) {
+	if e := invocation.ExecutionConfig; e != nil {
+		if err := baseadapter.ValidateExecution(e, invocation.ReviewerProfileID, e.Provider, "reviewer"); err != nil {
+			return protocol.ReviewPacket{}, err
+		}
+		if e.PermissionMode != invocation.PermissionMode || !slices.Equal(e.Tools, invocation.Tools) {
+			return protocol.ReviewPacket{}, errors.New("review effective permissions differ from invocation")
+		}
+	} else if invocation.PermissionMode != "dontAsk" || len(invocation.Tools) == 0 {
+		return protocol.ReviewPacket{}, errors.New("invalid review permissions")
+	}
 	if !component(invocation.InvocationID) || !component(invocation.ReviewID) || !component(invocation.ReviewerProfileID) ||
 		!component(invocation.ImplementationProfileID) ||
 		invocation.ImplementationSessionID == "" || invocation.GoalRevisionHash == "" || invocation.PlanRevisionHash == "" ||
 		invocation.BaseTree == "" || invocation.CandidateTree == "" || invocation.PacketHash == "" ||
 		!cleanAbsolute(invocation.WorkDir) || !cleanAbsolute(invocation.PacketPath) || strings.TrimSpace(invocation.Prompt) == "" ||
-		invocation.PermissionMode != "dontAsk" || len(invocation.Tools) == 0 || invocation.Timeout <= 0 || invocation.MaxOutputBytes <= 0 {
+		invocation.Timeout <= 0 || invocation.MaxOutputBytes <= 0 {
 		return protocol.ReviewPacket{}, errors.New("invalid review invocation")
 	}
 	for _, tool := range invocation.Tools {

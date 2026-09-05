@@ -10,6 +10,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/adapter/claude"
 	"github.com/monshunter/xgoal/internal/adapter/codex"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/review"
@@ -66,6 +67,13 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{
 				t.Fatal(err)
 			}
 			invocation := review.Invocation{InvocationID: "invoke_" + provider, ReviewID: packet.ID, ReviewerProfileID: packet.ReviewerProfileID, ImplementationProfileID: packet.ImplementationProfileID, ImplementationSessionID: packet.ImplementationSessionID, GoalRevisionHash: packet.GoalRevisionHash, PlanRevisionHash: packet.PlanRevisionHash, BaseTree: packet.BaseTree, CandidateTree: packet.CandidateTree, PacketHash: artifact.Hash, WorkDir: workspace, PacketPath: artifact.Path, Prompt: "Review the immutable packet and return only the required result.", OutputSchema: schema, Environment: map[string]string{"ARGS_PATH": argumentsPath}, PermissionMode: "dontAsk", Tools: []string{"Read", "Glob", "Grep"}, Timeout: 30 * time.Second, MaxOutputBytes: 4 << 20}
+			effective, err := (config.Agent{ID: packet.ReviewerProfileID, Adapter: provider + "-cli", Roles: []string{"reviewer"}, Model: "fixture-review-model", ReasoningEffort: "high"}).Effective("reviewer", "fixture-version")
+			if err != nil {
+				t.Fatal(err)
+			}
+			invocation.ExecutionConfig = &effective
+			invocation.PermissionMode = effective.PermissionMode
+			invocation.Tools = effective.Tools
 			var reviewer review.Adapter
 			if provider == "claude" {
 				reviewer, err = claude.New(claude.Config{Binary: binary, RuntimeRoot: runtimeRoot, ProjectRoot: workspace, Environment: invocation.Environment})
@@ -86,7 +94,24 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{
 			if err != nil {
 				t.Fatal(err)
 			}
-			if provider == "claude" && !strings.Contains(string(arguments), "--permission-mode dontAsk --tools Read,Glob,Grep --allowedTools Read,Glob,Grep") {
+			delivery := "--append-system-prompt"
+			if provider == "codex" {
+				delivery = "developer_instructions="
+			}
+			if !strings.Contains(string(arguments), delivery) || !strings.Contains(string(arguments), "Kernel owns") {
+				t.Fatalf("native delegation arguments missing: %s", arguments)
+			}
+			if !strings.Contains(string(arguments), "--model fixture-review-model") {
+				t.Fatalf("review model argv %s", arguments)
+			}
+			effortArg := "--effort high"
+			if provider == "codex" {
+				effortArg = `model_reasoning_effort="high"`
+			}
+			if !strings.Contains(string(arguments), effortArg) {
+				t.Fatalf("review effort argv %s", arguments)
+			}
+			if provider == "claude" && !strings.Contains(string(arguments), "--permission-mode dontAsk --tools Glob,Grep,Read --allowedTools Glob,Grep,Read") {
 				t.Fatalf("Claude review arguments = %s", arguments)
 			}
 			if provider == "codex" && !strings.Contains(string(arguments), "--sandbox read-only") {

@@ -122,7 +122,7 @@ func Initialize(ctx context.Context, options Options) (Result, error) {
 func generatedConfig(name, baseBranch string, commands map[string]string, goProject bool) string {
 	var agents strings.Builder
 	if commands["codex"] != "" {
-		fmt.Fprintf(&agents, "  - id: codex\n    adapter: codex-cli\n    command: %s\n    roles: [planner, implementer, reviewer]\n    timeout: 45m\n    sandbox: workspace-write\n    providerTransport: allow\n    credentialSource: cli-session\n    activeProbe: explicit\n    environmentAllowlist: [PATH, HOME, TMPDIR]\n", strconv.Quote(commands["codex"]))
+		fmt.Fprintf(&agents, "  - id: codex\n    adapter: codex-cli\n    command: %s\n    roles: [planner, implementer, reviewer]\n    timeout: 45m\n    providerTransport: allow\n    credentialSource: cli-session\n    activeProbe: explicit\n    environmentAllowlist: [PATH, HOME, TMPDIR]\n", strconv.Quote(commands["codex"]))
 	}
 	if commands["claude"] != "" {
 		fmt.Fprintf(&agents, "  - id: claude\n    adapter: claude-cli\n    command: %s\n    roles: [planner, implementer, reviewer]\n    timeout: 45m\n    permissionMode: dontAsk\n    providerTransport: allow\n    credentialSource: cli-session\n    activeProbe: explicit\n    environmentAllowlist: [PATH, HOME, TMPDIR]\n", strconv.Quote(commands["claude"]))

@@ -16,7 +16,9 @@ import (
 
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/goalcompile"
+	"github.com/monshunter/xgoal/internal/protocol"
 )
 
 const (
@@ -33,28 +35,33 @@ type Proposal struct {
 }
 
 type Packet struct {
-	ProtocolVersion   string   `json:"protocol_version"`
-	GoalID            string   `json:"goal_id"`
-	RawGoal           string   `json:"raw_goal"`
-	Mode              string   `json:"mode"`
-	ConfigHash        string   `json:"config_hash"`
-	TrustedValidators []string `json:"trusted_validators"`
-	ProjectRoot       string   `json:"project_root"`
-	ProjectNetwork    string   `json:"project_network"`
-	ProjectSecrets    string   `json:"project_secrets"`
+	Harness           *protocol.HarnessInput `json:"harness,omitempty"`
+	ProtocolVersion   string                 `json:"protocol_version"`
+	GoalID            string                 `json:"goal_id"`
+	RawGoal           string                 `json:"raw_goal"`
+	Mode              string                 `json:"mode"`
+	ConfigHash        string                 `json:"config_hash"`
+	TrustedValidators []string               `json:"trusted_validators"`
+	ProjectRoot       string                 `json:"project_root"`
+	ProjectNetwork    string                 `json:"project_network"`
+	ProjectSecrets    string                 `json:"project_secrets"`
 }
 
 type Invocation struct {
-	InvocationID   string
-	ProfileID      string
-	WorkDir        string
-	PacketPath     string
-	PacketHash     string
-	Prompt         string
-	OutputSchema   []byte
-	Environment    map[string]string
-	Timeout        time.Duration
-	MaxOutputBytes int64
+	RequestHash     string
+	InputTree       string
+	Generation      int64
+	ExecutionConfig *config.ExecutionConfig
+	InvocationID    string
+	ProfileID       string
+	WorkDir         string
+	PacketPath      string
+	PacketHash      string
+	Prompt          string
+	OutputSchema    []byte
+	Environment     map[string]string
+	Timeout         time.Duration
+	MaxOutputBytes  int64
 }
 
 type Execution struct {
@@ -180,6 +187,15 @@ func PrepareInvocation(runtimeRoot, invocationID string, generation int64, packe
 }
 
 func ValidateInvocation(invocation Invocation) (Packet, error) {
+	if e := invocation.ExecutionConfig; e != nil {
+		if err := adapter.ValidateExecution(e, invocation.ProfileID, e.Provider, "planner"); err != nil {
+			return Packet{}, err
+		}
+		if invocation.RequestHash == "" || invocation.InputTree == "" || invocation.Generation <= 0 {
+			return Packet{}, errors.New("Planner effective invocation requires request, generation and input Tree provenance")
+		}
+	}
+
 	if invocation.InvocationID == "" || invocation.ProfileID == "" || !filepath.IsAbs(invocation.WorkDir) || filepath.Clean(invocation.WorkDir) != invocation.WorkDir || !filepath.IsAbs(invocation.PacketPath) || filepath.Clean(invocation.PacketPath) != invocation.PacketPath || len(invocation.PacketHash) != 64 || strings.TrimSpace(invocation.Prompt) == "" || invocation.Timeout <= 0 || invocation.MaxOutputBytes <= 0 || invocation.MaxOutputBytes > 128<<20 {
 		return Packet{}, errors.New("invalid Planner invocation")
 	}
@@ -223,6 +239,11 @@ func ValidateInvocation(invocation Invocation) (Packet, error) {
 }
 
 func validatePacket(packet Packet) error {
+	if packet.Harness != nil {
+		if err := packet.Harness.Validate(); err != nil {
+			return err
+		}
+	}
 	if packet.ProtocolVersion != PacketVersion || !validComponent(packet.GoalID) || strings.TrimSpace(packet.RawGoal) == "" || (packet.Mode != "fast" && packet.Mode != "standard") || !validHex(packet.ConfigHash, 64) || len(packet.TrustedValidators) == 0 || !filepath.IsAbs(packet.ProjectRoot) || filepath.Clean(packet.ProjectRoot) != packet.ProjectRoot {
 		return errors.New("invalid Planner packet")
 	}

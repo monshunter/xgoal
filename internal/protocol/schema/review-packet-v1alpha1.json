@@ -5,6 +5,7 @@
   "additionalProperties": false,
   "required": ["protocol_version", "id", "goal_revision_hash", "plan_revision_hash", "work_item_id", "implementation_attempt_id", "implementation_profile_id", "implementation_session_id", "base_tree", "candidate_tree", "config_hash", "workspace", "patch_bundle_path", "patch_bundle_hash", "validator_receipts", "required_checks", "reviewer_profile_id"],
   "properties": {
+    "harness": {"type":"object","additionalProperties":false,"required":["type","provider","required","found","compatible","files","delegation","delivery","load_observation"],"properties":{"type":{"type":"string"},"provider":{"type":"string","minLength":1},"required":{"type":"boolean"},"found":{"type":"boolean"},"compatible":{"type":"boolean"},"files":{"type":"array","maxItems":256,"items":{"type":"object","additionalProperties":false,"required":["path","kind","sha256"],"properties":{"path":{"type":"string","minLength":1},"kind":{"type":"string","minLength":1},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}},"diagnostics":{"type":"array","items":{"type":"string"}},"delegation":{"type":"string","minLength":1,"maxLength":8192},"delivery":{"const":"packet-path-references"},"load_observation":{"const":"unknown"}}},
     "protocol_version": {"type": "string", "const": "xgoal.review-packet/v1alpha1"},
     "id": {"type": "string", "minLength": 1},
     "goal_revision_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

@@ -54,4 +54,5 @@
 | REVIEW-049-runtime-harness-spec | REVIEW-049：OBJ-004 运行时 Harness 产品 Spec Review | [REVIEW-049-runtime-harness-spec.md](REVIEW-049-runtime-harness-spec.md) |
 | REVIEW-050-runtime-harness-design | REVIEW-050：OBJ-004 运行时 Harness Design Review | [REVIEW-050-runtime-harness-design.md](REVIEW-050-runtime-harness-design.md) |
 | REVIEW-051-runtime-trust-recovery | REVIEW-051：PLAN-012 受信验收与恢复边界 Change Review | [REVIEW-051-runtime-trust-recovery.md](REVIEW-051-runtime-trust-recovery.md) |
+| REVIEW-052-profile-harness | REVIEW-052：PLAN-013 Agent Profile 与项目 Harness 变更审查 | [REVIEW-052-profile-harness.md](REVIEW-052-profile-harness.md) |
 <!-- AGENT-HARNESS:END INDEX -->

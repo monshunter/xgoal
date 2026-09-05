@@ -12,6 +12,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/clock"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/environment"
 	"github.com/monshunter/xgoal/internal/gitrepo"
@@ -42,7 +43,6 @@ agents:
     command: codex
     roles: [implementer, reviewer]
     timeout: 5m
-    sandbox: workspace-write
     providerTransport: allow
     credentialSource: cli-session
     activeProbe: explicit
@@ -299,6 +299,20 @@ func (harness realSmokeHarness) run(t *testing.T, spec realWorkSpec) realSmokeRu
 		OutputSchema: schema, Environment: harness.adapter.environment, SandboxPolicy: "workspace-write",
 		Timeout: 5 * time.Minute, MaxOutputBytes: 16 << 20, SessionPolicy: adapter.SessionFresh,
 	}
+	model := os.Getenv("XGOAL_SMOKE_CODEX_MODEL")
+	if model == "" {
+		model = "gpt-6-astra"
+	}
+	capabilities, err := harness.adapter.Probe(harness.ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: spec.profileID, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective, err := (config.Agent{ID: spec.profileID, Adapter: "codex-cli", Roles: []string{"implementer"}, Model: model, ReasoningEffort: "low"}).Effective("implementer", capabilities.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation.ExecutionConfig = &effective
+	invocation.PermissionMode = effective.PermissionMode
 	handle, err := harness.adapter.Start(harness.ctx, invocation, nil)
 	if err != nil {
 		t.Fatalf("start real %s Codex: %v", spec.name, err)

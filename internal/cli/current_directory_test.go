@@ -335,7 +335,7 @@ metadata: {name: current-directory-cli}
 project: {baseBranch: main, trustedRepository: true}
 orchestration: {defaultMode: standard, maxParallel: 1, leaseTTL: 10s, heartbeatInterval: 1s, noProgressLimit: 2, integrationBranchPrefix: xgoal/}
 agents:
-  - {id: codex-implementer, adapter: codex-cli, command: %q, roles: [planner, implementer], timeout: 20s, sandbox: workspace-write, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
+  - {id: codex-implementer, adapter: codex-cli, command: %q, roles: [planner, implementer], timeout: 20s, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
   - {id: claude-reviewer, adapter: claude-cli, command: %q, roles: [reviewer], timeout: 20s, permissionMode: dontAsk, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
 workspace: {provider: current-directory, keepFailed: true, cleanupCompletedAfter: 1h}
 runtime: {provider: local-process, isolationLevelRequired: L0, projectNetwork: deny, projectSecrets: deny}

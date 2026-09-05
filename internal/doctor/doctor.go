@@ -14,6 +14,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/app"
 	"github.com/monshunter/xgoal/internal/config"
+	"github.com/monshunter/xgoal/internal/harness"
 	"github.com/monshunter/xgoal/internal/project"
 )
 
@@ -46,9 +47,16 @@ func Inspect(ctx context.Context, paths app.Paths) map[string]any {
 			capability["id"] = profile.ID
 			capability["adapter"] = profile.Adapter
 			capability["roles"] = profile.Roles
+			version, _ := capability["version"].(string)
+			capability["effective_roles"] = profile.EffectiveRoles(version)
 			capability["provider_transport"] = profile.ProviderTransport
 			capability["credential_source"] = profile.CredentialSource
 			capability["credential_status"] = "passive_not_inspected"
+			harnessInput, harnessErr := harness.Discover(paths.ProjectRoot, profile.Adapter, configuration.Project.Harness)
+			capability["harness"] = harnessInput
+			if harnessErr != nil {
+				unmet = append(unmet, harnessErr.Error())
+			}
 			profiles = append(profiles, capability)
 			if capability["available"] != true {
 				unmet = append(unmet, "agent command unavailable: "+profile.ID)
@@ -85,7 +93,7 @@ func Inspect(ctx context.Context, paths app.Paths) map[string]any {
 	return map[string]any{
 		"project_id": paths.ProjectID, "project_root": paths.ProjectRoot, "state_dir": paths.StateDir, "socket_path": paths.SocketPath, "repository_identity": paths.RepositoryIdentity,
 		"store": store, "daemon": daemonStatus, "os": runtime.GOOS, "arch": runtime.GOARCH, "git": gitFacts, "tools": tools, "config_hash": configHash,
-		"agent_profiles": profiles, "validators": validators, "unmet_capabilities": unmet,
+		"agent_profiles": profiles, "role_selections": configuration.RoleSelections(), "validators": validators, "unmet_capabilities": unmet,
 		"configuration_compatible": configErr == nil, "config_error": configError, "config_migration_required": errors.Is(configErr, config.ErrMigrationRequired),
 		"provider_transport": "trusted_profiles_only", "provider_credential_status": "passive_not_inspected", "active_probe_evidence": "none", "project_network_policy": network, "project_secrets_policy": secrets, "isolation_level": "L0",
 		"isolation_limit":  "local-process L0 shares host resources, user home, network, credentials and provider quotas",

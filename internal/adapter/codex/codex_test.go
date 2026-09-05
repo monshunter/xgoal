@@ -13,6 +13,7 @@ import (
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/clock"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/protocol"
 )
@@ -125,6 +126,7 @@ func TestResumeRequiresExactPersistentSessionBinding(t *testing.T) {
 	fixture := newFixture(t, "valid")
 	first := fixture.adapter(t)
 	start := fixture.invocation(t, "invocation_original", adapter.SessionFresh)
+	start = explicitInvocation(t, start)
 	handle, err := first.Start(context.Background(), start, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +141,7 @@ func TestResumeRequiresExactPersistentSessionBinding(t *testing.T) {
 
 	restarted := fixture.adapter(t)
 	resume := fixture.invocation(t, "invocation_resume", adapter.SessionResumeCompatible)
+	resume = explicitInvocation(t, resume)
 	resumed, err := restarted.Resume(context.Background(), resume, sessionID, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +154,30 @@ func TestResumeRequiresExactPersistentSessionBinding(t *testing.T) {
 		t.Fatalf("resume arguments = %s", arguments)
 	}
 
+	for _, field := range []string{"legacy", "inherited", "model", "effort", "version"} {
+		changed := explicitInvocation(t, resume)
+		changed.InvocationID = "invoke_rejected_" + field
+		e := *changed.ExecutionConfig
+		changed.ExecutionConfig = &e
+		switch field {
+		case "legacy":
+			changed.ExecutionConfig = nil
+		case "inherited":
+			e.Model = ""
+			e.ModelSource = "native-inheritance"
+		case "model":
+			e.Model = "different-model"
+		case "effort":
+			e.ReasoningEffort = "low"
+		case "version":
+			e.CLIVersion = "different-version"
+		}
+		if _, err := restarted.Resume(context.Background(), changed, sessionID, nil); !errors.Is(err, adapter.ErrSessionMismatch) {
+			t.Fatalf("%s resumed: %v", field, err)
+		}
+	}
 	drifted := fixture.invocation(t, "invocation_drifted", adapter.SessionResumeCompatible)
+	drifted = explicitInvocation(t, drifted)
 	drifted.GoalRevisionHash = strings.Repeat("9", 64)
 	if _, err := restarted.Resume(context.Background(), drifted, sessionID, nil); !errors.Is(err, adapter.ErrSessionMismatch) {
 		t.Fatalf("Resume() drift error = %v", err)
@@ -467,3 +493,90 @@ if [ "$XGOAL_FIXTURE_MODE" = "exit-nonzero" ]; then
 fi
 exit 0
 `
+
+func explicitInvocation(t *testing.T, inv adapter.Invocation) adapter.Invocation {
+	t.Helper()
+	e, err := (config.Agent{ID: inv.ProfileID, Adapter: "codex-cli", Roles: []string{string(inv.Role)}, Model: "fixture-model", ReasoningEffort: "high"}).Effective(string(inv.Role), "codex-cli 0.145.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv.ExecutionConfig = &e
+	inv.SandboxPolicy = e.Sandbox
+	inv.PermissionMode = e.PermissionMode
+	inv.ToolPolicy = e.Tools
+	return inv
+}
+
+func TestExplicitExecutionConfigReachesProviderAndArtifacts(t *testing.T) {
+	t.Parallel()
+	fixture := newFixture(t, "valid")
+	runtime := fixture.adapter(t)
+	invocation := explicitInvocation(t, fixture.invocation(t, "invoke_explicit", adapter.SessionFresh))
+	handle, err := runtime.Start(context.Background(), invocation, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Wait(context.Background(), handle); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := os.ReadFile(fixture.argumentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"--model fixture-model", `model_reasoning_effort="high"`} {
+		if !strings.Contains(string(argv), value) {
+			t.Fatalf("missing %q in argv %s", value, argv)
+		}
+	}
+	artifact, err := os.ReadFile(filepath.Join(fixture.runtimeRoot, "adapters", "codex", "invocations", invocation.InvocationID, "invocation.json"))
+	if err != nil || !strings.Contains(string(artifact), `"model":"fixture-model"`) || !strings.Contains(string(artifact), `"cli_version":"codex-cli 0.145.0"`) {
+		t.Fatalf("effective identity artifact %s, %v", artifact, err)
+	}
+}
+
+func TestExecutionConfigIsFrozenBeforeStartReturns(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "valid")
+	release := filepath.Join(filepath.Dir(f.runtimeRoot), "release")
+	script, err := os.ReadFile(f.binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script = []byte(strings.Replace(string(script), `cat > "$XGOAL_FIXTURE_STDIN"`, `while [ ! -f "$XGOAL_RELEASE" ]; do sleep 0.01; done
+cat > "$XGOAL_FIXTURE_STDIN"`, 1))
+	if err := os.WriteFile(f.binaryPath, script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := f.adapter(t)
+	in := explicitInvocation(t, f.invocation(t, "invoke_frozen", adapter.SessionFresh))
+	in.Environment["XGOAL_RELEASE"] = release
+	handle, err := runtime.Start(context.Background(), in, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Cancel(context.Background(), handle) })
+	in.ExecutionConfig.Model = "mutated-after-start"
+	in.ExecutionConfig.ReasoningEffort = "low"
+	if len(in.ExecutionConfig.Tools) > 0 {
+		in.ExecutionConfig.Tools[0] = "Bash"
+		in.ExecutionConfig.AllowedTools[0] = "Bash"
+	}
+	if err := os.WriteFile(release, []byte("continue"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Wait(context.Background(), handle); err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.SessionID(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := readSession(runtime.root, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := binding.Invocation.ExecutionConfig
+	if e == nil || e.Model != "fixture-model" || e.ReasoningEffort != "high" || strings.Contains(strings.Join(e.Tools, ","), "Bash") {
+		t.Fatalf("mutable config changed executed identity: %+v", e)
+	}
+}

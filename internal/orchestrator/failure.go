@@ -10,6 +10,7 @@ import (
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/environment"
 	"github.com/monshunter/xgoal/internal/gitrepo"
+	"github.com/monshunter/xgoal/internal/harness"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/promotion"
 	"github.com/monshunter/xgoal/internal/protocol"
@@ -108,7 +109,7 @@ func (engine *Engine) failAttempt(ctx context.Context, goal domain.Goal, work do
 // attributable scene whose complete delta satisfies this Work's write policy.
 func (engine *Engine) observeFailureScene(ctx context.Context, goal domain.Goal, work domain.WorkItem, attempt domain.Attempt, class reconcile.FailureClass, cause error) (bool, error) {
 	if errors.Is(cause, errExecutionStillRunning) || errors.Is(cause, gitrepo.ErrCheckoutChanged) || errors.Is(cause, environment.ErrCheckoutDrift) ||
-		errors.Is(cause, errValidatorChange) || errors.Is(cause, errProjectNetworkGate) || class == reconcile.ScopeViolation {
+		errors.Is(cause, errValidatorChange) || errors.Is(cause, errProjectNetworkGate) || errors.Is(cause, harness.ErrRequired) || class == reconcile.ScopeViolation {
 		return false, nil
 	}
 	checkout, err := engine.store.Checkout(ctx)
@@ -329,6 +330,11 @@ func (engine *Engine) openFailureGate(ctx context.Context, goal domain.Goal, wor
 			{"id": "cancel", "effect": "cancel the Goal and preserve all files and evidence"},
 		}
 		recommendation = firstNonEmpty(outcome.Result.RecommendedNextAction, "Inspect blockers and answer the Gate before continuing")
+	}
+	if errors.Is(cause, harness.ErrRequired) {
+		reason = "project_harness_required"
+		recommendation = "Prepare the required project-local Harness for the selected Provider, review and commit the resulting baseline, then create a new Goal; xgoal doctor lists missing inputs. Approval alone cannot install project knowledge."
+		options = []map[string]string{{"id": "prepare", "effect": recommendation}, {"id": "preserve", "effect": "keep this Goal and its files for diagnosis"}}
 	}
 	_, err = engine.store.CreateGate(ctx, sqlite.GateDraft{
 		ID: gateID, GoalID: goal.ID, WorkItemID: work.ID, AttemptID: attempt.ID,

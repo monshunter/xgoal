@@ -147,7 +147,11 @@ func (s *stream) process(line []byte) error {
 	case "result":
 		isError, _ := raw["is_error"].(bool)
 		if isError {
-			return fmt.Errorf("%w: Claude result reported an error", adapter.ErrInvalidOutput)
+			cause, _ := raw["result"].(string)
+			if cause == "" {
+				cause, _ = raw["subtype"].(string)
+			}
+			return fmt.Errorf("%w: Claude provider error: %s", adapter.ErrUnavailable, truncate(redact.String(cause), 2048))
 		}
 		session, _ := raw["session_id"].(string)
 		if session != "" && (!validSessionID(session) || (s.sessionID != "" && s.sessionID != session)) {

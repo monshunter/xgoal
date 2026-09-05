@@ -42,7 +42,7 @@ agents:
     providerTransport: allow
     credentialSource: cli-session
     activeProbe: explicit
-    allowedTools: [Read, Glob, Grep, Bash]
+    allowedTools: [Read, Glob, Grep]
     environmentAllowlist: [PATH, HOME, TMPDIR]
 
 workspace:

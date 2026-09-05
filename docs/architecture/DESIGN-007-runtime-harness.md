@@ -37,6 +37,10 @@ Codex 始终使用 `exec --json --output-schema`，`--ask-for-approval never`，
 
 该矩阵避免为一个可选场景引入另一套 beta 权限/代理配置。官方 [Codex Permissions](https://developers.openai.com/codex/permissions) 支持 read-only 与网络分开，但 profiles 不能与旧 `--sandbox`/原生配置混用，域名约束还依赖启用原生 proxy；仅添加配置字段不能证明限制已生效。若以后扩展该组合，必须独立证明实际 sandbox、网络与原生配置栈兼容，不能把它视为本次已支持。Claude 工具的可用与允许边界见 [Permissions](https://code.claude.com/docs/en/permissions)。
 
+有效配置在 Adapter 入口深拷贝，包含工具列表，防止调用方后续修改改变已执行会话的身份；兼容 Resume 另外重新 passive probe 当前 CLI 版本。配置合同支持 Codex minimal/low/medium/high/xhigh 和 Claude low/medium/high/xhigh/max，原生模型组合通过主动 Probe 或实际执行验证。Acceptance 的 Bash 规则只接纳 `Bash(./trusted-script)` 或 `Bash(./trusted-script *)`；返回精确仓库入口供 trustedFiles 绑定，不接受纯通配、路径逃逸、shell 操作符或花括号展开。
+
+Provider Profile 的 environmentAllowlist 只用于原生 CLI。bootstrap 与 Validator 不继承此列表，项目环境由 Kernel 的独立配置生成；未声明项目环境变量时只提供最小运行环境。
+
 继承原生模型/effort 而无法冻结完整有效身份时，只允许 fresh Invocation，resume 给出身份不完整诊断。显式模型/effort、角色权限、工具、CLI 版本及 Packet 都可绑定时才允许兼容 resume；不因两次“未填写”就推断原生配置未变，不读取用户凭据来推测身份。历史会话可读但缺少新增身份的旧会话不能自动恢复为新执行。
 
 ## 项目 Harness 与委派规则
@@ -44,6 +48,10 @@ Codex 始终使用 `exec --json --output-schema`，`--ask-for-approval never`，
 复用 `project.harness`。发现 AGENTS.md、对应 Provider 的规则入口、项目 Skills/manifest 和引用的知识路径，记录路径及内容哈希；不扫描凭据或整个用户目录。必需 autogo 缺少入口/manifest 或不支持所选 Provider 时给出准备步骤并在启动前停止。可选无 Harness 不阻断。
 
 为每次 Packet 加入委派职责和被发现规则摘要，原生 Provider 通过本机支持的指令入口/系统提示附加机制获得明确边界：xgoal 管理上层状态、分支/提交、环境归属和完成判定；worker 只执行当前角色。项目业务规则继续加载。检测路径、提供给 Agent、可观测读取/回执是三种事实，不能互相替代；日志中没有证明则 loaded 为 unknown。doctor 显示 found/compatible，Invocation 显示 inputs/observations。初始化可以生成项目局部、可审查的 xgoal 委派说明，但不得覆盖 AGENTS.md、克隆全局 Skills 或设置另一份运行状态。
+
+发现器按当前原生 Provider 读取 AutoGo schema_version=3/core manifest、根指令入口及清单声明的 Skills/知识文件，确认文件存在并计算 SHA-256。它检查安装格式与声明引用，不能单独证明 Skill 语义质量或模型遵循了规则。读取限定在项目目录，通过 regular 文件、逐段 symlink 拒绝、单文件/总量上限约束。发现和 required preflight 不写项目文件。
+
+Codex 通过 `-c developer_instructions=...`、Claude 通过 `--append-system-prompt` 获得同一最小委派文本。其哈希写入 Invocation/Session 身份；Packet 的 Harness 引用也参与输入 hash。Planner 在 Revision 尚未存在时记录 request hash、generation 和 input Tree。输入仅声明 `packet-path-references` 和未证明的 `load_observation=unknown`；原生加载没有事件证明时保持 Unknown，已持久化 Provider 事件提供可检查的读取行为。
 
 ## 受信入口
 

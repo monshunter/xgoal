@@ -819,9 +819,9 @@ Go 没有官方 Claude Agent SDK 时，v0.1 直接使用 CLI 子进程；不得�
 
 ### 12.9 Provider Credential 边界
 
-- v0.1 默认 `credential_source = cli-session`：Kernel 不读取、复制或持久化 Token，由供应商 CLI 使用其自身登录态或 Keychain。
+- v0.1 支持 `credentialSource = cli-session`：供应商 CLI 使用其自身登录态、Keychain，或受信 Profile 按名称显式允许的既有宿主认证环境。Kernel 不打开用户凭据库，不持久化认证值；转发环境只存在于原生 CLI 的进程输入中。
 - Agent Profile 只保存认证来源类型和可用状态，不保存 Credential 值。缺失认证时 Passive Probe 返回 `missing`，实际调度 Fail Closed 或创建登录 Gate。
-- 显式环境变量/API Key 来源必须由 Secret Provider 和有限 Gate 注入到 Agent CLI 顶层进程；不得写入 Work Packet、Prompt、事件、项目命令环境、Validator 环境或报告。
+- `environmentAllowlist` 是操作者在受信配置中对现有 Provider CLI 环境的显式授权，只保存变量名，禁止把值写入 Work Packet、Prompt、事件、项目命令、bootstrap、Validator 或报告。未实现独立 Secret Provider/凭据获取平台，`credentialSource: secret-provider` 明确拒绝；不能把字段被接收当作注入能力已经存在。
 - 日志在落盘前对 Token、Authorization Header、常见 Key Pattern 和供应商 CLI 诊断输出脱敏；原始未脱敏凭据不作为 Evidence 保存。
 - L0 无法证明供应商 CLI 进程与其启动的所有工具在 OS 级完全隔离，因此状态必须披露 `credential_isolation=L0`；强隔离留给容器 Provider。
 
@@ -1337,7 +1337,7 @@ ALLOW | DENY | REQUIRE_GATE
 | 修改 Validator | Propose only | Gate | Propose only | 按批准配置执行 |
 | 生产操作 | Deny | Deny | Deny | v0.1 Deny |
 
-`Provider Transport` 的 Allow 只允许已配置 CLI 到其供应商控制面；不能借此为 Bash、项目依赖下载、测试或服务开放网络。`cli-session` Credential 不视为 Agent 可读 Secret；显式 API Key 注入仍需要 Secret Provider、有限 Gate 和脱敏。
+`Provider Transport` 的 Allow 只允许已配置 CLI 到其供应商控制面；不能借此为 Bash、项目依赖下载、测试或服务开放网络。`cli-session` 的既有认证环境可由受信 Profile 按名称授权转发给原生 CLI；这是 Provider 控制通道，不授予项目 Secret 权限，也不继承到 bootstrap/Validator。该配置授权及 L0 限制见 §12.9。
 
 ### 19.3 Gate 数据
 
@@ -1650,8 +1650,8 @@ report:
 - YAML 禁止重复 Key；未知字段默认报错，避免拼写导致策略失效。
 - 路径全部相对项目 Root，并做 symlink/`..` 逃逸检查。
 - 命令使用 argv 数组；复杂 shell 逻辑放入受版本控制脚本。
-- Agent Profile 的环境变量仅按名称白名单传递；敏感值需要 Gate/Secret Provider。
-- `providerTransport`、`credentialSource` 和 `activeProbe` 只能来自受信 Project Config；Agent 输出不能覆盖。`cli-session` 不导出 Credential 值，显式 Secret 来源必须使用独立注入路径。
+- Agent Profile 的环境变量仅按受信名称白名单传递给原生 CLI，配置、Packet、记录只保留名称；值仅在启动进程时读取和转发，不持久化。项目命令环境独立。
+- `providerTransport`、`credentialSource` 和 `activeProbe` 只能来自受信 Project Config；Agent 输出不能覆盖。当前 `cli-session` 使用既有 CLI 认证，未实现的 `secret-provider` 来源在配置校验拒绝，不能静默退回其他来源。
 - 运行中配置变化触发新 Config Revision，并评估对 Evidence 和 Attempt 的影响。
 
 ---

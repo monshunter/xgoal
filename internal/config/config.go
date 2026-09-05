@@ -55,16 +55,19 @@ type Harness struct {
 }
 
 type Orchestration struct {
-	DefaultMode             string   `yaml:"defaultMode" json:"defaultMode"`
-	MaxParallel             int      `yaml:"maxParallel" json:"maxParallel"`
-	LeaseTTL                Duration `yaml:"leaseTTL" json:"leaseTTL"`
-	HeartbeatInterval       Duration `yaml:"heartbeatInterval" json:"heartbeatInterval"`
-	NoProgressLimit         int      `yaml:"noProgressLimit,omitempty" json:"noProgressLimit,omitempty"`
-	AutoRetryLimit          int      `yaml:"autoRetryLimit,omitempty" json:"autoRetryLimit,omitempty"`
-	IntegrationBranchPrefix string   `yaml:"integrationBranchPrefix,omitempty" json:"integrationBranchPrefix,omitempty"`
+	RoleProfiles            map[string]string `yaml:"roleProfiles,omitempty" json:"roleProfiles,omitempty"`
+	DefaultMode             string            `yaml:"defaultMode" json:"defaultMode"`
+	MaxParallel             int               `yaml:"maxParallel" json:"maxParallel"`
+	LeaseTTL                Duration          `yaml:"leaseTTL" json:"leaseTTL"`
+	HeartbeatInterval       Duration          `yaml:"heartbeatInterval" json:"heartbeatInterval"`
+	NoProgressLimit         int               `yaml:"noProgressLimit,omitempty" json:"noProgressLimit,omitempty"`
+	AutoRetryLimit          int               `yaml:"autoRetryLimit,omitempty" json:"autoRetryLimit,omitempty"`
+	IntegrationBranchPrefix string            `yaml:"integrationBranchPrefix,omitempty" json:"integrationBranchPrefix,omitempty"`
 }
 
 type Agent struct {
+	Model                string   `yaml:"model,omitempty" json:"model,omitempty"`
+	ReasoningEffort      string   `yaml:"reasoningEffort,omitempty" json:"reasoningEffort,omitempty"`
 	ID                   string   `yaml:"id" json:"id"`
 	Adapter              string   `yaml:"adapter" json:"adapter"`
 	Command              string   `yaml:"command" json:"command"`
@@ -252,6 +255,9 @@ func (c Config) Validate() error {
 	if err := validateAgents(c.Agents); err != nil {
 		return err
 	}
+	if err := c.validateRoleProfiles(); err != nil {
+		return err
+	}
 	legacyWorkspace := c.Workspace.Provider == "git-worktree"
 	if c.Workspace.Provider != "" && c.Workspace.Provider != WorkspaceProviderCurrentDirectory && !legacyWorkspace {
 		return fmt.Errorf("workspace.provider must be current-directory when set")
@@ -317,7 +323,7 @@ func validateAgents(agents []Agent) error {
 		}
 		roles := make(map[string]struct{}, len(agent.Roles))
 		for _, role := range agent.Roles {
-			if !oneOf(role, "planner", "implementer", "reviewer") {
+			if !validRole(role) {
 				return fmt.Errorf("%s has unsupported role %q", prefix, role)
 			}
 			if _, exists := roles[role]; exists {
@@ -334,17 +340,16 @@ func validateAgents(agents []Agent) error {
 		if agent.Adapter == "fake" {
 			continue
 		}
-		if agent.Sandbox != "" && !oneOf(agent.Sandbox, "read-only", "workspace-write") {
-			return fmt.Errorf("%s.sandbox is unsupported", prefix)
-		}
-		if agent.PermissionMode != "" && !oneOf(agent.PermissionMode, "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan") {
-			return fmt.Errorf("%s.permissionMode is unsupported", prefix)
+		for _, role := range agent.Roles {
+			if _, err := agent.Effective(role, ""); err != nil {
+				return fmt.Errorf("%s: %w", prefix, err)
+			}
 		}
 		if agent.ProviderTransport != "allow" {
 			return fmt.Errorf("%s.providerTransport must be allow for provider CLI adapters", prefix)
 		}
-		if !oneOf(agent.CredentialSource, "cli-session", "secret-provider") {
-			return fmt.Errorf("%s.credentialSource is unsupported", prefix)
+		if agent.CredentialSource != "cli-session" {
+			return fmt.Errorf("%s.credentialSource must be cli-session; secret-provider injection is not implemented; authorize existing CLI environment by name in environmentAllowlist", prefix)
 		}
 		if !oneOf(agent.ActiveProbe, "explicit", "disabled") {
 			return fmt.Errorf("%s.activeProbe must be explicit or disabled", prefix)

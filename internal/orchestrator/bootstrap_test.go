@@ -55,7 +55,7 @@ func TestBootstrapSourceMutationIsDriftEvenWhenCommandFails(t *testing.T) {
 			}
 			engine := &Engine{repository: repository, projectRoot: source, runtimeRoot: runtimeRoot, environment: provider, configHash: strings.Repeat("a", 64), config: config.Config{Bootstrap: config.Bootstrap{Commands: []config.Command{{ID: "mutating-bootstrap", Argv: []string{"sh", "-c", fmt.Sprintf("printf changed > input.txt; exit %d", exitCode)}, Timeout: config.Duration{Duration: time.Second}}}}}}
 			snapshot := workspace.Snapshot{ID: "bootstrap", Path: source, BaseCommit: identity.HeadCommit, BaseTree: identity.HeadTree, InputTree: identity.HeadTree, Identity: identity, ExecutionModel: workspace.ExecutionCurrentDirectory}
-			_, _, err = engine.prepareAttemptEnvironment(ctx, snapshot, domain.GoalRevision{Hash: strings.Repeat("b", 64)}, config.Agent{})
+			_, _, err = engine.prepareAttemptEnvironment(ctx, snapshot, domain.GoalRevision{Hash: strings.Repeat("b", 64)})
 			if !errors.Is(err, environment.ErrCheckoutDrift) {
 				t.Fatalf("bootstrap source edit was not identified as drift: %v", err)
 			}
@@ -66,5 +66,43 @@ func TestBootstrapSourceMutationIsDriftEvenWhenCommandFails(t *testing.T) {
 				t.Fatalf("bootstrap failure scene was discarded: %q %v", content, err)
 			}
 		})
+	}
+}
+
+func TestBootstrapDoesNotInheritProviderProfileEnvironment(t *testing.T) {
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-b", "main"}, {"-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "--no-verify", "-m", "fixture"}} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git: %v %s", err, output)
+		}
+	}
+	repository, err := gitrepo.Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := repository.ReadCheckoutIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := environment.NewLocal(t.TempDir(), repository, clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XGOAL_PROVIDER_TOKEN", "fixture-only-secret")
+	t.Setenv("XGOAL_PROVIDER_ONLY", "fixture-only-setting")
+	engine := &Engine{repository: repository, projectRoot: root, environment: provider, configHash: strings.Repeat("a", 64), config: config.Config{Bootstrap: config.Bootstrap{Commands: []config.Command{{ID: "check-env", Argv: []string{"sh", "-c", `test -z "${XGOAL_PROVIDER_TOKEN:-}" && test -z "${XGOAL_PROVIDER_ONLY:-}"`}, Timeout: config.Duration{Duration: 10 * time.Second}}}}}}
+	snapshot := workspace.Snapshot{ID: "env_boundary", Path: root, BaseCommit: identity.HeadCommit, BaseTree: identity.HeadTree, InputTree: identity.HeadTree, Identity: identity, ExecutionModel: workspace.ExecutionCurrentDirectory}
+	engine.config.Agents = []config.Agent{{EnvironmentAllowlist: []string{"XGOAL_PROVIDER_TOKEN", "XGOAL_PROVIDER_ONLY"}}}
+	handle, observed, err := engine.prepareAttemptEnvironment(ctx, snapshot, domain.GoalRevision{Hash: strings.Repeat("b", 64)})
+	if err != nil {
+		t.Fatalf("bootstrap received Provider-only environment: %v", err)
+	}
+	defer provider.Cleanup(context.Background(), handle)
+	if strings.Contains(strings.Join(observed.EnvironmentNames, ","), "XGOAL_PROVIDER") {
+		t.Fatalf("project environment contains Provider names: %v", observed.EnvironmentNames)
 	}
 }

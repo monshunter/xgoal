@@ -27,6 +27,7 @@ const (
 )
 
 type WorkPacket struct {
+	Harness              *HarnessInput       `json:"harness,omitempty"`
 	ProtocolVersion      string              `json:"protocol_version"`
 	Project              PacketProject       `json:"project"`
 	Goal                 PacketGoal          `json:"goal"`
@@ -92,6 +93,11 @@ type PacketDecision struct {
 }
 
 func (packet WorkPacket) Validate() error {
+	if packet.Harness != nil {
+		if err := packet.Harness.Validate(); err != nil {
+			return err
+		}
+	}
 	if packet.ProtocolVersion != WorkPacketVersion {
 		return fmt.Errorf("protocol_version must be %q", WorkPacketVersion)
 	}

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
@@ -46,39 +45,20 @@ func decodeFrozenContract(value []byte) (frozenContract, error) {
 }
 
 func (engine *Engine) implementationProfile(role domain.Role) (config.Agent, error) {
-	for _, configured := range engine.config.Agents {
-		if hasRole(configured, role) {
-			return configured, nil
-		}
-	}
-	return config.Agent{}, fmt.Errorf("no trusted Agent Profile supports role %q", role)
+	profile, _, err := engine.config.SelectProfile(string(role), "")
+	return profile, err
 }
 
 func (engine *Engine) reviewerProfile(implementer config.Agent) (config.Agent, review.Adapter, error) {
-	candidates := make([]config.Agent, 0)
-	for _, configured := range engine.config.Agents {
-		if hasRole(configured, domain.RoleReviewer) && engine.reviewers[configured.ID] != nil {
-			candidates = append(candidates, configured)
-		}
+	selected, _, err := engine.config.SelectProfile("reviewer", implementer.ID)
+	if err != nil {
+		return config.Agent{}, nil, err
 	}
-	if len(candidates) == 0 {
-		return config.Agent{}, nil, errors.New("no trusted Reviewer Profile is available")
+	reviewer := engine.reviewers[selected.ID]
+	if reviewer == nil {
+		return config.Agent{}, nil, fmt.Errorf("selected Reviewer Profile %q is unavailable", selected.ID)
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		leftDifferent := candidates[i].Adapter != implementer.Adapter
-		rightDifferent := candidates[j].Adapter != implementer.Adapter
-		if engine.config.Review.PreferDifferentProvider && leftDifferent != rightDifferent {
-			return leftDifferent
-		}
-		leftProfile := candidates[i].ID != implementer.ID
-		rightProfile := candidates[j].ID != implementer.ID
-		if leftProfile != rightProfile {
-			return leftProfile
-		}
-		return candidates[i].ID < candidates[j].ID
-	})
-	selected := candidates[0]
-	return selected, engine.reviewers[selected.ID], nil
+	return selected, reviewer, nil
 }
 
 func hasRole(profile config.Agent, role domain.Role) bool {

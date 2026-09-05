@@ -1055,3 +1055,12 @@ SQLite 保留事务状态、CAS、Lease、Gate、事件、进程归属和恢复�
 > 外部 CLI 的参数和输出协议可能演进；技术实现必须通过版本探测和契约测试确认，不把本文中的示例参数当作永久 ABI。
 
 - PLAN-012 最终并发检查：SQLite 与 Orchestrator 的迁移、规划发布、合法结果、重试、Gate、信任迁移及跨重启回答定向 `go test -race` 均通过（SQLite 39.947s、Orchestrator 154.242s）；独立 REVIEW-051 最终 PASS。
+
+- PLAN-013 Phase 1：配置冲突负例先复现后修复；角色绑定、默认权限、双 Provider model/effort argv、三个角色 Invocation 身份与旧/变更会话拒绝测试通过。Adapter/Review/Planner/Config/Control/Doctor/ProjectInit 全包 PASS；Engine/App/CLI 全包 PASS（265.045s/27.565s/142.891s）。随后只读独立审查发现并修正 Bash 宽泛/花括号规则与可变配置指针，配置负例与 Adapter 配置冻结/Resume 定向 race PASS（Codex 26.112s、Claude 20.126s）；Reviewer 独立冻结 race 亦 PASS。
+- PLAN-013 Phase 2：必需 Harness 缺失/Provider 不匹配/声明丢失/逃逸 symlink 的文件系统测试通过。Engine 缺失必需 Harness 在调用 Provider 前产生 Waiting Gate、没有 Attempt 或 Provider 执行且 Git 身份不变；双 Work/Review/Promotion/Final Report 原链路与新 Packet/原生委派 argv 回归通过（Engine 合并运行45.496s）。这些用例使用故障 fixture；真实 Provider 结果单独记录如下。required 安全读取失败统一保留 PROJECT_HARNESS_REQUIRED 分类；offline/API doctor 对两个 Provider 的缺失准备步骤一致性回归通过。
+
+- PLAN-013 真实 Provider：隔离 CLI 版本 Codex 0.153.4、Claude Code 2.1.235，显式模型 gpt-6-astra/sonnet、effort low，以必需的 Provider 原生 Harness 从真实 CLI/daemon 完成 Planner→Implementer→独立 Reviewer→受信最终断言；核对三个 Invocation 配置及 Planner request/input Tree/generation、用户 HEAD/index/worktree 和最终 Evidence。Codex 测试 PASS 148.69s（Goal 2m26.785s），最终 Tree `7a65186e75d8b303dc4173955650ca943aa896b7`、`evidence_set_final_d6d638dbc162facda4c1298b`；Claude PASS 88.04s（Goal 1m25.747s），最终 Tree `fa89c749423e66dbfbdf322a7daefb9a3766a9db`、`evidence_set_final_31a848ae90e161835663962f`。成功夹具按测试合同清理；不声称实际模型别名解析或模型理解可从配置证明。
+- Claude 实验中的两次失败分别是 Profile 未转发既有认证环境和 Planner 将 criterion 正文当作 ID；两次均停止于可见 Waiting Gate，没有伪造成功。测试显式列出认证环境名称（不写值、不改用户全局配置），Planner 明确引用示例后完成。合法原生 `is_error` 现在保留有界脱敏原因并归为 Provider 不可用，回归先红后绿；协议损坏仍单独分类。失败夹具保留在 `/private/tmp/xgoal-real-goal-1285040890` 与 `/private/tmp/xgoal-real-goal-873522969`，daemon 已停止。
+- PLAN-013 最新定向回归：Config/Harness/Protocol/Adapter/Planner/Review/Control/Doctor/ProjectInit 全包与 Planner/Harness Engine 定向测试 PASS，`go vet ./...` PASS。服务/可选 Acceptance、实时上下文与一致导出仍由 PLAN-014/015 验证；本记录不代替尚未完成的增量 AC。
+
+- PLAN-013 收口复核补充：哨兵回归复现 Provider Profile 环境会流入 bootstrap（测试 exit1），随后移除这条共享，使项目准备仅使用最小环境；Provider CLI 的显式认证配置仍独立保留。该修补及原 bootstrap 源码漂移回归 race PASS 17.611s，不用无 bootstrap 的真实夹具冒充其 Evidence。技术合同同步当前受信 Profile 的既有 CLI 认证环境授权边界；未实现的 secret-provider 来源先红后绿明确拒绝。

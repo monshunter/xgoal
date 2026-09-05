@@ -15,6 +15,10 @@ import (
 )
 
 func (runtime *Adapter) Plan(ctx context.Context, invocation planner.Invocation, sink baseadapter.EventSink) (planner.Execution, error) {
+	invocation.ExecutionConfig = invocation.ExecutionConfig.Clone()
+	if err := baseadapter.ValidateExecution(invocation.ExecutionConfig, invocation.ProfileID, "claude-cli", "planner"); err != nil {
+		return planner.Execution{}, err
+	}
 	if _, err := planner.ValidateInvocation(invocation); err != nil {
 		return planner.Execution{}, err
 	}
@@ -34,6 +38,13 @@ func (runtime *Adapter) Plan(ctx context.Context, invocation planner.Invocation,
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		return planner.Execution{}, err
 	}
+	metadata, err := canonical.Marshal(invocation.Record())
+	if err != nil {
+		return planner.Execution{}, err
+	}
+	if err := writeImmutable(filepath.Join(directory, "invocation.json"), metadata, 0o600); err != nil {
+		return planner.Execution{}, err
+	}
 	eventsDir := filepath.Join(directory, "events")
 	if err := os.Mkdir(eventsDir, 0o700); err != nil {
 		return planner.Execution{}, err
@@ -44,7 +55,13 @@ func (runtime *Adapter) Plan(ctx context.Context, invocation planner.Invocation,
 	stream := newStream(eventsDir, filepath.ToSlash(filepath.Join("plans", invocation.InvocationID)), sink, runtime.clock.Now, limiter, cancel)
 	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
 	tools := "Read,Glob,Grep"
-	arguments := []string{runtime.binary, "-p", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--json-schema", string(schema), "--permission-mode", "dontAsk", "--tools", tools, "--allowedTools", tools}
+	allowedTools := tools
+	if invocation.ExecutionConfig != nil {
+		tools = strings.Join(invocation.ExecutionConfig.Tools, ",")
+		allowedTools = strings.Join(invocation.ExecutionConfig.AllowedTools, ",")
+	}
+	arguments := []string{runtime.binary, "-p", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--json-schema", string(schema), "--permission-mode", "dontAsk", "--tools", tools, "--allowedTools", allowedTools}
+	arguments = append(arguments, executionArguments(invocation.ExecutionConfig)...)
 	process, processErr := supervisor.Run(runContext, supervisor.Command{Argv: arguments, Dir: invocation.WorkDir, Env: environmentList(environment), Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr, GracePeriod: gracePeriod})
 	stderrErr := stderr.persist(filepath.Join(directory, "stderr.log"))
 	proposal, sessionID, resultErr := stream.finalizePlanner(min64(invocation.MaxOutputBytes, maxResultBytes))

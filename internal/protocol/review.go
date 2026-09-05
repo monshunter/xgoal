@@ -22,6 +22,7 @@ const (
 )
 
 type ReviewPacket struct {
+	Harness                 *HarnessInput      `json:"harness,omitempty"`
 	ProtocolVersion         string             `json:"protocol_version"`
 	ID                      string             `json:"id"`
 	GoalRevisionHash        string             `json:"goal_revision_hash"`
@@ -48,6 +49,11 @@ type ReviewReceiptRef struct {
 }
 
 func (packet ReviewPacket) Validate() error {
+	if packet.Harness != nil {
+		if err := packet.Harness.Validate(); err != nil {
+			return err
+		}
+	}
 	if packet.ProtocolVersion != ReviewPacketVersion || !validLabel(packet.ID) || !validSHA256(packet.GoalRevisionHash) ||
 		!validSHA256(packet.PlanRevisionHash) || !validLabel(packet.WorkItemID) || !validLabel(packet.ImplementationAttemptID) ||
 		!validLabel(packet.ImplementationProfileID) || !validLabel(packet.ImplementationSessionID) || !validGitObjectID(packet.BaseTree) ||

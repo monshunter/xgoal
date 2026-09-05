@@ -6,10 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/monshunter/xgoal/internal/app"
 	"github.com/monshunter/xgoal/internal/clock"
 	"github.com/monshunter/xgoal/internal/control"
+	"github.com/monshunter/xgoal/internal/doctor"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 )
 
@@ -25,6 +28,7 @@ func TestPassiveDoctorDoesNotCreateAdaptersOrFollowGitEnvironment(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	data = []byte(strings.Replace(string(data), "    required: false", "    required: true", 1))
 	if err := os.WriteFile(filepath.Join(root, "xgoal.yaml"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +49,22 @@ func TestPassiveDoctorDoesNotCreateAdaptersOrFollowGitEnvironment(t *testing.T) 
 	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
 	t.Setenv("GIT_WORK_TREE", other)
 	result := service.Doctor(ctx)
+	paths, err := app.ResolvePaths(root, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	offline := doctor.Inspect(ctx, paths)
+	for name, output := range map[string]map[string]any{"api": result, "offline": offline} {
+		missing := 0
+		for _, diagnostic := range output["unmet_capabilities"].([]string) {
+			if strings.Contains(diagnostic, "PROJECT_HARNESS_REQUIRED") {
+				missing++
+			}
+		}
+		if missing != 2 {
+			t.Fatalf("%s doctor lacks both native Harness preparation errors: %+v", name, output)
+		}
+	}
 	after, err := os.ReadDir(state)
 	if err != nil {
 		t.Fatal(err)

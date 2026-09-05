@@ -17,6 +17,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/protocol"
 )
 
@@ -27,24 +28,26 @@ const (
 )
 
 type invocationArtifact struct {
-	ProtocolVersion  string                `json:"protocol_version"`
-	InvocationID     string                `json:"invocation_id"`
-	AttemptID        string                `json:"attempt_id"`
-	WorkItemID       string                `json:"work_item_id"`
-	ProfileID        string                `json:"profile_id"`
-	GoalRevisionHash string                `json:"goal_revision_hash"`
-	PlanRevisionHash string                `json:"plan_revision_hash"`
-	BaseTree         string                `json:"base_tree"`
-	PacketHash       string                `json:"packet_hash"`
-	Role             string                `json:"role"`
-	WorkDir          string                `json:"work_dir"`
-	PacketPath       string                `json:"packet_path"`
-	SandboxPolicy    string                `json:"sandbox_policy"`
-	ToolPolicy       []string              `json:"tool_policy"`
-	EnvironmentNames []string              `json:"environment_names"`
-	OutputSchemaHash string                `json:"output_schema_hash"`
-	SessionPolicy    adapter.SessionPolicy `json:"session_policy"`
-	CreatedAt        time.Time             `json:"created_at"`
+	DelegationHash   string                  `json:"delegation_hash,omitempty"`
+	ExecutionConfig  *config.ExecutionConfig `json:"execution_config,omitempty"`
+	ProtocolVersion  string                  `json:"protocol_version"`
+	InvocationID     string                  `json:"invocation_id"`
+	AttemptID        string                  `json:"attempt_id"`
+	WorkItemID       string                  `json:"work_item_id"`
+	ProfileID        string                  `json:"profile_id"`
+	GoalRevisionHash string                  `json:"goal_revision_hash"`
+	PlanRevisionHash string                  `json:"plan_revision_hash"`
+	BaseTree         string                  `json:"base_tree"`
+	PacketHash       string                  `json:"packet_hash"`
+	Role             string                  `json:"role"`
+	WorkDir          string                  `json:"work_dir"`
+	PacketPath       string                  `json:"packet_path"`
+	SandboxPolicy    string                  `json:"sandbox_policy"`
+	ToolPolicy       []string                `json:"tool_policy"`
+	EnvironmentNames []string                `json:"environment_names"`
+	OutputSchemaHash string                  `json:"output_schema_hash"`
+	SessionPolicy    adapter.SessionPolicy   `json:"session_policy"`
+	CreatedAt        time.Time               `json:"created_at"`
 }
 
 type sessionBinding struct {
@@ -75,6 +78,8 @@ func invocationMetadata(invocation adapter.Invocation, workDir, packetPath, sche
 	toolPolicy := append([]string(nil), invocation.ToolPolicy...)
 	sort.Strings(toolPolicy)
 	return invocationArtifact{
+		DelegationHash:  protocol.DelegationHash(),
+		ExecutionConfig: invocation.ExecutionConfig,
 		ProtocolVersion: invocationArtifactVersion,
 		InvocationID:    invocation.InvocationID, AttemptID: invocation.AttemptID,
 		WorkItemID: invocation.WorkItemID, ProfileID: invocation.ProfileID,

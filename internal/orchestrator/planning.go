@@ -12,6 +12,7 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/gitrepo"
+	"github.com/monshunter/xgoal/internal/harness"
 	"github.com/monshunter/xgoal/internal/planner"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
@@ -114,6 +115,9 @@ func (engine *Engine) runPlanning(ctx context.Context, goalID string) error {
 		}
 		if err != nil {
 			code := "planner_failed"
+			if errors.Is(err, harness.ErrRequired) {
+				code = "project_harness_required"
+			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				code = "planner_timeout"
 			}
@@ -168,13 +172,21 @@ func (engine *Engine) invokePlanner(ctx context.Context, record sqlite.PlanningR
 	if !ok {
 		return planner.Execution{}, errors.New("selected adapter has no Planner contract")
 	}
+	harnessInput, err := harness.Discover(engine.projectRoot, profile.Adapter, engine.config.Project.Harness)
+	if err != nil {
+		return planner.Execution{}, err
+	}
 	probeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err := runtimeAdapter.Probe(probeContext, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
+	capabilities, err := runtimeAdapter.Probe(probeContext, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
 	cancel()
 	if err != nil {
 		return planner.Execution{}, err
 	}
-	packetPath, packetHash, err := planner.PrepareInvocation(engine.runtimeRoot, invocationID, record.Generation, planner.Packet{ProtocolVersion: planner.PacketVersion, GoalID: record.Goal.ID, RawGoal: record.Request.RawGoal, Mode: record.Request.Mode, ConfigHash: record.Request.ConfigHash, TrustedValidators: record.Request.TrustedValidatorIDs, ProjectRoot: engine.projectRoot, ProjectNetwork: engine.config.Runtime.ProjectNetwork, ProjectSecrets: engine.config.Runtime.ProjectSecrets})
+	effective, err := profile.Effective("planner", capabilities.Version)
+	if err != nil {
+		return planner.Execution{}, err
+	}
+	packetPath, packetHash, err := planner.PrepareInvocation(engine.runtimeRoot, invocationID, record.Generation, planner.Packet{Harness: &harnessInput, ProtocolVersion: planner.PacketVersion, GoalID: record.Goal.ID, RawGoal: record.Request.RawGoal, Mode: record.Request.Mode, ConfigHash: record.Request.ConfigHash, TrustedValidators: record.Request.TrustedValidatorIDs, ProjectRoot: engine.projectRoot, ProjectNetwork: engine.config.Runtime.ProjectNetwork, ProjectSecrets: engine.config.Runtime.ProjectSecrets})
 	if err != nil {
 		return planner.Execution{}, err
 	}
@@ -192,8 +204,9 @@ Return a bounded Goal Contract and acyclic Work Graph using the packet's trusted
 - Each criterion must be covered by a required Work Item. Each Work Item needs non-empty acceptance_criteria and validators, role implementer, and explicit read_scope and write_scope.
 - Scopes are repository-root-anchored patterns beginning with /, such as /output.txt or /src/**, not filesystem absolute paths or unprefixed relative paths. Never include Git metadata or path traversal.
 - Use unique client_key values and criterion IDs, reference only existing dependencies and criteria, and order Work Items with overlapping write scopes.
+- Work Item acceptance_criteria contains criterion IDs, never statement text. For example, contract.acceptance_criteria [{"id":"AC-1","statement":"output.txt has the required bytes","validators":["output-check"],"human_acceptance":false}] is referenced by work_items acceptance_criteria ["AC-1"]. Use the actual trusted validator IDs from the packet, not the example ID.
 If a verifiable plan cannot be formed within the supplied goal and trusted validators, explain the gap in ambiguities instead of inventing coverage.`
-	invocation := planner.Invocation{InvocationID: invocationID, ProfileID: profile.ID, WorkDir: engine.projectRoot, PacketPath: packetPath, PacketHash: packetHash, Prompt: prompt, OutputSchema: schema, Environment: profileEnvironment(profile), Timeout: profile.Timeout.Duration, MaxOutputBytes: maxPlannerOutput}
+	invocation := planner.Invocation{RequestHash: record.Effect.RequestHash, InputTree: record.Observation.InputTree, Generation: record.Generation, ExecutionConfig: &effective, InvocationID: invocationID, ProfileID: profile.ID, WorkDir: engine.projectRoot, PacketPath: packetPath, PacketHash: packetHash, Prompt: prompt, OutputSchema: schema, Environment: profileEnvironment(profile), Timeout: profile.Timeout.Duration, MaxOutputBytes: maxPlannerOutput}
 	providerContext, stop := context.WithTimeout(ctx, invocation.Timeout)
 	defer stop()
 	execution, err := plannerAdapter.Plan(providerContext, invocation, nil)

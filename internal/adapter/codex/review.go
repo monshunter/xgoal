@@ -10,12 +10,17 @@ import (
 
 	baseadapter "github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/protocol"
 	reviewcontract "github.com/monshunter/xgoal/internal/review"
 	"github.com/monshunter/xgoal/internal/supervisor"
 )
 
 func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.Invocation, sink baseadapter.EventSink) (reviewcontract.Execution, error) {
+	invocation.ExecutionConfig = invocation.ExecutionConfig.Clone()
+	if err := baseadapter.ValidateExecution(invocation.ExecutionConfig, invocation.ReviewerProfileID, "codex-cli", "reviewer"); err != nil {
+		return reviewcontract.Execution{}, err
+	}
 	packet, err := reviewcontract.ValidateInvocation(invocation)
 	if err != nil {
 		return reviewcontract.Execution{}, err
@@ -37,16 +42,18 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 		return reviewcontract.Execution{}, err
 	}
 	metadata := struct {
-		ProtocolVersion string `json:"protocol_version"`
-		InvocationID    string `json:"invocation_id"`
-		ReviewID        string `json:"review_id"`
-		PacketHash      string `json:"packet_hash"`
-		PacketPath      string `json:"packet_path"`
-		ReviewerProfile string `json:"reviewer_profile_id"`
-		Implementer     string `json:"implementation_profile_id"`
-		CandidateTree   string `json:"candidate_tree"`
-		SchemaHash      string `json:"schema_hash"`
-	}{"xgoal.codex-review-invocation/v1alpha1", invocation.InvocationID, packet.ID, invocation.PacketHash, invocation.PacketPath, invocation.ReviewerProfileID, invocation.ImplementationProfileID, invocation.CandidateTree, schemaHash}
+		DelegationHash  string                  `json:"delegation_hash,omitempty"`
+		ExecutionConfig *config.ExecutionConfig `json:"execution_config,omitempty"`
+		ProtocolVersion string                  `json:"protocol_version"`
+		InvocationID    string                  `json:"invocation_id"`
+		ReviewID        string                  `json:"review_id"`
+		PacketHash      string                  `json:"packet_hash"`
+		PacketPath      string                  `json:"packet_path"`
+		ReviewerProfile string                  `json:"reviewer_profile_id"`
+		Implementer     string                  `json:"implementation_profile_id"`
+		CandidateTree   string                  `json:"candidate_tree"`
+		SchemaHash      string                  `json:"schema_hash"`
+	}{protocol.DelegationHash(), invocation.ExecutionConfig, "xgoal.codex-review-invocation/v1alpha1", invocation.InvocationID, packet.ID, invocation.PacketHash, invocation.PacketPath, invocation.ReviewerProfileID, invocation.ImplementationProfileID, invocation.CandidateTree, schemaHash}
 	content, err := canonical.Marshal(metadata)
 	if err != nil {
 		return reviewcontract.Execution{}, err
@@ -63,7 +70,9 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
 	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("reviews", invocation.InvocationID)), sink, runtime.clock, limiter, cancel)
 	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
-	arguments := []string{runtime.binary, "--ask-for-approval", "never", "--sandbox", "read-only", "--cd", invocation.WorkDir, "exec", "--json", "--output-schema", schemaPath, "--color", "never", "-"}
+	arguments := []string{runtime.binary, "--ask-for-approval", "never", "--sandbox", "read-only", "--cd", invocation.WorkDir}
+	arguments = append(arguments, executionArguments(invocation.ExecutionConfig)...)
+	arguments = append(arguments, "exec", "--json", "--output-schema", schemaPath, "--color", "never", "-")
 	process, processErr := supervisor.Run(runContext, supervisor.Command{Argv: arguments, Dir: invocation.WorkDir, Env: environmentList(environment), Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr, GracePeriod: defaultGracePeriod})
 	stderrErr := stderr.persist(filepath.Join(directory, "stderr.log"))
 	result, sessionID, resultErr := stream.FinalizeReview(min64(invocation.MaxOutputBytes, maxResultBytes))

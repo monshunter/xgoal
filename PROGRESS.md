@@ -33,7 +33,7 @@ Objective: 落实运行时 Harness 综合改进设计，完成配置、验收、
 Status: 正在处理
 Plans:
 - [x] [PLAN-012：统一改进合同并保护验收与恢复边界](docs/plans/PLAN-012.md)
-- [ ] [PLAN-013：贯通 Agent Profile 与项目 Harness](docs/plans/PLAN-013.md)
+- [x] [PLAN-013：贯通 Agent Profile 与项目 Harness](docs/plans/PLAN-013.md)
 - [ ] [PLAN-014：完成受信环境与场景验收链路](docs/plans/PLAN-014.md)
 - [ ] [PLAN-015：完善实时观测、用户操作与综合验收](docs/plans/PLAN-015.md)
 ---

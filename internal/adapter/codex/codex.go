@@ -143,6 +143,11 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 	if !spec.ProviderTransport || spec.Timeout <= 0 {
 		return adapter.Capabilities{}, errors.New("active Codex probe requires provider transport and a positive timeout")
 	}
+	effective, err := adapter.ProbeExecution(spec, "codex-cli", passive.Version)
+	if err != nil {
+		return adapter.Capabilities{}, err
+	}
+	passive.ExecutionConfig = &effective
 	timeout := spec.Timeout
 	probeID, err := randomID("probe")
 	if err != nil {
@@ -181,6 +186,7 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 		return adapter.Capabilities{}, err
 	}
 	invocation := adapter.Invocation{
+		ExecutionConfig: &effective, PermissionMode: effective.PermissionMode,
 		InvocationID: probeID, AttemptID: "attempt_codex_active_probe", WorkItemID: packet.WorkItem.ID,
 		ProfileID: spec.ProfileID, GoalRevisionHash: packet.Goal.ContractHash, PlanRevisionHash: strings.Repeat("2", 64),
 		BaseTree: packet.Project.BaseTree, PacketHash: packetHash, Role: domain.RoleReviewer,
@@ -226,6 +232,7 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 }
 
 func (runtime *Adapter) Start(ctx context.Context, invocation adapter.Invocation, sink adapter.EventSink) (adapter.Handle, error) {
+	invocation.ExecutionConfig = invocation.ExecutionConfig.Clone()
 	if invocation.SessionPolicy != adapter.SessionFresh {
 		return adapter.Handle{}, errors.New("new Codex invocation requires fresh session policy")
 	}
@@ -233,9 +240,18 @@ func (runtime *Adapter) Start(ctx context.Context, invocation adapter.Invocation
 }
 
 func (runtime *Adapter) Resume(ctx context.Context, invocation adapter.Invocation, sessionID string, sink adapter.EventSink) (adapter.Handle, error) {
+	invocation.ExecutionConfig = invocation.ExecutionConfig.Clone()
+	if invocation.ExecutionConfig == nil || !invocation.ExecutionConfig.Resumable() {
+		return adapter.Handle{}, fmt.Errorf("%w: explicit model, reasoningEffort and CLI version are required for resume; start a fresh invocation", adapter.ErrSessionMismatch)
+	}
 	if invocation.SessionPolicy != adapter.SessionResumeCompatible || !validSessionID(sessionID) {
 		return adapter.Handle{}, fmt.Errorf("%w: Codex resume policy or session id is invalid", adapter.ErrSessionMismatch)
 	}
+	probe, err := runtime.passiveProbe(ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: invocation.ProfileID, Timeout: 10 * time.Second})
+	if err != nil || probe.Version != invocation.ExecutionConfig.CLIVersion {
+		return adapter.Handle{}, fmt.Errorf("%w: current codex CLI version differs from session identity or could not be verified: %v", adapter.ErrSessionMismatch, err)
+	}
+
 	return runtime.start(ctx, invocation, sessionID, sink)
 }
 
@@ -356,8 +372,10 @@ func (runtime *Adapter) execution(handle adapter.Handle) (*execution, error) {
 func (runtime *Adapter) arguments(invocation adapter.Invocation, schemaPath, resumeSessionID string) []string {
 	arguments := []string{
 		runtime.binary, "--ask-for-approval", "never", "--sandbox", invocation.SandboxPolicy,
-		"--cd", invocation.WorkDir, "exec",
+		"--cd", invocation.WorkDir,
 	}
+	arguments = append(arguments, executionArguments(invocation.ExecutionConfig)...)
+	arguments = append(arguments, "exec")
 	if resumeSessionID == "" {
 		return append(arguments, "--json", "--output-schema", schemaPath, "--color", "never", "-")
 	}
@@ -452,6 +470,13 @@ type validatedInvocation struct {
 }
 
 func (runtime *Adapter) validateInvocation(invocation adapter.Invocation) (validatedInvocation, error) {
+	if err := adapter.ValidateExecution(invocation.ExecutionConfig, invocation.ProfileID, "codex-cli", string(invocation.Role)); err != nil {
+		return validatedInvocation{}, err
+	}
+	if e := invocation.ExecutionConfig; e != nil && (e.Sandbox != invocation.SandboxPolicy || e.PermissionMode != invocation.PermissionMode) {
+		return validatedInvocation{}, errors.New("Codex effective permissions differ from invocation")
+	}
+
 	if !validComponent(invocation.InvocationID) || !validComponent(invocation.AttemptID) || !validComponent(invocation.WorkItemID) ||
 		!validComponent(invocation.ProfileID) || !validHash(invocation.GoalRevisionHash, 64) || !validHash(invocation.PlanRevisionHash, 64) ||
 		(!validHash(invocation.BaseTree, 40) && !validHash(invocation.BaseTree, 64)) || !validHash(invocation.PacketHash, 64) ||

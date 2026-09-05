@@ -98,6 +98,25 @@ source <(xgoal completion zsh)
 
 项目入口统一使用 `--project`、`--state-dir`、`--socket`，优先级为显式参数、对应 `XGOAL_PROJECT`/`XGOAL_STATE_DIR`/`XGOAL_SOCKET` 环境变量、已绑定项目位置、默认值。例如 `xgoal --project /path/to/A daemon status`。项目绑定后不能通过另一个 state-dir 启动第二个实例；linked worktree 入口明确拒绝。`doctor` 默认可离线运行，不打开、创建或迁移 SQLite；主动 Probe 需要运行中的 daemon。
 
+## Agent Profile 与项目规则
+
+`agents[]` 的可选 `model`、`reasoningEffort` 用于同一个 Provider 的可复用执行配置；`orchestration.roleProfiles` 将 `planner`、`implementer`、`reviewer` 绑定到 Profile ID。未绑定时保留默认选择，`doctor` 的 `role_selections` 显示选择来源，`effective_roles` 显示实际传递的配置与 CLI 版本。例如：
+
+```yaml
+orchestration:
+  roleProfiles: {planner: planning, implementer: coding, reviewer: checking}
+```
+
+绑定的 Profile 必须存在并声明支持对应角色。模型未填写时继承原生配置，不把配置推断当作实际模型观测。Codex effort 支持本 Adapter 合同的 `minimal/low/medium/high/xhigh`，Claude 支持 `low/medium/high/xhigh/max`；具体模型组合由原生 CLI 判断，可用 `doctor --active --profile <id> --timeout 3m` 提前验证，普通 doctor 不调用模型。
+
+Codex 使用无人值守 `never` 与角色 sandbox；同一 Profile 同时用于只读和实现角色时省略 `sandbox`，或拆分 Profile。Claude 使用 `dontAsk`；Planner/Reviewer 仅允许 Read/Glob/Grep，Implementer 默认再允许 Edit/Write。以前被忽略的冲突权限或工具配置现在会报错，请按提示迁移。原生 plan/auto/交互模式不会替代 xgoal 的 Fast/Standard 流程。
+
+每次调用保存有效配置与输入引用。兼容 resume 要求显式 model/effort、相同输入和当前 CLI 版本；继承值不明、旧会话缺少身份或配置发生变化时使用新会话。用户回答后的 Work retry 仍是带历史问题与回答的新 Attempt。
+
+`project.harness: {type: autogo, required: true}` 要求所选 Provider 有项目局部入口、兼容安装清单及其声明的知识文件。Codex 使用 `AGENTS.md`、`.agents/skills/` 与 `.autogo/manifests/codex.json`；Claude 使用 `CLAUDE.md`、`.claude/skills/` 与对应 `claude.json`。请在创建 Goal 前准备并提交所需文件；缺少必需能力时启动前停止。未要求 Harness 的项目可以继续使用。
+
+xgoal 将文件路径与哈希放入 Packet，并通过原生指令参数传递委派职责：Kernel 管理状态、Gate、Git、环境与完成判定，Agent 执行当前角色并遵守业务规则。检查不安装或覆盖项目规则。`found/compatible` 表示本地发现与清单兼容；`load_observation: unknown` 表示没有把路径提供当作模型已加载的证据，实际可观测行为保留在 Provider 事件中。
+
 ## 当前目录执行与恢复
 
 xgoal 不创建或删除 Git worktree。Implementer、Reviewer 和 Validator 使用同一个主工作目录；工作区记录只是独立的会话元数据。每个项目只允许一个执行者，项目 A 与 B 的执行互不占用对方的执行槽。

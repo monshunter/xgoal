@@ -118,6 +118,7 @@ func New(configuration Config) (*Adapter, error) {
 func (runtime *Adapter) ID() string { return adapterID }
 
 func (runtime *Adapter) Start(ctx context.Context, invocation adapter.Invocation, sink adapter.EventSink) (adapter.Handle, error) {
+	invocation.ExecutionConfig = invocation.ExecutionConfig.Clone()
 	if invocation.SessionPolicy != adapter.SessionFresh {
 		return adapter.Handle{}, errors.New("new Claude invocation requires fresh session policy")
 	}
@@ -125,9 +126,18 @@ func (runtime *Adapter) Start(ctx context.Context, invocation adapter.Invocation
 }
 
 func (runtime *Adapter) Resume(ctx context.Context, invocation adapter.Invocation, sessionID string, sink adapter.EventSink) (adapter.Handle, error) {
+	invocation.ExecutionConfig = invocation.ExecutionConfig.Clone()
+	if invocation.ExecutionConfig == nil || !invocation.ExecutionConfig.Resumable() {
+		return adapter.Handle{}, fmt.Errorf("%w: explicit model, reasoningEffort and CLI version are required for resume; start a fresh invocation", adapter.ErrSessionMismatch)
+	}
 	if invocation.SessionPolicy != adapter.SessionResumeCompatible || !validSessionID(sessionID) {
 		return adapter.Handle{}, fmt.Errorf("%w: Claude resume policy or session id is invalid", adapter.ErrSessionMismatch)
 	}
+	probe, err := runtime.passiveProbe(ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: invocation.ProfileID, Timeout: 10 * time.Second})
+	if err != nil || probe.Version != invocation.ExecutionConfig.CLIVersion {
+		return adapter.Handle{}, fmt.Errorf("%w: current claude CLI version differs from session identity or could not be verified: %v", adapter.ErrSessionMismatch, err)
+	}
+
 	return runtime.start(ctx, invocation, sessionID, sink)
 }
 
@@ -185,7 +195,12 @@ func (runtime *Adapter) start(ctx context.Context, invocation adapter.Invocation
 
 func (runtime *Adapter) arguments(invocation adapter.Invocation, schema []byte, resumeID string) []string {
 	tools := strings.Join(invocation.ToolPolicy, ",")
-	arguments := []string{runtime.binary, "-p", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--json-schema", string(schema), "--permission-mode", invocation.PermissionMode, "--tools", tools, "--allowedTools", tools}
+	allowedTools := tools
+	if invocation.ExecutionConfig != nil {
+		allowedTools = strings.Join(invocation.ExecutionConfig.AllowedTools, ",")
+	}
+	arguments := []string{runtime.binary, "-p", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--json-schema", string(schema), "--permission-mode", invocation.PermissionMode, "--tools", tools, "--allowedTools", allowedTools}
+	arguments = append(arguments, executionArguments(invocation.ExecutionConfig)...)
 	if resumeID != "" {
 		arguments = append(arguments, "--resume", resumeID)
 	}
@@ -296,6 +311,13 @@ type validatedInvocation struct {
 }
 
 func (runtime *Adapter) validateInvocation(inv adapter.Invocation) (validatedInvocation, error) {
+	if err := adapter.ValidateExecution(inv.ExecutionConfig, inv.ProfileID, "claude-cli", string(inv.Role)); err != nil {
+		return validatedInvocation{}, err
+	}
+	if e := inv.ExecutionConfig; e != nil && (e.PermissionMode != inv.PermissionMode || strings.Join(e.Tools, "\x00") != strings.Join(inv.ToolPolicy, "\x00")) {
+		return validatedInvocation{}, errors.New("Claude effective permissions differ from invocation")
+	}
+
 	if !validComponent(inv.InvocationID) || !validComponent(inv.AttemptID) || !validComponent(inv.WorkItemID) || !validComponent(inv.ProfileID) || !validHash(inv.GoalRevisionHash, 64) || !validHash(inv.PlanRevisionHash, 64) || (!validHash(inv.BaseTree, 40) && !validHash(inv.BaseTree, 64)) || !validHash(inv.PacketHash, 64) || !inv.Role.Valid() || strings.TrimSpace(inv.Prompt) == "" || inv.Timeout <= 0 || inv.MaxOutputBytes <= 0 || inv.MaxOutputBytes > 128<<20 || inv.PermissionMode != "dontAsk" || !roleTools(inv.Role, inv.ToolPolicy) {
 		return validatedInvocation{}, errors.New("invalid Claude invocation identity, permission, tools, timeout, or output limit")
 	}
@@ -323,13 +345,17 @@ func (runtime *Adapter) validateInvocation(inv adapter.Invocation) (validatedInv
 }
 
 func roleTools(role domain.Role, tools []string) bool {
-	want := []string{"Glob", "Grep", "Read"}
-	if role == domain.RoleImplementer {
-		want = []string{"Edit", "Glob", "Grep", "Read", "Write"}
+	if len(tools) == 0 {
+		return false
 	}
-	got := append([]string(nil), tools...)
-	sort.Strings(got)
-	return len(got) == len(want) && strings.Join(got, "\x00") == strings.Join(want, "\x00")
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		if seen[tool] || !(tool == "Read" || tool == "Glob" || tool == "Grep" || (role == domain.RoleImplementer && (tool == "Edit" || tool == "Write"))) {
+			return false
+		}
+		seen[tool] = true
+	}
+	return true
 }
 
 func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adapter.Capabilities, error) {
@@ -343,6 +369,11 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 	if !spec.ProviderTransport || spec.Timeout <= 0 {
 		return adapter.Capabilities{}, errors.New("active Claude probe requires provider transport and a positive timeout")
 	}
+	effective, err := adapter.ProbeExecution(spec, "claude-cli", capabilities.Version)
+	if err != nil {
+		return adapter.Capabilities{}, err
+	}
+	capabilities.ExecutionConfig = &effective
 	timeout := spec.Timeout
 	id, err := randomID("probe")
 	if err != nil {
@@ -369,7 +400,7 @@ func (runtime *Adapter) Probe(ctx context.Context, spec adapter.ProbeSpec) (adap
 	if err != nil {
 		return adapter.Capabilities{}, err
 	}
-	inv := adapter.Invocation{InvocationID: id, AttemptID: "attempt_claude_active_probe", WorkItemID: packet.WorkItem.ID, ProfileID: spec.ProfileID, GoalRevisionHash: packet.Goal.ContractHash, PlanRevisionHash: strings.Repeat("2", 64), BaseTree: packet.Project.BaseTree, PacketHash: packetHash, Role: domain.RoleReviewer, WorkDir: runtime.projectRoot, PacketPath: packetPath, Prompt: activePrompt, OutputSchema: schema, Environment: runtime.environment, PermissionMode: "dontAsk", ToolPolicy: []string{"Read", "Glob", "Grep"}, Timeout: timeout, MaxOutputBytes: maxProbeOutput, SessionPolicy: adapter.SessionFresh}
+	inv := adapter.Invocation{ExecutionConfig: &effective, InvocationID: id, AttemptID: "attempt_claude_active_probe", WorkItemID: packet.WorkItem.ID, ProfileID: spec.ProfileID, GoalRevisionHash: packet.Goal.ContractHash, PlanRevisionHash: strings.Repeat("2", 64), BaseTree: packet.Project.BaseTree, PacketHash: packetHash, Role: domain.RoleReviewer, WorkDir: runtime.projectRoot, PacketPath: packetPath, Prompt: activePrompt, OutputSchema: schema, Environment: runtime.environment, PermissionMode: "dontAsk", ToolPolicy: effective.Tools, Timeout: timeout, MaxOutputBytes: maxProbeOutput, SessionPolicy: adapter.SessionFresh}
 	handle, err := runtime.Start(ctx, inv, nil)
 	if err != nil {
 		return adapter.Capabilities{}, err

@@ -24,6 +24,10 @@ import (
 	"github.com/monshunter/xgoal/internal/workpacket"
 )
 
+func TestEngineStopsBeforeProviderWhenRequiredHarnessIsMissing(t *testing.T) {
+	runCurrentDirectoryFixture(t, "harness-missing")
+}
+
 func TestEngineRunsTwoWorkItemsThroughReviewPromotionAndFinalReport(t *testing.T) {
 	runCurrentDirectoryFixture(t, "complete")
 }
@@ -95,7 +99,6 @@ agents:
     command: %q
     roles: [planner, implementer]
     timeout: 10s
-    sandbox: workspace-write
     providerTransport: allow
     credentialSource: cli-session
     activeProbe: disabled
@@ -136,6 +139,9 @@ review:
 policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
 report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}
 `, codex, claude)
+	if behavior == "harness-missing" {
+		configurationText = strings.Replace(configurationText, "trustedRepository: true}", "trustedRepository: true, harness: {type: autogo, required: true}}", 1)
+	}
 	if behavior == "auto" || behavior == "auto-exhaust" {
 		configurationText = strings.Replace(configurationText, "  noProgressLimit: 2\n", "  noProgressLimit: 2\n  autoRetryLimit: 1\n", 1)
 	}
@@ -241,6 +247,18 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	failed, err := store.GoalStatus(ctx, goalID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if behavior == "harness-missing" {
+		if failed.Goal.State != domain.GoalWaiting || len(failed.Attempts) != 0 || len(failed.Gates) != 1 || failed.Gates[0].ReasonCode != "project_harness_required" {
+			t.Fatalf("missing Harness did not stop before Agent: %+v", failed)
+		}
+		if _, err := os.Stat(filepath.Join(root, "codex-execution-count")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Provider executed before Harness preparation: %v", err)
+		}
+		if err := repository.CheckCheckoutIdentity(ctx, originalIdentity); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 	if behavior == "auto" || behavior == "auto-exhaust" {
 		if behavior == "auto-exhaust" {
@@ -500,6 +518,9 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		artifact, loadErr := packets.Load(attempt.ID)
 		if loadErr != nil {
 			t.Fatalf("load packet %s: %v", attempt.ID, loadErr)
+		}
+		if h := artifact.Packet.Harness; h == nil || !h.Compatible || h.LoadObservation != "unknown" || !strings.Contains(h.Delegation, "Kernel owns") {
+			t.Fatalf("packet lacks honest Harness and delegation inputs: %+v", h)
 		}
 		if artifact.Packet.Project.Workspace != project {
 			t.Fatalf("provider CWD differs from current root: %s", artifact.Packet.Project.Workspace)

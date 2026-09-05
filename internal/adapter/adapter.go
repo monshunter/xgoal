@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/protocol"
 )
@@ -23,6 +24,8 @@ const (
 )
 
 type ProbeSpec struct {
+	Model             string
+	ReasoningEffort   string
 	Mode              ProbeMode
 	ProfileID         string
 	ProviderTransport bool
@@ -30,17 +33,18 @@ type ProbeSpec struct {
 }
 
 type Capabilities struct {
-	Version           string    `json:"version"`
-	StructuredOutput  bool      `json:"structured_output"`
-	StreamingEvents   bool      `json:"streaming_events"`
-	ResumeSession     bool      `json:"resume_session"`
-	SandboxModes      []string  `json:"sandbox_modes"`
-	ToolAllowlist     bool      `json:"tool_allowlist"`
-	ApprovalModes     []string  `json:"approval_modes"`
-	ProbeMode         ProbeMode `json:"probe_mode"`
-	ProviderTransport string    `json:"provider_transport"`
-	CredentialStatus  string    `json:"credential_status"`
-	ProbeRef          string    `json:"probe_ref,omitempty"`
+	ExecutionConfig   *config.ExecutionConfig `json:"execution_config,omitempty"`
+	Version           string                  `json:"version"`
+	StructuredOutput  bool                    `json:"structured_output"`
+	StreamingEvents   bool                    `json:"streaming_events"`
+	ResumeSession     bool                    `json:"resume_session"`
+	SandboxModes      []string                `json:"sandbox_modes"`
+	ToolAllowlist     bool                    `json:"tool_allowlist"`
+	ApprovalModes     []string                `json:"approval_modes"`
+	ProbeMode         ProbeMode               `json:"probe_mode"`
+	ProviderTransport string                  `json:"provider_transport"`
+	CredentialStatus  string                  `json:"credential_status"`
+	ProbeRef          string                  `json:"probe_ref,omitempty"`
 }
 
 type SessionPolicy string
@@ -51,6 +55,7 @@ const (
 )
 
 type Invocation struct {
+	ExecutionConfig  *config.ExecutionConfig
 	InvocationID     string
 	AttemptID        string
 	WorkItemID       string
