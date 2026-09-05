@@ -15,6 +15,7 @@ import (
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/evidence"
 	finalreport "github.com/monshunter/xgoal/internal/report"
+	"github.com/monshunter/xgoal/internal/scenario"
 	basestore "github.com/monshunter/xgoal/internal/store"
 )
 
@@ -68,6 +69,13 @@ func (s *Store) FinalizeGoal(
 	if !completionCriteriaMatch(decoded.Criteria, facts.Criteria, facts.IntegrationTree) {
 		return completion.Result{}, FinalReportRecord{}, errors.New("final report and completion facts have different criteria")
 	}
+	// File hashing is bounded and runs before acquiring the Store transaction.
+	for _, expected := range decoded.Scenarios {
+		actual, err := scenario.Load(ctx, s.info.ProjectDir, expected.EvidenceID)
+		if err != nil || actual.Hash != expected.Hash {
+			return completion.Result{}, FinalReportRecord{}, errors.Join(errors.New("final scenario artifact is unavailable or changed"), err)
+		}
+	}
 	preparedEvent, err := prepareEvent(event)
 	if err != nil {
 		return completion.Result{}, FinalReportRecord{}, err
@@ -105,12 +113,23 @@ func (s *Store) FinalizeGoal(
 		if decoded.Goal.Revision != revision.Revision || decoded.Goal.RevisionHash != revision.Hash {
 			return errors.New("final report does not bind the active Goal Revision")
 		}
+		if s.info.SchemaVersion >= 9 {
+			if err := verifyFinalAcceptance(ctx, tx, goal, decoded); err != nil {
+				return err
+			}
+		}
+		if err := verifyFrozenScenarioMapping(revision.ContractJSON, decoded); err != nil {
+			return err
+		}
 		set, err := readEvidenceSet(ctx, tx, facts.FinalEvidenceSetID)
 		if err != nil {
 			return err
 		}
 		if set.Phase != evidence.SetFinal || set.GoalRevisionHash != revision.Hash || set.ConfigHash != decoded.Goal.ConfigHash || set.TreeHash != facts.IntegrationTree {
 			return errors.New("final evidence set binding does not match report and active revision")
+		}
+		if err := verifyScenarioEvidence(ctx, tx, goalID, decoded, set); err != nil {
+			return err
 		}
 		current, err := evidenceSetCurrentInTx(ctx, tx, set)
 		if err != nil {
@@ -146,6 +165,13 @@ func (s *Store) FinalizeGoal(
 		if activeLeases != 0 {
 			result.Complete = false
 			result.Reasons = append(result.Reasons, "active leases remain")
+		}
+		if err := executionIdle(ctx, tx); err != nil {
+			if !errors.Is(err, ErrCheckoutBusy) {
+				return err
+			}
+			result.Complete = false
+			result.Reasons = append(result.Reasons, "execution ownership remains unresolved: "+err.Error())
 		}
 		if !result.Complete {
 			return nil

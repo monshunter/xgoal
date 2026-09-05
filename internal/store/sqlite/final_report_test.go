@@ -114,10 +114,16 @@ func TestFinalizeGoalRejectsReportCriteriaDifferentFromCompletionFacts(t *testin
 	}
 }
 
-func seedFinalizableReport(t *testing.T, store *Store, root string, source *clock.Fake) (domain.Goal, CompletionFacts, finalreport.PreparedFiles) {
+func seedFinalizableReport(t *testing.T, store *Store, root string, source *clock.Fake, contract ...any) (domain.Goal, CompletionFacts, finalreport.PreparedFiles) {
 	t.Helper()
 	ctx := context.Background()
-	goal, work := seedReadyWork(t, store, "work_final")
+	var goal domain.Goal
+	var work domain.WorkItem
+	if len(contract) == 0 {
+		goal, work = seedReadyWork(t, store, "work_final")
+	} else {
+		goal, work = seedReadyWorkWithContract(t, store, "work_final", contract[0])
+	}
 	lease := claimAndCompleteWork(t, store, work, "attempt_final", "lease_final")
 	if _, err := store.ReleaseLease(ctx, lease.ID, lease.Generation, lease.Version, EventInput{Type: "LeaseReleased", ActorType: "kernel", Payload: map[string]any{}}); err != nil {
 		t.Fatal(err)
@@ -198,4 +204,40 @@ func containsReason(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestFinalizeGoalRejectsUnresolvedProcessAndWorkerOwnership(t *testing.T) {
+	for _, kind := range []string{"process", "worker"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			root := filepath.Join(t.TempDir(), "state")
+			source := clock.NewFake(time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC))
+			store, err := Open(ctx, root, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			goal, facts, files := seedFinalizableReport(t, store, root, source)
+			now := source.Now().Format(time.RFC3339Nano)
+			if kind == "process" {
+				_, err = store.db.ExecContext(ctx, `INSERT INTO process_invocations(id,owner_kind,owner_id,goal_id,generation,state,created_at,updated_at) VALUES('pending-service','attempt','attempt_final',?,1,'INTENT',?,?)`, goal.ID, now, now)
+			} else {
+				_, err = store.db.ExecContext(ctx, `INSERT INTO worker_processes(attempt_id,pid,pgid,start_identity,state,version,started_at,updated_at) VALUES('attempt_final',999999999,999999999,'fixture','RUNNING',1,?,?)`, now, now)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, _, err := store.FinalizeGoal(ctx, goal.ID, goal.Version, facts, files, EventInput{Type: "GoalCompleted", ActorType: "kernel", Payload: map[string]any{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Complete {
+				t.Fatal("unresolved ownership published Completed")
+			}
+			unchanged, err := store.Goal(ctx, goal.ID)
+			if err != nil || unchanged.State != domain.GoalVerifying || unchanged.FinalReportHash != "" {
+				t.Fatalf("finalization mutated state: %+v %v", unchanged, err)
+			}
+		})
+	}
 }

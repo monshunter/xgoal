@@ -284,6 +284,9 @@ func (engine *Engine) Recover(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := engine.recoverAcceptance(ctx); err != nil {
+		return err
+	}
 	liveHash, _ := engine.currentPlanningConfiguration(engine.configHash)
 	return engine.store.RecoverPlanning(ctx, sqlite.PlanningRecoveryOptions{CurrentConfigHash: liveHash, NoProgressLimit: engine.config.Orchestration.NoProgressLimit})
 }

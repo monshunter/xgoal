@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,6 +11,45 @@ import (
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/supervisor"
 )
+
+func TestRecoverableProcessesRetainsReverseStartupOrderAcrossReopen(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := Open(ctx, dir, clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := supervisor.Owner{Kind: "probe", ID: "ordered", Generation: 1}
+	for _, id := range []string{"z_database", "a_application", "m_client"} {
+		if err := s.BeginProcess(ctx, supervisor.ProcessIntent{ID: id, Owner: owner}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Wall clock timestamps may tie or move backwards; random IDs encode no
+	// lifecycle order. Recovery uses the journal's persisted insertion order.
+	if _, err := s.db.Exec(`UPDATE process_invocations SET created_at='2026-01-01T00:00:00Z',updated_at='2026-01-01T00:00:00Z'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, dir, clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	records, err := s.RecoverableProcesses(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"m_client", "a_application", "z_database"}) {
+		t.Fatalf("recovery order = %v", ids)
+	}
+}
 
 func TestProcessAttemptRecoveryPreservesUnknownAndRetiresProvenStoppedLease(t *testing.T) {
 	for _, scenario := range []string{"before_intent", "stopped", "unknown", "legacy", "legacy_orphan", "orphan_stopped", "unknown_then_stopped"} {

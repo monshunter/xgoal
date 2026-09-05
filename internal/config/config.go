@@ -33,6 +33,9 @@ type Config struct {
 	Runtime       Runtime       `yaml:"runtime" json:"runtime"`
 	ScopePolicy   ScopePolicy   `yaml:"scopePolicy,omitempty" json:"scopePolicy,omitempty"`
 	Bootstrap     Bootstrap     `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
+	Services      []Service     `yaml:"services,omitempty" json:"services,omitempty"`
+	Scenarios     []Scenario    `yaml:"scenarios,omitempty" json:"scenarios,omitempty"`
+	Acceptance    *Acceptance   `yaml:"acceptance,omitempty" json:"acceptance,omitempty"`
 	Validators    []Validator   `yaml:"validators" json:"validators"`
 	Review        Review        `yaml:"review,omitempty" json:"review,omitempty"`
 	Policy        Policy        `yaml:"policy,omitempty" json:"policy,omitempty"`
@@ -105,14 +108,19 @@ type Bootstrap struct {
 }
 
 type Command struct {
-	ID      string   `yaml:"id" json:"id"`
-	Argv    []string `yaml:"argv" json:"argv"`
-	CWD     string   `yaml:"cwd,omitempty" json:"cwd,omitempty"`
-	Timeout Duration `yaml:"timeout" json:"timeout"`
-	Network string   `yaml:"network,omitempty" json:"network,omitempty"`
+	TrustedFiles []string    `yaml:"trustedFiles,omitempty" json:"trustedFiles,omitempty"`
+	Environment  Environment `yaml:"env,omitempty" json:"env,omitzero"`
+	ID           string      `yaml:"id" json:"id"`
+	Argv         []string    `yaml:"argv" json:"argv"`
+	CWD          string      `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	Timeout      Duration    `yaml:"timeout" json:"timeout"`
+	Network      string      `yaml:"network,omitempty" json:"network,omitempty"`
 }
 
 type Validator struct {
+	Description       string      `yaml:"description,omitempty" json:"description,omitempty"`
+	ScenarioIDs       []string    `yaml:"scenarioIDs,omitempty" json:"scenarioIDs,omitempty"`
+	Services          []string    `yaml:"services,omitempty" json:"services,omitempty"`
 	ID                string      `yaml:"id" json:"id"`
 	Type              string      `yaml:"type" json:"type"`
 	Phases            []string    `yaml:"phases" json:"phases"`
@@ -286,6 +294,12 @@ func (c Config) Validate() error {
 	if err := validateValidators(c.Validators); err != nil {
 		return err
 	}
+	if err := c.validateServices(); err != nil {
+		return err
+	}
+	if err := c.validateScenarios(); err != nil {
+		return err
+	}
 	if err := validateReview(c.Review); err != nil {
 		return err
 	}
@@ -415,21 +429,27 @@ func validateBootstrap(bootstrap Bootstrap) error {
 	seen := make(map[string]struct{}, len(bootstrap.Commands))
 	for i, command := range bootstrap.Commands {
 		prefix := fmt.Sprintf("bootstrap.commands[%d]", i)
-		if strings.TrimSpace(command.ID) == "" {
+		if !validComponentID(command.ID) {
 			return fmt.Errorf("%s.id is required", prefix)
 		}
 		if _, exists := seen[command.ID]; exists {
 			return fmt.Errorf("duplicate bootstrap command id %q", command.ID)
 		}
 		seen[command.ID] = struct{}{}
-		if len(command.Argv) == 0 || strings.TrimSpace(command.Argv[0]) == "" {
-			return fmt.Errorf("%s.argv is required", prefix)
+		if err := validateCommandArguments(prefix+".argv", command.Argv); err != nil {
+			return err
 		}
 		if command.Timeout.Duration <= 0 {
 			return fmt.Errorf("%s.timeout must be positive", prefix)
 		}
 		if !validRelativePath(command.CWD) {
 			return fmt.Errorf("%s.cwd must be a safe repository-relative path", prefix)
+		}
+		if err := validateNames(prefix+".trustedFiles", command.TrustedFiles, validTrustedPath); err != nil {
+			return err
+		}
+		if err := validateNames(prefix+".env.allow", command.Environment.Allow, validEnvironmentName); err != nil {
+			return err
 		}
 		if command.Network != "" && !oneOf(command.Network, "deny", "require-gate", "allow") {
 			return fmt.Errorf("%s.network must be deny, require-gate, or allow", prefix)

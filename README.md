@@ -9,10 +9,11 @@
 - 单一 Go CLI/Daemon，Unix Socket HTTP/JSON API，每项目私有 SQLite/WAL 状态；
 - Goal 与规划请求事务性接受，后台规划、结果原子发布、进程归属登记与重启恢复；
 - 自然语言、文件或 stdin Goal，严格 Planner Schema、冻结 Revision、DAG 与 Scope/Validator 校验；
-- Codex 与 Claude 的 Probe、Plan、Start、Wait、Cancel、Resume 和结构化输出适配；
+- Codex 与 Claude 的 Probe、Plan、Start、Wait、Cancel、Resume、可选 Accept 和结构化输出适配；
 - 同项目串行使用当前工作目录，以私有 index 捕获完整 tracked/untracked/binary/rename/mode/symlink/delete Patch；
 - `scope`、`command`、`file_assertion`、`runtime_probe`、`git_assertion` 五类受信 Validator、Command Receipt 与 Evidence；
 - Standard 独立 Reviewer Session、Finding、有限 Human Gate 与无进展 Reconcile；
+- 配置驱动的 bootstrap、服务依赖/readiness/逆序回收，场景与业务断言关联及不可变制品；
 - Git ref CAS、xgoal Commit Trailer、Promotion Effect Journal 和崩溃后幂等读回；
 - `status`、事件流、日志、Gate、清理与 Markdown/JSON Final Report；
 - 固定六类 fixture、Native/AutoGo single/xgoal Standard 三组同口径 Benchmark Harness。
@@ -100,7 +101,7 @@ source <(xgoal completion zsh)
 
 ## Agent Profile 与项目规则
 
-`agents[]` 的可选 `model`、`reasoningEffort` 用于同一个 Provider 的可复用执行配置；`orchestration.roleProfiles` 将 `planner`、`implementer`、`reviewer` 绑定到 Profile ID。未绑定时保留默认选择，`doctor` 的 `role_selections` 显示选择来源，`effective_roles` 显示实际传递的配置与 CLI 版本。例如：
+`agents[]` 的可选 `model`、`reasoningEffort` 用于同一个 Provider 的可复用执行配置；`orchestration.roleProfiles` 将 `planner`、`implementer`、`reviewer` 及可选 `acceptance` 绑定到 Profile ID。未绑定时保留默认选择，`doctor` 的 `role_selections` 显示选择来源，`effective_roles` 显示实际传递的配置与 CLI 版本。例如：
 
 ```yaml
 orchestration:
@@ -116,6 +117,57 @@ Codex 使用无人值守 `never` 与角色 sandbox；同一 Profile 同时用于
 `project.harness: {type: autogo, required: true}` 要求所选 Provider 有项目局部入口、兼容安装清单及其声明的知识文件。Codex 使用 `AGENTS.md`、`.agents/skills/` 与 `.autogo/manifests/codex.json`；Claude 使用 `CLAUDE.md`、`.claude/skills/` 与对应 `claude.json`。请在创建 Goal 前准备并提交所需文件；缺少必需能力时启动前停止。未要求 Harness 的项目可以继续使用。
 
 xgoal 将文件路径与哈希放入 Packet，并通过原生指令参数传递委派职责：Kernel 管理状态、Gate、Git、环境与完成判定，Agent 执行当前角色并遵守业务规则。检查不安装或覆盖项目规则。`found/compatible` 表示本地发现与清单兼容；`load_observation: unknown` 表示没有把路径提供当作模型已加载的证据，实际可观测行为保留在 Provider 事件中。
+
+## 环境、场景与可选验收会话
+
+Kernel 根据 Validator/Scenario 的 `services` 引用准备环境，按 `dependsOn` 启动服务并执行 readiness；最后按相反顺序停止，确认退出后才允许完成。`bootstrap.commands` 用于受信的环境准备。项目命令使用自己的环境白名单，不继承 Agent Profile 的登录环境；Kernel 提供私有 `XGOAL_SCENARIO_DIR`、`XGOAL_ENVIRONMENT_ID` 和临时目录。服务端点与测试数据可写入该场景目录，源码与受信客户端必须保持不变。
+
+以下片段适用于已有启动、探测和业务断言脚本的项目；脚本和配置需先审阅提交，启动命令不可假定 readiness。访问本地服务需要明确配置 `runtime.projectNetwork: allow` 与对应服务的 `network: allow`；`require-gate` 会在执行前停止，需先解决网络授权和配置。
+
+```yaml
+services:
+  - id: api
+    argv: [python3, app.py]
+    network: allow
+    readiness:
+      argv: [python3, scripts/api-check.py, ready]
+      timeout: 20s
+      interval: 200ms
+    stopGracePeriod: 3s
+validators:
+  - id: api-business
+    description: 创建记录后重新查询，并断言字段与状态正确。
+    type: command
+    phases: [change, final]
+    services: [api]
+    argv: [python3, scripts/api-check.py, assert]
+    timeout: 30s
+    required: true
+scenarios:
+  - id: record-workflow
+    description: 创建并查询一条测试记录
+    steps: [创建记录, 查询结果并保存 response.json]
+    services: [api]
+    validators: [api-business]
+    artifactPaths: [response.json]
+```
+
+`scenarios[].validators` 定义确定性覆盖；Planner 会获得场景步骤和 Validator 的 `description`，没有说明的覆盖标为 `unspecified`。场景制品路径相对私有场景目录，必须是明确的常规文件路径。最终验证后，Kernel 将文件连同哈希、环境与 Receipt 身份封存；声明的文件缺失、链接、越界、超限或损坏都会阻止完成。
+
+通常由这些受信命令即可完成验收。确需 Agent 阅读反馈再继续操作时，添加支持 `acceptance` 的独立 Profile，并配置：
+
+```yaml
+acceptance:
+  scenarioIDs: [record-workflow]
+  trustedFiles: [scripts/api-check.py]
+  replaySafe: false
+orchestration:
+  roleProfiles: {acceptance: scenario-checker}
+```
+
+`scenario-checker` 声明 `roles: [acceptance]`。Claude 使用 `dontAsk` 和明确的工具，例如 `allowedTools: [Read, Glob, Grep, "Bash(./scripts/api-client.sh *)"]`；脚本入口需有执行位，其依赖列入 `acceptance.trustedFiles`。若 Profile 为 CLI 登录继承了凭证环境，客户端包装脚本应只转发测试所需变量。Codex 使用只读 sandbox，不能配置 `allowedTools`，当前只支持无需服务交互的源码/制品观察场景；服务场景配置会提前拒绝。
+
+Acceptance 会话使用独立 Packet/Invocation，只返回 Claim；之后仍执行受信业务断言。blocked/failed 或不可自动重放的中断进入 `owner: final` Gate，停止服务并保留问题、公开事件与诊断。先用 `approve ... --reason <answer>` 回答，再用 `resume <goal-id> --version <n>` 继续；新 Invocation 在同一 Revision/Tree 上原子消费该决定并重新准备环境。`replaySafe: true` 只允许没有完整结果、已确认进程退出的中断作有界恢复，次数受 `noProgressLimit` 约束（缺省或零时为 3，最多 100 次）；不能忽略 blocked/failed、取消或未知进程。
 
 ## 当前目录执行与恢复
 

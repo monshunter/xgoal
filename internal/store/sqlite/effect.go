@@ -23,6 +23,9 @@ type EffectRequest struct {
 
 // RequestEffect journals a request before external execution or returns its exact replay.
 func (s *Store) RequestEffect(ctx context.Context, request EffectRequest, event EventInput) (domain.Effect, bool, error) {
+	if request.Type == "acceptance" {
+		return domain.Effect{}, false, errors.New("acceptance requires BeginAcceptance")
+	}
 	if !validIdempotencyLabel(request.ID) || !validIdempotencyLabel(request.Key) || !validIdempotencyLabel(request.Type) {
 		return domain.Effect{}, false, errors.New("effect id, key, and type must be non-empty single-line values")
 	}
@@ -165,6 +168,9 @@ func (s *Store) UpdateEffect(
 		current, err := readEffect(ctx, tx, id)
 		if err != nil {
 			return err
+		}
+		if current.Type == "acceptance" {
+			return errors.New("acceptance requires ObserveAcceptance")
 		}
 		if current.Version != expectedVersion {
 			return fmt.Errorf("effect %q: %w", id, basestore.ErrConflict)

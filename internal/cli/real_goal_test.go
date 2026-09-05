@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monshunter/xgoal/internal/acceptance"
 	"github.com/monshunter/xgoal/internal/app"
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/project"
@@ -31,7 +32,8 @@ func TestRealClaudeCLIBackgroundGoalToFinalReport(t *testing.T) {
 	runRealProfileGoal(t, "claude", "sonnet")
 }
 
-func runRealProfileGoal(t *testing.T, providerName, model string) {
+func runRealProfileGoal(t *testing.T, providerName, model string, withAcceptance ...bool) {
+	acceptanceEnabled := len(withAcceptance) != 0 && withAcceptance[0]
 	t.Helper()
 	if os.Getenv("XGOAL_RUN_REAL_GOAL_SMOKE") != "1" {
 		t.Skip("set XGOAL_RUN_REAL_GOAL_SMOKE=1 to invoke real Provider services")
@@ -71,6 +73,9 @@ func runRealProfileGoal(t *testing.T, providerName, model string) {
 		}
 	}
 	environment = append(environment, "XGOAL_RUNTIME_DIR="+filepath.Join(base, "runtime"))
+	if acceptanceEnabled && providerName == "claude" {
+		environment = append(environment, "XGOAL_PROJECT_VISIBLE=fixture")
+	}
 	invoke := func(args ...string) string {
 		output, err := invokeCurrentDirectoryCLI(binary, environment, append([]string{"--project", root}, args...)...)
 		if err != nil {
@@ -101,6 +106,9 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if providerName == "claude" {
 		configuration = strings.ReplaceAll(configuration, "[PATH, HOME, TMPDIR, CODEX_HOME]", "[PATH, HOME, TMPDIR, CLAUDE_CONFIG_DIR, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL]")
 	}
+	if acceptanceEnabled {
+		configuration = realAcceptanceConfiguration(t, root, configuration, providerName)
+	}
 	writeCurrentDirectoryFixture(t, filepath.Join(root, "xgoal.yaml"), configuration, 0600)
 	entry, skills := "AGENTS.md", ".agents/skills/autogo-smoke/SKILL.md"
 	if providerName == "claude" {
@@ -121,6 +129,9 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	manifestPath := filepath.Join(".autogo/manifests", providerName+".json")
 	writeCurrentDirectoryFixture(t, filepath.Join(root, manifestPath), string(manifest), 0600)
 	currentDirectoryGit(t, root, "add", "xgoal.yaml", ".xgoalignore", ".gitignore", entry, skills, "docs/acceptance.md", manifestPath)
+	if acceptanceEnabled && providerName == "claude" {
+		currentDirectoryGit(t, root, "add", "service-server.py", "service-client.py", "accept-client.sh")
+	}
 	currentDirectoryGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "-q", "-m", "configuration")
 	invoke("config", "validate", "--file", filepath.Join(root, "xgoal.yaml"))
 	head := currentDirectoryGit(t, root, "rev-parse", "HEAD")
@@ -146,7 +157,11 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		t.Fatal(err)
 	}
 	started := time.Now()
-	invoke("run", "--id", "goal_real_background", "--goal", "Create only output.txt with the exact UTF-8 bytes required by docs/acceptance.md. Use the registered output-check validator for the acceptance criterion. Do not change any other file or Git references. This is a single bounded Work Item; no external services or publication are needed.")
+	goalText := "Create only output.txt with the exact UTF-8 bytes required by docs/acceptance.md. Use the registered output-check validator for the acceptance criterion. Do not change any other file or Git references. This is a single bounded Work Item; no publication is needed."
+	if acceptanceEnabled {
+		goalText += " Map all required scenario IDs from the configured validation capabilities to that criterion. The Kernel prepares any configured local services and runs the independent Acceptance session and trusted assertions."
+	}
+	invoke("run", "--id", "goal_real_background", "--goal", goalText)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	for {
@@ -238,6 +253,59 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 			}
 		}
 	}
+	if acceptanceEnabled {
+		var observation []byte
+		if err := db.QueryRow(`SELECT observation_json FROM effects WHERE effect_type='acceptance' AND state='SUCCEEDED'`).Scan(&observation); err != nil {
+			t.Fatal(err)
+		}
+		var claim acceptance.Observation
+		if json.Unmarshal(observation, &claim) != nil || claim.Result == nil || claim.Result.Status != "completed" || claim.Historical || !claim.ExecutionStopped {
+			t.Fatalf("Acceptance did not produce a current Claim: %s", observation)
+		}
+		if len(response.Report.Scenarios) == 0 {
+			t.Fatal("Acceptance lacks final scenario evidence")
+		}
+		t.Logf("real acceptance session=%s, scenario=%s", claim.SessionID, response.Report.Scenarios[0].Scenario.ID)
+	}
 	t.Logf("real sessions: planner=%s implementer=%s reviewer=%s", plannerSession, implementationSession, reviewerSession)
 	t.Logf("real %s Standard Goal completed in %s; daemon=%d tree=%s evidence=%s", providerName, time.Since(started).Round(time.Millisecond), daemon.Identity.PID, response.Report.Final.Tree, response.Report.Final.EvidenceSetID)
+}
+
+func TestRealCodexCLIAcceptanceReadOnlyGoalToFinalReport(t *testing.T) {
+	runRealProfileGoal(t, "codex", "gpt-6-astra", true)
+}
+func TestRealClaudeCLIAcceptanceServiceGoalToFinalReport(t *testing.T) {
+	runRealProfileGoal(t, "claude", "sonnet", true)
+}
+func realAcceptanceConfiguration(t *testing.T, root, text, provider string) string {
+	t.Helper()
+	if provider == "claude" {
+		text = managedServiceConfiguration(t, root, text, filepath.Join(filepath.Dir(root), "real-service.roles"))
+	}
+	cfg, err := config.Load(strings.NewReader(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := cfg.Agents[1]
+	profile.ID = "acceptor"
+	profile.Roles = []string{"acceptance"}
+	profile.AllowedTools = nil
+	if provider == "claude" {
+		profile.AllowedTools = []string{"Read", "Glob", "Grep", "Bash(./accept-client.sh *)"}
+		wrapper := "#!/bin/sh\nset -eu\nexec env -i PATH=\"$PATH\" XGOAL_SCENARIO_DIR=\"$XGOAL_SCENARIO_DIR\" XGOAL_ENVIRONMENT_ID=\"$XGOAL_ENVIRONMENT_ID\" python3 service-client.py \"$@\" " + currentDirectoryShellQuote(filepath.Join(filepath.Dir(root), "real-service.roles")) + "\n"
+		writeCurrentDirectoryFixture(t, filepath.Join(root, "accept-client.sh"), wrapper, 0700)
+		cfg.Scenarios[0].Steps = []string{"Run ./accept-client.sh api ready and inspect the readiness response.", "If ready, run ./accept-client.sh api assert and inspect response.json in the supplied scenario directory; report blocked if the environment is unavailable."}
+		cfg.Acceptance = &config.Acceptance{ScenarioIDs: []string{"output-workflow"}, TrustedFiles: []string{"service-client.py"}}
+	} else {
+		cfg.Scenarios = []config.Scenario{{ID: "output-inspection", Description: "Read the final output and inspect the exact required bytes", Steps: []string{"Read docs/acceptance.md and output.txt, compare their requested behavior and report the observed content without changing any file."}, Validators: []string{"output-check"}}}
+		cfg.Acceptance = &config.Acceptance{ScenarioIDs: []string{"output-inspection"}}
+		cfg.Validators[0].Description = "Compare output.txt byte for byte with accepted followed by one newline."
+	}
+	cfg.Agents = append(cfg.Agents, profile)
+	cfg.Orchestration.RoleProfiles["acceptance"] = profile.ID
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -81,6 +83,19 @@ func TestSupervisorProcessHelper(t *testing.T) {
 			os.Exit(3)
 		}
 		time.Sleep(time.Hour)
+	case "ordered-service":
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+		defer cancel()
+		if err := os.WriteFile(os.Getenv("XGOAL_SUPERVISOR_READY"), []byte("ready"), 0600); err != nil {
+			os.Exit(6)
+		}
+		<-ctx.Done()
+		f, err := os.OpenFile(os.Getenv("XGOAL_STOP_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			os.Exit(7)
+		}
+		_, _ = f.WriteString(os.Getenv("XGOAL_SERVICE_ID") + "\n")
+		_ = f.Close()
 	case "sleep":
 		time.Sleep(time.Hour)
 	default:
@@ -106,4 +121,52 @@ func helperCommand(directory, mode, readyPath string, stdout, stderr *bytes.Buff
 		command.Stderr = stderr
 	}
 	return command
+}
+
+func TestServiceGroupStopsInReverseStartOrder(t *testing.T) {
+	root := t.TempDir()
+	group := supervisor.NewGroup()
+	defer group.StopAll()
+	for _, id := range []string{"a-database", "z-application"} {
+		ready := filepath.Join(root, id+".ready")
+		command := helperCommand(root, "ordered-service", ready, nil, nil)
+		command.GracePeriod = 3 * time.Second
+		command.Env = append(command.Env, "XGOAL_STOP_LOG="+filepath.Join(root, "stopped"), "XGOAL_SERVICE_ID="+id)
+		_, err := group.Start(context.Background(), supervisor.ServiceSpec{ID: id, Command: command, ProbeTimeout: 5 * time.Second, ProbeInterval: 20 * time.Millisecond, Probe: func(context.Context) error { _, err := os.Stat(ready); return err }})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := group.StopAll(); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := os.ReadFile(filepath.Join(root, "stopped"))
+	if err != nil || string(stopped) != "z-application\na-database\n" {
+		t.Fatalf("wrong stop order: %q %v", stopped, err)
+	}
+}
+
+func TestServiceCannotBecomeReadyAfterItsOwnedProcessExited(t *testing.T) {
+	group := supervisor.NewGroup()
+	defer group.StopAll()
+	_, err := group.Start(context.Background(), supervisor.ServiceSpec{ID: "exited", Command: helperCommand(t.TempDir(), "exit", "", nil, nil), ProbeTimeout: 3 * time.Second, ProbeInterval: 10 * time.Millisecond, Probe: func(ctx context.Context) error {
+		pid := group.PIDs()["exited"]
+		for {
+			alive, err := supervisor.ProcessGroupAlive(pid)
+			if err != nil {
+				return err
+			}
+			if !alive {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}})
+	if err == nil {
+		t.Fatal("readiness from an old endpoint accepted after owned service exited")
+	}
 }

@@ -67,11 +67,13 @@ bootstrap:
   commands:
     - id: go-download
       argv: [go, mod, download]
+      trustedFiles: [xgoal.yaml]
       timeout: 15m
       network: require-gate
 
 validators:
   - id: gofmt-check
+    description: Check Go formatting only; this does not prove application behavior.
     type: command
     phases: [change, final]
     argv: [sh, scripts/xgoal/gofmt-check.sh]
@@ -82,6 +84,7 @@ validators:
     required: true
 
   - id: go-test-all
+    description: Run the repository Go test suite; inspect its assertions for business coverage.
     type: command
     phases: [change, final]
     argv: [go, test, ./...]
@@ -89,6 +92,7 @@ validators:
     required: true
 
   - id: go-race
+    description: Run the Go test suite with the race detector.
     type: command
     phases: [final]
     argv: [go, test, -race, ./...]
@@ -112,3 +116,11 @@ report:
   formats: [markdown, json]
   includeAgentRawLogs: false
   includeReproductionCommands: true
+
+# Optional service/scenario/Acceptance configuration is explained in README.md.
+# Declare actual readiness and business assertions before mapping criteria.
+# Scenario artifactPaths are exact files under XGOAL_SCENARIO_DIR, not source paths.
+# Acceptance is disabled by default; add an acceptance Profile and role binding
+# only when the scenario requires an Agent to act on runtime feedback.
+# Service interaction currently requires Claude with scoped executable client
+# scripts; Codex Acceptance supports read-only observation without services.

@@ -51,7 +51,7 @@ func compilePlanning(request planner.Request, proposal planner.Proposal) (goalco
 	for _, id := range request.TrustedValidatorIDs {
 		trusted[id] = true
 	}
-	compiled, err := goalcompile.Compile(request.GoalID, request.GoalID+"_revision_1", request.GoalID+"_plan_1", proposal.Contract, proposal.Plan, trusted)
+	compiled, err := goalcompile.Compile(request.GoalID, request.GoalID+"_revision_1", request.GoalID+"_plan_1", proposal.Contract, proposal.Plan, trusted, request.ValidationCapabilities)
 	if err != nil {
 		return goalcompile.Compiled{}, fmt.Errorf("%w: %v", ErrInvalidPlanningProposal, err)
 	}

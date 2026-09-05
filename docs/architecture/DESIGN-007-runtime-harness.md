@@ -87,9 +87,23 @@ Packet 的可选 prior_attempt 加入实际错误、建议和证据；`decisions
 
 配置增加 `scenarios[]`（ID、描述/步骤、services、validators、artifactPaths）以及可选 `acceptance`（场景 IDs 和是否允许安全重放）；Profile 通过 roleProfiles.acceptance 选择。Validator 增加 description/scenario IDs/services。Planner Packet 提供实际能力和场景说明；冻结 Goal 编译器校验引用存在/必要验证器包含在 Criterion 中，不能从名称推断覆盖。旧未描述 Validator 标为未说明覆盖；人工给定合同仍保留，但不能虚构业务能力。
 
+`scenarios[].validators` 拥有关联；Validator 的可选 `scenarioIDs` 只能注解既有关联，能力投影从场景定义推导完整反向引用。Criterion 的可选 `scenario_ids` 将场景绑定到验收目标，同一 Criterion 必须包含场景的全部业务 Validator；启用 Acceptance 的场景必须被映射。Work 只使用支持 `change` 的 Validator，Criterion 只使用支持 `final` 的 Validator，执行入口再次检查阶段。能力说明随初始 planning request 和 Packet 冻结；无 description 时使用 `coverage=unspecified`，不从名称推断覆盖。编译器检查声明关系，不声称证明断言本身的语义完备。
+
+`artifactPaths` 是私有 `XGOAL_SCENARIO_DIR` 下的精确普通文件路径，拒绝 glob、路径逃逸和 symlink。断言结束后复制到 `scenarios/<evidence-id>/files/`，单文件上限 32 MiB、单场景总量 128 MiB、最多 64 个文件；逐文件保存大小与 SHA-256，最后写入不可变 manifest 并同步目录。manifest 绑定场景定义、Goal Revision/config/最终 Tree、环境和每个业务收据。新的 `SCENARIO` Evidence 引用 manifest hash，Report 包含同一 manifest，读取时重算封存文件 hash；Agent 的检查声明不进入这些收据。Finalize 在事务前核对文件，在事务内从冻结合同核对必需场景映射和 manifest 集合，并检查同一 final Evidence Set 的业务收据，避免报告整体遗漏场景而绕过验收。
+
 最终验证在同一个准备好的 Environment 生命周期内：核对 Tree → bootstrap/服务 readiness → 配置的 Acceptance 独立 Invocation → 核对 Tree/HEAD/index → 受信最终断言 → hash/封存场景制品及必要业务 Evidence → 逆序停止服务并确认全部进程退出 → 再核对 Tree/HEAD/index 和进程屏障 → Final Report/Completion 提交。Store.FinalizeGoal 的事务除 active Lease 外必须拒绝任何未确认 process_invocations/worker ownership；停止失败不发布 Completed，只保存当前失败和恢复 Gate。Acceptance 只读源码、可操作测试数据，不产生 Patch/Promotion；其 AgentResult 永远是 Claim，后续断言失败必须失败。blocked 打开 Gate并保留日志/现场，服务安全停止后等待；再次运行创建新环境，只有声明可重放的测试场景能自动重演，否则先询问具体外部条件。配置默认不启用 Acceptance，也不新增第4类必需 Work。
 
+Acceptance 使用专用不可变 Packet 和 Provider `Accept` 调用，Packet 绑定 Goal/Revision/config/最终 Tree、Profile、场景与私有环境、最后成功 Attempt 的归属及 lease generation。它不伪造 Work ID 或写入 Patch。客户端的直接脚本入口与 `acceptance.trustedFiles` 声明的依赖复用受信控制定义，执行前后核对；Provider 仅获得 Profile 明确的环境及 Kernel 生成的场景目录/环境 ID。
+
+会话外部调用复用现有 `effects`，`effect_type=acceptance`：调用前持久化请求并以 Goal/Revision/归属 CAS 进入 EXECUTING，完成观测后保存脱敏结构化 Claim 和退出事实，终态 SUCCEEDED 只表示会话观测完成。最终业务收据仍独立决定完成。未结束的 acceptance Effect 与进程归属共同阻止别的执行；当前归属的场景命令仍可运行。启动恢复先确认进程退出，再结束不完整 Effect 并保存中断事实；未知进程继续保留屏障。同一 Goal/Revision/Tree 曾有验收调用而 Goal 尚未完成时，缺省进入 final owner 的重放决定 Gate；只有 `acceptance.replaySafe=true` 可由恢复自动新建 Invocation，结构化 blocked/failed 不因该开关自动忽略。人工决定后的新 Invocation 消费对应 final owner 决定，不能挪用 Work 重试。该机制不增加第二份 Goal 状态或文件状态机，PLAN-015 的 Invocation 索引只投影这些事实。
+
+Acceptance 使用专用 Store 事务入口，不直接依赖只检查 Effect version 的通用 UpdateEffect。开始与有效观察同时核对 effect/invocation/request hash、Goal 当前 version/Revision/最终 Tree、最后成功 Attempt 与 generation；同项目最多一个非终态 acceptance Effect。进程 owner 豁免仅允许该链路的场景命令，不允许启动第二个 Acceptance。人工续作在创建/启动新 Effect 的同一事务消费准确 final Gate，检查 owner、旧 invocation、Revision/Tree、version、有效期与 used。pause/cancel 或身份变化后的迟到结果只记录历史退出/Claim，不能恢复 Goal、消费决定或开始验证。
+
+恢复沿用现有 Effect 转换：REQUESTED→EXECUTING→OBSERVING→SUCCEEDED/FAILED，RECOVERING→OBSERVING。已持久化的 blocked/failed Claim 原样保留，不能统一改成 interrupted 后通过 replaySafe 放行；只有缺少完整结果且进程确认停止时才记录中断。终态历史不复活，后续调用始终使用新 Effect/Invocation。暂停或取消仍可回收进程与记录退出，不能自动重放；Goal 完成后只恢复报告文件。以上 CAS、单槽、一次消费和结果保留分别以并发控制/崩溃注入负例验收。
+
 服务退出未知使 Cleanup 返回 ErrProcessUnconfirmed，保留项目槽和持久进程记录；恢复先回收拥有的进程再允许新验证。准备失败、探针失败、断言失败、取消都记录阶段/命令/输出引用并执行逆序停止；停止失败优先返回，不能隐藏在 defer。不得删除用户数据或未知资源。
+
+Probe 成功后仍核对本次启动进程的 PID/start identity、存活、退出及 deadline；受信 Probe 应使用本次私有环境发布的端点，不能靠固定端点的 HTTP 200 推断实例归属。正常停止按 Group 启动顺序倒序；崩溃恢复按单 daemon 串行进程 Journal 的持久插入顺序倒序回收，先客户端、后服务依赖者、再依赖，不使用随机进程 ID 或墙钟排序。
 
 ## 实时上下文与操作
 

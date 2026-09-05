@@ -179,3 +179,57 @@ func TestRegistryRejectsUndeclaredControlAndUnsafeFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceReadinessIsTrustedButBusinessEntryRemainsEditable(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "repo")
+	initializeValidatorRepository(t, root)
+	path := filepath.Join(root, "xgoal.yaml")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := string(original) + `
+services:
+  - id: app
+    argv: [python3, app.py]
+    readiness: {argv: [sh, scripts/ready.sh], timeout: 5s, interval: 50ms}
+    stopGracePeriod: 1s
+`
+	if err := os.WriteFile(path, []byte(configuration), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('business')\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts/ready.sh"), []byte("exit 0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runValidatorGit(t, root, "add", "xgoal.yaml", "app.py", "scripts/ready.sh")
+	runValidatorGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--no-verify", "-m", "services")
+	repository, err := gitrepo.Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := validator.LoadRegistry(ctx, repository, "HEAD", "xgoal.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := "\n" + strings.Join(registry.ProtectedPaths(), "\n") + "\n"
+	if !strings.Contains(paths, "\nscripts/ready.sh\n") || strings.Contains(paths, "\napp.py\n") {
+		t.Fatalf("wrong trust boundary: %s", paths)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('new business')\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.VerifyControl(root, "service/app/readiness"); err != nil {
+		t.Fatalf("business source was frozen: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts/ready.sh"), []byte("exit 7\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.VerifyControl(root, "service/app/readiness"); !errors.Is(err, validator.ErrTrustedFileChanged) {
+		t.Fatalf("readiness drift accepted: %v", err)
+	}
+}

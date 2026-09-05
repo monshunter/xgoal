@@ -63,6 +63,7 @@ type ServiceSpec struct {
 }
 
 type CommandSpec struct {
+	LogID                string
 	Argv                 []string
 	CWD                  string
 	EnvironmentAllowlist []string

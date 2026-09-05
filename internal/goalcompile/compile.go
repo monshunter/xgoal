@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/monshunter/xgoal/internal/canonical"
+	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 )
 
@@ -33,6 +34,7 @@ type Contract struct {
 }
 
 type AcceptanceCriterion struct {
+	ScenarioIDs     []string `json:"scenario_ids,omitempty"`
 	ID              string   `json:"id"`
 	Statement       string   `json:"statement"`
 	Validators      []string `json:"validators"`
@@ -71,13 +73,40 @@ type Compiled struct {
 	Dependencies []domain.WorkDependency
 }
 
-func Compile(goalID, revisionID, planID string, contract Contract, plan Plan, trustedValidators map[string]bool) (Compiled, error) {
+func Compile(goalID, revisionID, planID string, contract Contract, plan Plan, trustedValidators map[string]bool, capabilities ...*config.ValidationCapabilities) (Compiled, error) {
 	if !safeID(goalID) || !safeID(revisionID) || !safeID(planID) {
 		return Compiled{}, errors.New("invalid compile identities")
 	}
 	contract = normalizeContract(contract)
 	if err := contract.Validate(); err != nil {
 		return Compiled{}, err
+	}
+	if len(capabilities) > 1 {
+		return Compiled{}, errors.New("compile requires one frozen capability set")
+	}
+	var coverage *config.ValidationCapabilities
+	if len(capabilities) == 1 {
+		coverage = capabilities[0]
+	}
+	if err := ValidateCoverage(contract, trustedValidators, coverage); err != nil {
+		return Compiled{}, err
+	}
+	if coverage != nil {
+		changeValidators := map[string]bool{}
+		for _, v := range coverage.Validators {
+			for _, phase := range v.Phases {
+				if phase == "change" {
+					changeValidators[v.ID] = true
+				}
+			}
+		}
+		for _, work := range plan.WorkItems {
+			for _, id := range work.Validators {
+				if !changeValidators[id] {
+					return Compiled{}, fmt.Errorf("work %q validator %q must support change validation", work.ClientKey, id)
+				}
+			}
+		}
 	}
 	contractHash, err := canonical.Hash("goal-contract", ContractVersion, contract)
 	if err != nil {
@@ -115,7 +144,7 @@ func (contract Contract) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(contract.AcceptanceCriteria))
 	for _, criterion := range contract.AcceptanceCriteria {
-		if !safeID(criterion.ID) || blank(criterion.Statement) || (len(criterion.Validators) == 0 && !criterion.HumanAcceptance) || !uniqueNonBlank(criterion.Validators) {
+		if !safeID(criterion.ID) || blank(criterion.Statement) || (len(criterion.Validators) == 0 && !criterion.HumanAcceptance) || !uniqueNonBlank(criterion.Validators) || !uniqueNonBlank(criterion.ScenarioIDs) {
 			return fmt.Errorf("acceptance criterion %q is invalid or unverifiable", criterion.ID)
 		}
 		if _, exists := seen[criterion.ID]; exists {
@@ -221,6 +250,7 @@ func normalizeContract(value Contract) Contract {
 	value.AcceptanceCriteria = append([]AcceptanceCriterion(nil), value.AcceptanceCriteria...)
 	for index := range value.AcceptanceCriteria {
 		value.AcceptanceCriteria[index].Validators = sorted(value.AcceptanceCriteria[index].Validators)
+		value.AcceptanceCriteria[index].ScenarioIDs = sorted(value.AcceptanceCriteria[index].ScenarioIDs)
 	}
 	sort.Slice(value.AcceptanceCriteria, func(i, j int) bool { return value.AcceptanceCriteria[i].ID < value.AcceptanceCriteria[j].ID })
 	return value

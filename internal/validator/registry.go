@@ -22,6 +22,7 @@ const (
 )
 
 type Definition struct {
+	Services              []string      `json:"services,omitempty"`
 	ID                    string        `json:"id"`
 	Type                  string        `json:"type"`
 	Phases                []string      `json:"phases"`
@@ -39,6 +40,7 @@ type Definition struct {
 }
 
 type definitionIdentity struct {
+	Services              []string      `json:"services,omitempty"`
 	ID                    string        `json:"id"`
 	Type                  string        `json:"type"`
 	Phases                []string      `json:"phases"`
@@ -59,6 +61,7 @@ type Registry struct {
 	baseTree    string
 	configHash  string
 	definitions map[string]Definition
+	controls    map[string]Definition
 }
 
 func LoadRegistry(ctx context.Context, repository *gitrepo.Repository, baseCommit, configPath string) (*Registry, error) {
@@ -96,7 +99,11 @@ func LoadRegistry(ctx context.Context, repository *gitrepo.Repository, baseCommi
 		}
 		definitions[definition.ID] = definition
 	}
-	return &Registry{baseCommit: base.Commit, baseTree: base.Tree, configHash: configHash, definitions: definitions}, nil
+	controls, err := bindControls(ctx, repository, base.Commit, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Registry{baseCommit: base.Commit, baseTree: base.Tree, configHash: configHash, definitions: definitions, controls: controls}, nil
 }
 
 func (registry *Registry) BaseCommit() string { return registry.baseCommit }
@@ -116,7 +123,7 @@ func (definition Definition) Validate() error {
 	if len(definition.Argv) == 0 {
 		return errors.New("deterministic validator requires argv")
 	}
-	if !sortedUniqueStrings(definition.Phases) || !sortedUniqueStrings(definition.EnvironmentAllowlist) {
+	if !sortedUniqueStrings(definition.Services) || !sortedUniqueStrings(definition.Phases) || !sortedUniqueStrings(definition.EnvironmentAllowlist) {
 		return errors.New("validator phases and environment names must be uniquely sorted")
 	}
 	for index, exitCode := range definition.ExpectedExitCodes {
@@ -180,8 +187,10 @@ func buildDefinition(ctx context.Context, repository *gitrepo.Repository, baseCo
 	if cwd == "" {
 		cwd = "."
 	}
+	services := append([]string(nil), configured.Services...)
+	sort.Strings(services)
 	definition := Definition{
-		ID: configured.ID, Type: configured.Type, Phases: phases,
+		Services: services, ID: configured.ID, Type: configured.Type, Phases: phases,
 		Argv: append([]string(nil), configured.Argv...), CWD: cwd, Timeout: configured.Timeout.Duration,
 		ExpectedExitCodes: expected, EnvironmentAllowlist: environment,
 		Required: configured.Required, Flaky: configured.Flaky.Enabled,
@@ -223,7 +232,7 @@ func validDefinitionHash(value string) bool {
 
 func (definition Definition) identity() definitionIdentity {
 	return definitionIdentity{
-		ID: definition.ID, Type: definition.Type, Phases: definition.Phases, Argv: definition.Argv,
+		Services: definition.Services, ID: definition.ID, Type: definition.Type, Phases: definition.Phases, Argv: definition.Argv,
 		CWD: definition.CWD, TimeoutNanos: int64(definition.Timeout), ExpectedExitCodes: definition.ExpectedExitCodes,
 		EnvironmentAllowlist: definition.EnvironmentAllowlist, Required: definition.Required, Flaky: definition.Flaky,
 		TrustedExecutablePath: definition.TrustedExecutablePath, TrustedExecutableHash: definition.TrustedExecutableHash,
@@ -232,6 +241,7 @@ func (definition Definition) identity() definitionIdentity {
 }
 
 func cloneDefinition(definition Definition) Definition {
+	definition.Services = append([]string(nil), definition.Services...)
 	definition.Phases = append([]string(nil), definition.Phases...)
 	definition.Argv = append([]string(nil), definition.Argv...)
 	definition.ExpectedExitCodes = append([]int(nil), definition.ExpectedExitCodes...)

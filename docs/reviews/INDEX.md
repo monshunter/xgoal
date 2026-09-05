@@ -55,4 +55,6 @@
 | REVIEW-050-runtime-harness-design | REVIEW-050：OBJ-004 运行时 Harness Design Review | [REVIEW-050-runtime-harness-design.md](REVIEW-050-runtime-harness-design.md) |
 | REVIEW-051-runtime-trust-recovery | REVIEW-051：PLAN-012 受信验收与恢复边界 Change Review | [REVIEW-051-runtime-trust-recovery.md](REVIEW-051-runtime-trust-recovery.md) |
 | REVIEW-052-profile-harness | REVIEW-052：PLAN-013 Agent Profile 与项目 Harness 变更审查 | [REVIEW-052-profile-harness.md](REVIEW-052-profile-harness.md) |
+| REVIEW-053-acceptance-effect-design | REVIEW-053：Acceptance Packet 与 Effect 生命周期设计审查 | [REVIEW-053-acceptance-effect-design.md](REVIEW-053-acceptance-effect-design.md) |
+| REVIEW-054-runtime-acceptance | REVIEW-054：PLAN-014 受信环境与独立 Acceptance 变更审查 | [REVIEW-054-runtime-acceptance.md](REVIEW-054-runtime-acceptance.md) |
 <!-- AGENT-HARNESS:END INDEX -->

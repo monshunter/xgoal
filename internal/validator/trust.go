@@ -30,12 +30,14 @@ type TrustedFile struct {
 // not selected by this Work. Otherwise an earlier Work could weaken a later one.
 func (registry *Registry) ProtectedPaths() []string {
 	paths := map[string]bool{"xgoal.yaml": true}
-	for _, d := range registry.definitions {
-		if d.TrustedExecutablePath != "" {
-			paths[d.TrustedExecutablePath] = true
-		}
-		for _, file := range d.TrustedFiles {
-			paths[file.Path] = true
+	for _, collection := range []map[string]Definition{registry.definitions, registry.controls} {
+		for _, d := range collection {
+			if d.TrustedExecutablePath != "" {
+				paths[d.TrustedExecutablePath] = true
+			}
+			for _, file := range d.TrustedFiles {
+				paths[file.Path] = true
+			}
 		}
 	}
 	result := make([]string, 0, len(paths))

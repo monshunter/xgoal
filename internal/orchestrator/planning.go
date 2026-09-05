@@ -186,7 +186,7 @@ func (engine *Engine) invokePlanner(ctx context.Context, record sqlite.PlanningR
 	if err != nil {
 		return planner.Execution{}, err
 	}
-	packetPath, packetHash, err := planner.PrepareInvocation(engine.runtimeRoot, invocationID, record.Generation, planner.Packet{Harness: &harnessInput, ProtocolVersion: planner.PacketVersion, GoalID: record.Goal.ID, RawGoal: record.Request.RawGoal, Mode: record.Request.Mode, ConfigHash: record.Request.ConfigHash, TrustedValidators: record.Request.TrustedValidatorIDs, ProjectRoot: engine.projectRoot, ProjectNetwork: engine.config.Runtime.ProjectNetwork, ProjectSecrets: engine.config.Runtime.ProjectSecrets})
+	packetPath, packetHash, err := planner.PrepareInvocation(engine.runtimeRoot, invocationID, record.Generation, planner.Packet{ValidationCapabilities: record.Request.ValidationCapabilities, Harness: &harnessInput, ProtocolVersion: planner.PacketVersion, GoalID: record.Goal.ID, RawGoal: record.Request.RawGoal, Mode: record.Request.Mode, ConfigHash: record.Request.ConfigHash, TrustedValidators: record.Request.TrustedValidatorIDs, ProjectRoot: engine.projectRoot, ProjectNetwork: engine.config.Runtime.ProjectNetwork, ProjectSecrets: engine.config.Runtime.ProjectSecrets})
 	if err != nil {
 		return planner.Execution{}, err
 	}
@@ -201,6 +201,7 @@ Return a bounded Goal Contract and acyclic Work Graph using the packet's trusted
 - Human gates describe conditional approval boundaries from the project policy, such as scope expansion; they do not require unnecessary approval for already authorized work.
 - Set all three completion_policy requirements to true.
 - Every acceptance criterion must name trusted Validators that actually prove its statement, or require explicit human_acceptance for a human decision in the goal. Do not invent Validator IDs or claim checks they do not perform. Scope, policy and independent-review requirements belong in constraints; do not turn them into extra criteria with no Validator or human acceptance.
+- Consult validation_capabilities for declared coverage and scenario steps. Coverage unspecified means no semantic coverage claim is supplied; inspect the trusted assertion or report an ambiguity. Map every required_scenario_id to criterion scenario_ids, and include all of that scenario's validators in the same criterion. A formatting check cannot replace a configured business assertion.
 - Each criterion must be covered by a required Work Item. Each Work Item needs non-empty acceptance_criteria and validators, role implementer, and explicit read_scope and write_scope.
 - Scopes are repository-root-anchored patterns beginning with /, such as /output.txt or /src/**, not filesystem absolute paths or unprefixed relative paths. Never include Git metadata or path traversal.
 - Use unique client_key values and criterion IDs, reference only existing dependencies and criteria, and order Work Items with overlapping write scopes.

@@ -24,7 +24,7 @@ import (
 
 const humanAcceptanceReason = "human_acceptance"
 
-func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error {
+func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) (resultErr error) {
 	revision, err := engine.store.GoalRevision(ctx, goal.ActiveRevisionID)
 	if err != nil {
 		return err
@@ -71,6 +71,21 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 	if err != nil {
 		return err
 	}
+	ready, err := engine.acceptanceReady(ctx, goal, revision, integration.Tree)
+	if err != nil || !ready {
+		return err
+	}
+	var acceptanceEffect domain.Effect
+	defer func() {
+		if resultErr != nil && acceptanceEffect.ID != "" {
+			recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			current, err := engine.store.Goal(recoveryCtx, goal.ID)
+			if err == nil && current.State == domain.GoalVerifying {
+				resultErr = errors.Join(resultErr, engine.store.RequireAcceptanceReplay(recoveryCtx, acceptanceEffect.ID))
+			}
+		}
+	}()
 	registry, err := validator.LoadRegistry(ctx, engine.repository, integration.Commit, "xgoal.yaml")
 	if err != nil {
 		return err
@@ -113,17 +128,35 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 	if _, _, err := engine.store.RecordWorkspace(ctx, validationWorkspace); err != nil {
 		return err
 	}
-	validationHandle, _, err := engine.prepareValidationEnvironment(ctx, validationWorkspace, revision)
+	validatorIDs, err := finalValidatorIDs(frozen, registry)
+	if err != nil {
+		return err
+	}
+	scenarios, serviceIDs, err := engine.finalScenarios(frozen, registry)
+	if err != nil {
+		return err
+	}
+	validationHandle, _, err := engine.prepareEnvironment(ctx, validationWorkspace, revision, registry, validatorIDs, serviceIDs)
 	if err != nil {
 		if _, evidenceErr := engine.recordEnvironmentFailureEvidence(ctx, goal.ID, revision, integration.Tree, "final-validation", err); evidenceErr != nil {
 			return errors.Join(err, evidenceErr)
 		}
 		return err
 	}
-	defer engine.environment.Cleanup(context.Background(), validationHandle)
-	validatorIDs, err := finalValidatorIDs(frozen, registry)
-	if err != nil {
-		return err
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			resultErr = errors.Join(resultErr, engine.environment.Cleanup(cleanupCtx, validationHandle))
+		}
+	}()
+	if engine.config.Acceptance != nil {
+		var current bool
+		acceptanceEffect, current, err = engine.invokeAcceptance(ctx, goal, revision, attempt, generation, validationWorkspace, validationHandle, registry, scenarios)
+		if err != nil || !current {
+			return err
+		}
 	}
 	runs, err := engine.runValidators(ctx, registry, validationHandle, validationWorkspace, revision, attempt.ID, goal.ID, integration.Tree, validatorIDs, evidence.SetFinal)
 	if err != nil {
@@ -132,6 +165,13 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 	evidenceIDs := make([]string, 0, len(runs)+1)
 	for _, run := range runs {
 		evidenceIDs = append(evidenceIDs, run.ID)
+	}
+	manifests, err := engine.sealScenarios(ctx, goal.ID, revision, integration.Tree, validationHandle, scenarios, runs)
+	if err != nil {
+		return err
+	}
+	for _, manifest := range manifests {
+		evidenceIDs = append(evidenceIDs, manifest.EvidenceID)
 	}
 	humanEvidenceID := ""
 	if humanRequired {
@@ -160,6 +200,18 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 	if err != nil {
 		return err
 	}
+	report.Scenarios = manifests
+	for i := range report.Criteria {
+		for _, manifest := range manifests {
+			if contains(report.Criteria[i].ScenarioIDs, manifest.Scenario.ID) {
+				report.Criteria[i].EvidenceIDs = append(report.Criteria[i].EvidenceIDs, manifest.EvidenceID)
+			}
+		}
+	}
+	if err := engine.environment.Cleanup(ctx, validationHandle); err != nil {
+		return err
+	}
+	cleaned = true
 	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, integration.Tree); err != nil {
 		return err
 	}
@@ -252,7 +304,7 @@ func (engine *Engine) buildFinalReport(frozen frozenContract, revision domain.Go
 		if len(ids) == 0 {
 			return finalreport.Report{}, sqlite.CompletionFacts{}, fmt.Errorf("criterion %q has no current final evidence", criterion.ID)
 		}
-		criteria = append(criteria, finalreport.CriterionTrace{ID: criterion.ID, Description: criterion.Statement, Status: "PASS", EvidenceIDs: ids, ValidatorIDs: criterion.Validators, Authority: domain.AuthorityDeterministic})
+		criteria = append(criteria, finalreport.CriterionTrace{ScenarioIDs: criterion.ScenarioIDs, ID: criterion.ID, Description: criterion.Statement, Status: "PASS", EvidenceIDs: ids, ValidatorIDs: criterion.Validators, Authority: domain.AuthorityDeterministic})
 		completionCriteria = append(completionCriteria, completion.CriterionStatus{ID: criterion.ID, Satisfied: true, Current: true, TreeHash: tree})
 	}
 	gates := make([]finalreport.GateTrace, 0, len(status.Gates))

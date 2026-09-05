@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/monshunter/xgoal/internal/adapter"
-	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/environment"
@@ -210,7 +209,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
 
-	attemptEnvironment, environmentSnapshot, err := engine.prepareAttemptEnvironment(ctx, attemptWorkspace, revision)
+	attemptEnvironment, environmentSnapshot, err := engine.prepareEnvironment(ctx, attemptWorkspace, revision, registry, nil, nil)
 	if err != nil {
 		class := reconcile.EnvironmentPrepFailed
 		if errors.Is(err, errProjectNetworkGate) {
@@ -343,7 +342,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	if err := engine.advanceWork(ctx, work.ID, domain.WorkVerifying); err != nil {
 		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 	}
-	validationHandle, _, err := engine.prepareValidationEnvironment(ctx, validationWorkspace, revision)
+	validationHandle, _, err := engine.prepareEnvironment(ctx, validationWorkspace, revision, registry, work.ValidatorIDs, nil)
 	if err != nil {
 		if _, evidenceErr := engine.recordEnvironmentFailureEvidence(ctx, work.ID, revision, replayed.CandidateTree, "change-validation", err); evidenceErr != nil {
 			return fail(reconcile.InternalInvariantViolation, errors.Join(err, evidenceErr), profile.ID, captured.Bundle.BundleHash)
@@ -454,76 +453,6 @@ func (engine *Engine) integration(ctx context.Context, goalID string) (string, g
 	return ref, revision, err
 }
 
-func (engine *Engine) prepareAttemptEnvironment(ctx context.Context, snapshot workspace.Snapshot, revision domain.GoalRevision) (environment.Handle, protocol.EnvironmentSnapshot, error) {
-	bootstrapHash := ""
-	if len(engine.config.Bootstrap.Commands) > 0 {
-		var err error
-		bootstrapHash, err = canonical.Hash("bootstrap", config.APIVersion, engine.config.Bootstrap.Commands)
-		if err != nil {
-			return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
-		}
-	}
-	handle, err := engine.environment.Prepare(ctx, environment.Spec{
-		ID: "environment_" + snapshot.ID, WorktreePath: snapshot.Path,
-		BaseCommit: snapshot.Identity.HeadCommit, BaseTree: snapshot.InputTree,
-		Identity: snapshot.Identity, ExcludePaths: snapshot.ExcludePaths,
-		ConfigHash: engine.configHash, GoalRevisionHash: revision.Hash,
-		BootstrapHash: bootstrapHash,
-	})
-	if err != nil {
-		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
-	}
-	for _, command := range engine.config.Bootstrap.Commands {
-		if command.Network == "require-gate" || (command.Network == "allow" && engine.config.Runtime.ProjectNetwork != "allow") {
-			_ = engine.environment.Cleanup(context.Background(), handle)
-			return environment.Handle{}, protocol.EnvironmentSnapshot{}, errProjectNetworkGate
-		}
-		commandContext, cancel := context.WithTimeout(ctx, command.Timeout.Duration)
-		execution, runErr := engine.environment.RunCommand(commandContext, handle, environment.CommandSpec{
-			Argv: command.Argv, CWD: command.CWD,
-			GracePeriod: time.Second, Stdout: ioDiscard{}, Stderr: ioDiscard{},
-		})
-		cancel()
-		verificationContext, stopVerification := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		checkoutErr := engine.environment.VerifyTree(verificationContext, handle, snapshot.InputTree)
-		stopVerification()
-		if runErr != nil || execution.ExitCode != 0 || checkoutErr != nil {
-			cleanupContext, stopCleanup := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			cleanupErr := engine.environment.Cleanup(cleanupContext, handle)
-			stopCleanup()
-			return environment.Handle{}, protocol.EnvironmentSnapshot{}, fmt.Errorf("bootstrap %q failed with exit %d: %w", command.ID, execution.ExitCode, errors.Join(runErr, checkoutErr, cleanupErr))
-		}
-	}
-	if err := engine.environment.VerifyTree(ctx, handle, snapshot.InputTree); err != nil {
-		_ = engine.environment.Cleanup(context.Background(), handle)
-		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
-	}
-	environmentSnapshot, err := engine.environment.Snapshot(ctx, handle)
-	if err != nil {
-		_ = engine.environment.Cleanup(context.Background(), handle)
-		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
-	}
-	return handle, environmentSnapshot, nil
-}
-
-func (engine *Engine) prepareValidationEnvironment(ctx context.Context, snapshot workspace.Snapshot, revision domain.GoalRevision) (environment.Handle, protocol.EnvironmentSnapshot, error) {
-	handle, err := engine.environment.Prepare(ctx, environment.Spec{
-		ID: "environment_" + snapshot.ID, WorktreePath: snapshot.Path,
-		BaseCommit: snapshot.Identity.HeadCommit, BaseTree: snapshot.InputTree,
-		Identity: snapshot.Identity, ExcludePaths: snapshot.ExcludePaths,
-		ConfigHash: engine.configHash, GoalRevisionHash: revision.Hash,
-	})
-	if err != nil {
-		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
-	}
-	environmentSnapshot, err := engine.environment.Snapshot(ctx, handle)
-	if err != nil {
-		_ = engine.environment.Cleanup(context.Background(), handle)
-		return environment.Handle{}, protocol.EnvironmentSnapshot{}, err
-	}
-	return handle, environmentSnapshot, nil
-}
-
 func (engine *Engine) runValidators(ctx context.Context, registry *validator.Registry, handle environment.Handle, workspaceSnapshot workspace.Snapshot, revision domain.GoalRevision, attemptID, subjectID, tree string, validatorIDs []string, phase evidence.SetPhase) ([]validationEvidence, error) {
 	runner, err := validator.NewCommandRunner(engine.runtimeRoot, registry, engine.environment, handle)
 	if err != nil {
@@ -543,6 +472,9 @@ func (engine *Engine) runValidators(ctx context.Context, registry *validator.Reg
 		definition, exists := registry.Definition(validatorID)
 		if !exists {
 			return nil, fmt.Errorf("validator %q is unavailable", validatorID)
+		}
+		if !contains(definition.Phases, strings.ToLower(string(phase))) {
+			return nil, fmt.Errorf("validator %q does not support %s validation", validatorID, phase)
 		}
 		runID, err := randomID("validator")
 		if err != nil {
@@ -583,8 +515,10 @@ func (engine *Engine) runValidators(ctx context.Context, registry *validator.Reg
 		}
 		result = append(result, validationEvidence{ID: evidenceID, Validator: validatorID, Receipt: receipt, Hash: run.Hash, Flaky: definition.Flaky})
 	}
-	if err := engine.environment.StopServices(ctx, handle); err != nil {
-		return nil, err
+	if phase == evidence.SetChange {
+		if err := engine.environment.StopServices(ctx, handle); err != nil {
+			return nil, err
+		}
 	}
 	if err := engine.environment.VerifyTree(ctx, handle, tree); err != nil {
 		return nil, err
@@ -848,7 +782,3 @@ func uniqueSorted(values []string) []string {
 	sort.Strings(result)
 	return result
 }
-
-type ioDiscard struct{}
-
-func (ioDiscard) Write(value []byte) (int, error) { return len(value), nil }

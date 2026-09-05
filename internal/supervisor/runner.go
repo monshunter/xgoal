@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,13 +17,15 @@ import (
 )
 
 type Command struct {
-	Argv        []string
-	Dir         string
-	Env         []string
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Stderr      io.Writer
-	GracePeriod time.Duration
+	// InvocationID optionally binds a single leaf process to its durable request.
+	InvocationID string
+	Argv         []string
+	Dir          string
+	Env          []string
+	Stdin        io.Reader
+	Stdout       io.Writer
+	Stderr       io.Writer
+	GracePeriod  time.Duration
 }
 
 type Execution struct {
@@ -73,7 +74,12 @@ func StartContext(ctx context.Context, spec Command) (*Running, error) {
 	if _, err := rand.Read(invocationBytes); err != nil {
 		return nil, err
 	}
-	invocationID := "process_" + hex.EncodeToString(invocationBytes)
+	invocationID := spec.InvocationID
+	if invocationID == "" {
+		invocationID = "process_" + hex.EncodeToString(invocationBytes)
+	} else if !validID(invocationID) {
+		return nil, errors.New("invalid process invocation ID")
+	}
 	if hasOwner {
 		if err := owned.journal.BeginProcess(ctx, ProcessIntent{ID: invocationID, Owner: owned.owner}); err != nil {
 			return nil, err
@@ -252,6 +258,7 @@ type ServiceSpec struct {
 type Group struct {
 	mu       sync.Mutex
 	services map[string]*Running
+	order    []string
 }
 
 func NewGroup() *Group { return &Group{services: make(map[string]*Running)} }
@@ -271,6 +278,7 @@ func (group *Group) Start(ctx context.Context, spec ServiceSpec) (int, error) {
 		return 0, err
 	}
 	group.services[spec.ID] = process
+	group.order = append(group.order, spec.ID)
 	group.mu.Unlock()
 
 	probeContext, cancel := context.WithTimeout(ctx, spec.ProbeTimeout)
@@ -280,7 +288,26 @@ func (group *Group) Start(ctx context.Context, spec ServiceSpec) (int, error) {
 	var lastProbeError error
 	for {
 		if err := spec.Probe(probeContext); err == nil {
-			return process.PID(), nil
+			// A successful probe can belong to an older endpoint. The process
+			// started by this group must still own its live identity, even if
+			// asynchronous journal completion has not closed done yet.
+			identity, identityErr := InspectProcess(process.PID())
+			if identityErr == nil && identity != process.identity {
+				identityErr = ErrProcessUnconfirmed
+			}
+			if identityErr == nil && probeContext.Err() == nil {
+				select {
+				case <-process.done:
+					identityErr = os.ErrProcessDone
+				default:
+					return process.PID(), nil
+				}
+			}
+			terminateErr := process.Terminate()
+			if terminateErr == nil {
+				group.remove(spec.ID, process)
+			}
+			return 0, fmt.Errorf("service %q no longer running at readiness: %w", spec.ID, errors.Join(identityErr, probeContext.Err(), terminateErr))
 		} else {
 			lastProbeError = err
 		}
@@ -321,15 +348,11 @@ func (group *Group) Stop(id string) error {
 
 func (group *Group) StopAll() error {
 	group.mu.Lock()
-	ids := make([]string, 0, len(group.services))
-	for id := range group.services {
-		ids = append(ids, id)
-	}
+	ids := append([]string(nil), group.order...)
 	group.mu.Unlock()
-	sort.Strings(ids)
 	var result error
-	for _, id := range ids {
-		if err := group.Stop(id); err != nil {
+	for i := len(ids) - 1; i >= 0; i-- {
+		if err := group.Stop(ids[i]); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
@@ -351,6 +374,12 @@ func (group *Group) remove(id string, process *Running) {
 	defer group.mu.Unlock()
 	if group.services[id] == process {
 		delete(group.services, id)
+		for i, current := range group.order {
+			if current == id {
+				group.order = append(group.order[:i], group.order[i+1:]...)
+				break
+			}
+		}
 	}
 }
 

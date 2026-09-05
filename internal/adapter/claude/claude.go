@@ -100,7 +100,7 @@ func New(configuration Config) (*Adapter, error) {
 		return nil, err
 	}
 	root := filepath.Join(runtimeRoot, "adapters", "claude")
-	for _, dir := range []string{root, filepath.Join(root, "invocations"), filepath.Join(root, "plans"), filepath.Join(root, "reviews"), filepath.Join(root, "sessions"), filepath.Join(root, "probes")} {
+	for _, dir := range []string{root, filepath.Join(root, "invocations"), filepath.Join(root, "plans"), filepath.Join(root, "acceptances"), filepath.Join(root, "reviews"), filepath.Join(root, "sessions"), filepath.Join(root, "probes")} {
 		if err := ensurePrivateDirectory(dir); err != nil {
 			return nil, err
 		}

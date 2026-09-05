@@ -58,6 +58,9 @@ type managedEnvironment struct {
 	handle      Handle
 	environment map[string]string
 	services    *supervisor.Group
+	logsMu      sync.Mutex
+	serviceLogs map[string][]*diagnosticLog
+	commandLogs map[string][]*diagnosticLog
 }
 
 func NewLocal(runtimeRoot string, repository *gitrepo.Repository, currentClock clock.Clock) (*Local, error) {
@@ -125,7 +128,7 @@ func (local *Local) Prepare(ctx context.Context, spec Spec) (Handle, error) {
 			_ = os.Remove(environmentRoot)
 		}
 	}()
-	for _, child := range []string{"logs", "tmp"} {
+	for _, child := range []string{"logs", "logs/commands", "tmp", "scenario"} {
 		if err := os.Mkdir(filepath.Join(environmentRoot, child), 0o700); err != nil {
 			return Handle{}, err
 		}
@@ -134,12 +137,14 @@ func (local *Local) Prepare(ctx context.Context, spec Spec) (Handle, error) {
 	if err != nil {
 		return Handle{}, err
 	}
+	environment["XGOAL_SCENARIO_DIR"] = filepath.Join(environmentRoot, "scenario")
+	environment["XGOAL_ENVIRONMENT_ID"] = spec.ID
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return Handle{}, fmt.Errorf("create environment handle token: %w", err)
 	}
 	handle := Handle{ID: spec.ID, Worktree: spec.WorktreePath, Root: environmentRoot, token: hex.EncodeToString(tokenBytes)}
-	local.handles[spec.ID] = &managedEnvironment{spec: spec, handle: handle, environment: environment, services: supervisor.NewGroup()}
+	local.handles[spec.ID] = &managedEnvironment{spec: spec, handle: handle, environment: environment, services: supervisor.NewGroup(), serviceLogs: map[string][]*diagnosticLog{}, commandLogs: map[string][]*diagnosticLog{}}
 	prepared = true
 	return handle, nil
 }
@@ -238,13 +243,8 @@ func (local *Local) StartServices(ctx context.Context, handle Handle, services [
 	if err != nil {
 		return err
 	}
-	started := make([]string, 0, len(services))
 	rollback := func(cause error) error {
-		result := cause
-		for index := len(started) - 1; index >= 0; index-- {
-			result = errors.Join(result, managed.services.Stop(started[index]))
-		}
-		return result
+		return errors.Join(cause, local.StopServices(context.WithoutCancel(ctx), handle))
 	}
 	for _, service := range services {
 		if !validComponent(service.ID) {
@@ -258,15 +258,18 @@ func (local *Local) StartServices(ctx context.Context, handle Handle, services [
 		if err != nil {
 			return rollback(err)
 		}
-		stdout, err := openPrivateLog(filepath.Join(managed.handle.Root, "logs", service.ID+".stdout.log"))
+		stdout, err := newDiagnosticLog(filepath.Join(managed.handle.Root, "logs", service.ID+".stdout.log"))
 		if err != nil {
 			return rollback(err)
 		}
-		stderr, err := openPrivateLog(filepath.Join(managed.handle.Root, "logs", service.ID+".stderr.log"))
+		stderr, err := newDiagnosticLog(filepath.Join(managed.handle.Root, "logs", service.ID+".stderr.log"))
 		if err != nil {
 			_ = stdout.Close()
 			return rollback(err)
 		}
+		managed.logsMu.Lock()
+		managed.serviceLogs[service.ID] = []*diagnosticLog{stdout, stderr}
+		managed.logsMu.Unlock()
 		_, startErr := managed.services.Start(ctx, supervisor.ServiceSpec{
 			ID: service.ID,
 			Command: supervisor.Command{
@@ -275,11 +278,9 @@ func (local *Local) StartServices(ctx context.Context, handle Handle, services [
 			},
 			Probe: service.Probe, ProbeTimeout: service.ProbeTimeout, ProbeInterval: service.ProbeInterval,
 		})
-		closeErr := errors.Join(stdout.Close(), stderr.Close())
-		if startErr != nil || closeErr != nil {
-			return rollback(errors.Join(startErr, closeErr))
+		if startErr != nil {
+			return rollback(startErr)
 		}
-		started = append(started, service.ID)
 	}
 	return nil
 }
@@ -289,7 +290,25 @@ func (local *Local) StopServices(_ context.Context, handle Handle) error {
 	if err != nil {
 		return err
 	}
-	return managed.services.StopAll()
+	if err := managed.services.StopAll(); err != nil {
+		return err
+	}
+	managed.logsMu.Lock()
+	defer managed.logsMu.Unlock()
+	var result error
+	for id, logs := range managed.serviceLogs {
+		for _, log := range logs {
+			result = errors.Join(result, log.Close())
+		}
+		delete(managed.serviceLogs, id)
+	}
+	for id, logs := range managed.commandLogs {
+		for _, log := range logs {
+			result = errors.Join(result, log.Close())
+		}
+		delete(managed.commandLogs, id)
+	}
+	return result
 }
 
 func (local *Local) RunCommand(ctx context.Context, handle Handle, spec CommandSpec) (supervisor.Execution, error) {
@@ -304,6 +323,13 @@ func (local *Local) RunCommand(ctx context.Context, handle Handle, spec CommandS
 	environment, err := selectEnvironment(managed.environment, spec.EnvironmentAllowlist)
 	if err != nil {
 		return supervisor.Execution{}, err
+	}
+	if spec.LogID != "" {
+		logs, err := commandDiagnostics(managed, spec.LogID)
+		if err != nil {
+			return supervisor.Execution{}, err
+		}
+		spec.Stdout, spec.Stderr = logs[0], logs[1]
 	}
 	return supervisor.Run(ctx, supervisor.Command{
 		Argv: append([]string(nil), spec.Argv...), Dir: cwd, Env: environment,
@@ -412,11 +438,8 @@ func buildEnvironment(tempDirectory string, allowlist []string) (map[string]stri
 }
 
 func selectEnvironment(available map[string]string, names []string) ([]string, error) {
-	if len(names) == 0 {
-		return environmentSlice(available), nil
-	}
 	selected := make(map[string]string, len(names)+4)
-	for _, name := range []string{"LANG", "LC_ALL", "PATH", "TMPDIR"} {
+	for _, name := range []string{"LANG", "LC_ALL", "PATH", "TMPDIR", "XGOAL_SCENARIO_DIR", "XGOAL_ENVIRONMENT_ID"} {
 		if value, exists := available[name]; exists {
 			selected[name] = value
 		}

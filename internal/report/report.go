@@ -16,24 +16,26 @@ import (
 
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/domain"
+	"github.com/monshunter/xgoal/internal/scenario"
 )
 
 const ProtocolVersion = "xgoal.final-report/v1"
 
 type Report struct {
-	ProtocolVersion string            `json:"protocol_version"`
-	Goal            GoalTrace         `json:"goal"`
-	Work            []WorkTrace       `json:"work"`
-	Attempts        []AttemptTrace    `json:"attempts"`
-	Final           FinalTrace        `json:"final"`
-	Criteria        []CriterionTrace  `json:"criteria"`
-	Validators      []ValidatorTrace  `json:"validators"`
-	Gates           []GateTrace       `json:"gates"`
-	Findings        []FindingTrace    `json:"findings"`
-	Execution       []ExecutionMetric `json:"execution_metrics"`
-	Limitations     []Statement       `json:"limitations"`
-	CancelledScopes []Statement       `json:"cancelled_scopes"`
-	Timestamps      TimestampTrace    `json:"timestamps"`
+	Scenarios       []scenario.Manifest `json:"scenarios,omitempty"`
+	ProtocolVersion string              `json:"protocol_version"`
+	Goal            GoalTrace           `json:"goal"`
+	Work            []WorkTrace         `json:"work"`
+	Attempts        []AttemptTrace      `json:"attempts"`
+	Final           FinalTrace          `json:"final"`
+	Criteria        []CriterionTrace    `json:"criteria"`
+	Validators      []ValidatorTrace    `json:"validators"`
+	Gates           []GateTrace         `json:"gates"`
+	Findings        []FindingTrace      `json:"findings"`
+	Execution       []ExecutionMetric   `json:"execution_metrics"`
+	Limitations     []Statement         `json:"limitations"`
+	CancelledScopes []Statement         `json:"cancelled_scopes"`
+	Timestamps      TimestampTrace      `json:"timestamps"`
 }
 
 type GoalTrace struct {
@@ -75,6 +77,7 @@ type FinalTrace struct {
 }
 
 type CriterionTrace struct {
+	ScenarioIDs  []string         `json:"scenario_ids,omitempty"`
 	ID           string           `json:"id"`
 	Description  string           `json:"description"`
 	Status       string           `json:"status"`
@@ -208,6 +211,23 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 }
 
 func (value Report) validate() error {
+	seenScenarios := map[string]string{}
+	for _, m := range value.Scenarios {
+		if err := m.Validate(); err != nil {
+			return err
+		}
+		if seenScenarios[m.Scenario.ID] != "" || m.GoalRevisionHash != value.Goal.RevisionHash || m.ConfigHash != value.Goal.ConfigHash || m.TreeHash != value.Final.Tree {
+			return errors.New("report scenario identity or final binding mismatch")
+		}
+		seenScenarios[m.Scenario.ID] = m.EvidenceID
+	}
+	for _, criterion := range value.Criteria {
+		for _, id := range criterion.ScenarioIDs {
+			if seenScenarios[id] == "" || !containsString(criterion.EvidenceIDs, seenScenarios[id]) {
+				return errors.New("report criterion lacks bound scenario evidence")
+			}
+		}
+	}
 	if value.ProtocolVersion != ProtocolVersion || strings.TrimSpace(value.Goal.ID) == "" || strings.TrimSpace(value.Goal.Raw) == "" || value.Goal.Revision <= 0 ||
 		!validHash(value.Goal.RevisionHash, 64) || !validHash(value.Goal.ConfigHash, 64) || strings.TrimSpace(value.Goal.CreatedBy) == "" || !value.Goal.Authority.Valid() {
 		return errors.New("invalid final report goal binding")
@@ -285,6 +305,8 @@ func (value Report) validate() error {
 }
 
 func normalize(value Report) Report {
+	value.Scenarios = append([]scenario.Manifest(nil), value.Scenarios...)
+	sort.Slice(value.Scenarios, func(i, j int) bool { return value.Scenarios[i].Scenario.ID < value.Scenarios[j].Scenario.ID })
 	value.Work = append([]WorkTrace(nil), value.Work...)
 	value.Attempts = append([]AttemptTrace(nil), value.Attempts...)
 	value.Criteria = append([]CriterionTrace(nil), value.Criteria...)
@@ -300,6 +322,7 @@ func normalize(value Report) Report {
 	sort.Slice(value.Attempts, func(i, j int) bool { return value.Attempts[i].ID < value.Attempts[j].ID })
 	sort.Slice(value.Criteria, func(i, j int) bool { return value.Criteria[i].ID < value.Criteria[j].ID })
 	for index := range value.Criteria {
+		value.Criteria[index].ScenarioIDs = sortedStrings(value.Criteria[index].ScenarioIDs)
 		value.Criteria[index].EvidenceIDs = sortedStrings(value.Criteria[index].EvidenceIDs)
 		value.Criteria[index].ValidatorIDs = sortedStrings(value.Criteria[index].ValidatorIDs)
 	}
@@ -330,6 +353,15 @@ func renderMarkdown(value Report) []byte {
 	out.WriteString("\n## Validators\n\n")
 	for _, validator := range value.Validators {
 		fmt.Fprintf(&out, "- `%s`: `%s` → `%s`; flaky=%t; receipt `%s`; reproduce: `%s` (%s)\n", md(validator.ID), md(strings.Join(validator.Command, " ")), md(validator.Result), validator.Flaky, validator.ReceiptHash, md(strings.Join(validator.Reproduction, " ")), validator.Authority)
+	}
+	if len(value.Scenarios) > 0 {
+		out.WriteString("\n## Scenario Artifacts\n\n")
+		for _, m := range value.Scenarios {
+			fmt.Fprintf(&out, "- `%s`: %s; evidence `%s`; environment `%s`; manifest `%s`\n", md(m.Scenario.ID), md(m.Scenario.Description), md(m.EvidenceID), md(m.EnvironmentID), m.Hash)
+			for _, f := range m.Files {
+				fmt.Fprintf(&out, "  - `%s`, %d bytes, SHA-256 `%s`\n", md(f.Path), f.Size, f.SHA256)
+			}
+		}
 	}
 	out.WriteString("\n## Gates and Findings\n\n")
 	if len(value.Gates) == 0 && len(value.Findings) == 0 {
@@ -420,4 +452,13 @@ func validHash(value string, lengths ...int) bool {
 func bytesHash(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
+}
+
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }

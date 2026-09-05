@@ -34,7 +34,8 @@ func processSlotAvailable(ctx context.Context, q rowQueryer, owner supervisor.Ow
 		{"leases", `SELECT COUNT(*) FROM leases WHERE state='ACTIVE' AND attempt_id<>?`, []any{attemptID}},
 		{"worker_processes", `SELECT COUNT(*) FROM worker_processes WHERE state IN ('RUNNING','OBSERVING','LOST') AND attempt_id<>?`, []any{attemptID}},
 		{"process_invocations", `SELECT COUNT(*) FROM process_invocations WHERE state IN ('INTENT','REGISTERED','UNKNOWN') AND (state='UNKNOWN' OR owner_kind<>? OR owner_id<>? OR generation<>?)`, []any{owner.Kind, owner.ID, owner.Generation}},
-		{"effects", `SELECT COUNT(*) FROM effects WHERE effect_type='planner' AND state IN ('EXECUTING','OBSERVING','RECOVERING') AND id<>?`, []any{effectID}},
+		{"effects", `SELECT COUNT(*) FROM effects WHERE effect_type='acceptance' AND state NOT IN ('SUCCEEDED','FAILED') AND NOT (?='attempt' AND json_extract(request_json,'$.packet.owner_attempt_id')=? AND json_extract(request_json,'$.packet.goal_id')=? AND json_extract(request_json,'$.packet.owner_generation')=?)`, []any{owner.Kind, owner.ID, owner.GoalID, owner.Generation}},
+		{"effects", `SELECT COUNT(*) FROM effects WHERE effect_type='planner'  AND state IN ('EXECUTING','OBSERVING','RECOVERING') AND id<>?`, []any{effectID}},
 	}
 	var version int
 	if err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
@@ -156,7 +157,10 @@ func (s *Store) FinishProcess(ctx context.Context, id string, state supervisor.P
 }
 
 func (s *Store) RecoverableProcesses(ctx context.Context) ([]supervisor.ProcessRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,owner_kind,owner_id,goal_id,generation,COALESCE(pid,0),COALESCE(pgid,0),COALESCE(start_identity,''),state,reason FROM process_invocations WHERE state IN ('INTENT','REGISTERED','UNKNOWN') ORDER BY id`)
+	// Intents are inserted before each serial startup. Reverse journal order
+	// stops clients before services and dependents before dependencies, without
+	// relying on random IDs or wall clock ordering (including equal timestamps).
+	rows, err := s.db.QueryContext(ctx, `SELECT id,owner_kind,owner_id,goal_id,generation,COALESCE(pid,0),COALESCE(pgid,0),COALESCE(start_identity,''),state,reason FROM process_invocations WHERE state IN ('INTENT','REGISTERED','UNKNOWN') ORDER BY rowid DESC`)
 	if err != nil {
 		return nil, err
 	}

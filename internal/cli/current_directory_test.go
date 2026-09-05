@@ -18,11 +18,16 @@ import (
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/report"
+	"github.com/monshunter/xgoal/internal/scenario"
 )
 
 // Real CLI and detached daemon processes exercise the complete public path.
 // Only provider executables are deterministic fixtures; no provider service is contacted.
 func TestRealCLICurrentDirectoryTwoGoalsPreserveGitAndBindFinalEvidence(t *testing.T) {
+	runRealCLICurrentDirectoryGoals(t, false)
+}
+
+func runRealCLICurrentDirectoryGoals(t *testing.T, withServices bool) {
 	root, err := os.MkdirTemp("/tmp", "xgoal-cli-current-")
 	if err != nil {
 		t.Fatal(err)
@@ -43,12 +48,19 @@ func TestRealCLICurrentDirectoryTwoGoalsPreserveGitAndBindFinalEvidence(t *testi
 	currentDirectoryGit(t, projectRoot, "add", "README.md")
 	currentDirectoryGit(t, projectRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "-q", "-m", "initial")
 	rolesPath := filepath.Join(root, "roles.tsv")
-	proposal := currentDirectoryProviders(t, bin, rolesPath)
+	var scenarioIDs []string
+	if withServices {
+		scenarioIDs = []string{"output-workflow"}
+	}
+	proposal := currentDirectoryProviders(t, bin, rolesPath, scenarioIDs...)
 	environment := []string{}
 	for _, entry := range project.GitEnvironment() {
 		if !strings.HasPrefix(entry, "XGOAL_") && !strings.HasPrefix(entry, "PATH=") {
 			environment = append(environment, entry)
 		}
+	}
+	if withServices {
+		environment = append(environment, "XGOAL_PROJECT_VISIBLE=fixture")
 	}
 	environment = append(environment, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "XGOAL_RUNTIME_DIR="+filepath.Join(root, "run"))
 	invoke := func(args ...string) string {
@@ -62,9 +74,15 @@ func TestRealCLICurrentDirectoryTwoGoalsPreserveGitAndBindFinalEvidence(t *testi
 	}
 	invoke("init")
 	configuration := currentDirectoryConfiguration(bin, rolesPath)
+	if withServices {
+		configuration = managedServiceConfiguration(t, projectRoot, configuration, rolesPath)
+	}
 	writeCurrentDirectoryFixture(t, filepath.Join(projectRoot, "xgoal.yaml"), configuration, 0600)
 	invoke("config", "validate", "--file", filepath.Join(projectRoot, "xgoal.yaml"))
 	currentDirectoryGit(t, projectRoot, "add", "xgoal.yaml", ".xgoalignore", ".gitignore")
+	if withServices {
+		currentDirectoryGit(t, projectRoot, "add", "service-server.py", "service-client.py")
+	}
 	currentDirectoryGit(t, projectRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "-q", "-m", "configure fixture")
 	repo, err := gitrepo.Open(context.Background(), projectRoot)
 	if err != nil {
@@ -167,6 +185,9 @@ func TestRealCLICurrentDirectoryTwoGoalsPreserveGitAndBindFinalEvidence(t *testi
 	started = false
 	assertCurrentDirectoryRoles(t, rolesPath, projectRoot)
 	assertCurrentDirectoryEvidence(t, daemon.StateDir, reports)
+	if withServices {
+		assertManagedServicesStopped(t, daemon.StateDir)
+	}
 }
 
 func compileCurrentDirectoryCLI(t *testing.T, bin string) string {
@@ -214,12 +235,21 @@ func writeCurrentDirectoryFixture(t *testing.T, path, content string, mode os.Fi
 	}
 }
 
-func currentDirectoryProviders(t *testing.T, bin, rolesPath string) string {
+func currentDirectoryProviders(t *testing.T, bin, rolesPath string, scenarioIDs ...string) string {
 	t.Helper()
 	proposal := `{"contract":{"summary":"append output","rationale":"exercise current directory execution","in_scope":["output.txt"],"out_of_scope":["remote publication"],"constraints":["no network"],"acceptance_criteria":[{"id":"AC-CURRENT","statement":"output contains an accepted line","validators":["output-check"],"human_acceptance":false}],"quality_attributes":["deterministic validation"],"human_gates":["scope expansion"],"completion_policy":{"require_all_required_items":true,"require_no_blocking_findings":true,"require_final_validation":true}},"plan":{"summary":"one bounded change","work_items":[{"client_key":"output","title":"append output","objective":"append one accepted line to output.txt","depends_on":[],"read_scope":["/**"],"write_scope":["/output.txt"],"acceptance_criteria":["AC-CURRENT"],"validators":["output-check"],"recommended_role":"implementer","required":true}]}}`
 	var plannerProposal map[string]any
 	if err := json.Unmarshal([]byte(proposal), &plannerProposal); err != nil {
 		t.Fatal(err)
+	}
+	if len(scenarioIDs) > 0 {
+		criteria := plannerProposal["contract"].(map[string]any)["acceptance_criteria"].([]any)
+		criteria[0].(map[string]any)["scenario_ids"] = scenarioIDs
+		updated, err := json.Marshal(plannerProposal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proposal = string(updated)
 	}
 	plannerProposal["protocol_version"], plannerProposal["ambiguities"] = "xgoal.planner-proposal/v1alpha1", []any{}
 	plannerJSON, err := json.Marshal(plannerProposal)
@@ -316,6 +346,17 @@ func assertCurrentDirectoryEvidence(t *testing.T, stateDir string, reports []rep
 				t.Fatalf("criterion not proven: %+v", criterion)
 			}
 			for _, id := range criterion.EvidenceIDs {
+				var kind string
+				if err := db.QueryRow(`SELECT kind FROM evidence_records WHERE id=?`, id).Scan(&kind); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "SCENARIO" {
+					m, err := scenario.Load(context.Background(), stateDir, id)
+					if err != nil || m.TreeHash != value.Final.Tree || len(m.Files) != len(m.Scenario.ArtifactPaths) {
+						t.Fatalf("invalid scenario evidence: %+v %v", m, err)
+					}
+					continue
+				}
 				var tree, receiptTree, result string
 				if err := db.QueryRow(`SELECT evidence.tree_hash,run.tree_hash,run.result FROM evidence_records evidence JOIN validator_runs run ON run.receipt_hash=evidence.receipt_hash WHERE evidence.id=?`, id).Scan(&tree, &receiptTree, &result); err != nil {
 					t.Fatal(err)

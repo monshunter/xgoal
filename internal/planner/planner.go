@@ -35,16 +35,17 @@ type Proposal struct {
 }
 
 type Packet struct {
-	Harness           *protocol.HarnessInput `json:"harness,omitempty"`
-	ProtocolVersion   string                 `json:"protocol_version"`
-	GoalID            string                 `json:"goal_id"`
-	RawGoal           string                 `json:"raw_goal"`
-	Mode              string                 `json:"mode"`
-	ConfigHash        string                 `json:"config_hash"`
-	TrustedValidators []string               `json:"trusted_validators"`
-	ProjectRoot       string                 `json:"project_root"`
-	ProjectNetwork    string                 `json:"project_network"`
-	ProjectSecrets    string                 `json:"project_secrets"`
+	ValidationCapabilities *config.ValidationCapabilities `json:"validation_capabilities,omitempty"`
+	Harness                *protocol.HarnessInput         `json:"harness,omitempty"`
+	ProtocolVersion        string                         `json:"protocol_version"`
+	GoalID                 string                         `json:"goal_id"`
+	RawGoal                string                         `json:"raw_goal"`
+	Mode                   string                         `json:"mode"`
+	ConfigHash             string                         `json:"config_hash"`
+	TrustedValidators      []string                       `json:"trusted_validators"`
+	ProjectRoot            string                         `json:"project_root"`
+	ProjectNetwork         string                         `json:"project_network"`
+	ProjectSecrets         string                         `json:"project_secrets"`
 }
 
 type Invocation struct {

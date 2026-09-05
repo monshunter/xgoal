@@ -26,6 +26,7 @@
               "id": {"type": "string"},
               "statement": {"type": "string"},
               "validators": {"type": "array", "items": {"type": "string"}},
+              "scenario_ids": {"type": "array", "items": {"type": "string"}},
               "human_acceptance": {"type": "boolean"}
             }
           }

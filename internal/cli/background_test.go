@@ -106,7 +106,7 @@ func (fixture *backgroundFixture) invoke(t *testing.T, args ...string) string {
 	return output
 }
 
-func newBackgroundFixture(t *testing.T, base, binary, name string) *backgroundFixture {
+func newBackgroundFixture(t *testing.T, base, binary, name string, configure ...func(*testing.T, string, string, string) string) *backgroundFixture {
 	t.Helper()
 	f := &backgroundFixture{binary: binary, root: filepath.Join(base, name), release: filepath.Join(base, name+".release"), entered: filepath.Join(base, name+".entered")}
 	cliRepository(t, f.root)
@@ -118,7 +118,11 @@ func newBackgroundFixture(t *testing.T, base, binary, name string) *backgroundFi
 		t.Fatal(err)
 	}
 	roles := filepath.Join(base, name+".roles")
-	currentDirectoryProviders(t, bin, roles)
+	var scenarioIDs []string
+	if len(configure) > 0 {
+		scenarioIDs = []string{"output-workflow"}
+	}
+	currentDirectoryProviders(t, bin, roles, scenarioIDs...)
 	script, err := os.ReadFile(filepath.Join(bin, "codex"))
 	if err != nil {
 		t.Fatal(err)
@@ -134,11 +138,17 @@ func newBackgroundFixture(t *testing.T, base, binary, name string) *backgroundFi
 			f.environment = append(f.environment, entry)
 		}
 	}
-	f.environment = append(f.environment, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "XGOAL_RUNTIME_DIR="+filepath.Join(base, "runtime"))
+	f.environment = append(f.environment, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "XGOAL_RUNTIME_DIR="+filepath.Join(base, "runtime"), "XGOAL_PROJECT_VISIBLE=fixture")
 	f.invoke(t, "init")
 	configuration := strings.ReplaceAll(currentDirectoryConfiguration(bin, roles), "timeout: 20s", "timeout: 90s")
+	for _, change := range configure {
+		configuration = change(t, f.root, configuration, roles)
+	}
 	writeCurrentDirectoryFixture(t, filepath.Join(f.root, "xgoal.yaml"), configuration, 0600)
 	currentDirectoryGit(t, f.root, "add", "xgoal.yaml", ".xgoalignore", ".gitignore")
+	if len(configure) > 0 {
+		currentDirectoryGit(t, f.root, "add", "service-server.py", "service-client.py")
+	}
 	currentDirectoryGit(t, f.root, "-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "-q", "-m", "configuration")
 	f.head = currentDirectoryGit(t, f.root, "rev-parse", "HEAD")
 	f.worktrees = currentDirectoryGit(t, f.root, "worktree", "list", "--porcelain")

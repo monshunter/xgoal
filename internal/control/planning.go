@@ -74,6 +74,7 @@ func (service *Service) planningRequest(input createGoalRequest) (planner.Reques
 	if profile, _, err := service.configuration.SelectProfile("planner", ""); err == nil {
 		request.ProfileID = profile.ID
 	}
+	request.ValidationCapabilities = service.configuration.ValidationCapabilities()
 
 	if request.ProfileID == "" {
 		if request.Proposal != nil {
