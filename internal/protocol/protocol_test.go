@@ -122,7 +122,7 @@ func TestEmbeddedSchemasAreValidAndVersioned(t *testing.T) {
 		version string
 		digest  string
 	}{
-		protocol.SchemaWorkPacket:  {version: protocol.WorkPacketVersion, digest: "b9649e38bcd0fe1d3d7b9ae949713b2e58244a0a06bbb5955233d98f103a45e3"},
+		protocol.SchemaWorkPacket:  {version: protocol.WorkPacketVersion, digest: "5faf4e8b03c9a64bad06bb3caa6543d9b3b6fca859c6b41b5f4159e7c3da1085"},
 		protocol.SchemaAgentResult: {version: protocol.AgentResultVersion, digest: "a71b93ea2850db6cac218d66564b8c94bc84f5552d2dc5594893e30edeca8303"},
 		protocol.SchemaAgentEvent:  {version: protocol.AgentEventVersion, digest: "bfb4de3beade4c1b1ee92633641cc4de7c05b54441a2ff0b4dd1d3ea5d193509"},
 		protocol.SchemaEvidence:    {version: protocol.EvidenceVersion, digest: "91cde100ace57970ae14e060496c886db3ad7549c3b673c03ed71390dc163663"},

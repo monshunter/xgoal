@@ -11,6 +11,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/domain"
+	"github.com/monshunter/xgoal/internal/redact"
 	basestore "github.com/monshunter/xgoal/internal/store"
 )
 
@@ -94,7 +95,7 @@ func (s *Store) ClaimWork(
 		if err := domain.ValidateWorkTransition(work.State, domain.WorkClaimed); err != nil {
 			return err
 		}
-		if err := ensureWorkCanBecomeReady(ctx, tx, work); err != nil {
+		if err := ensureWorkCanBecomeReady(ctx, tx, work, s.source.Now()); err != nil {
 			return err
 		}
 		if _, err := readCheckout(ctx, tx); err == nil {
@@ -447,6 +448,8 @@ func (s *Store) DecideGate(
 	if id == "" || expectedVersion <= 0 || !decision.Valid() || !validIdempotencyLabel(decidedBy) || strings.TrimSpace(reason) == "" {
 		return domain.Gate{}, errors.New("invalid gate decision")
 	}
+	reason = redact.String(reason)
+	event.Payload = redact.Value(event.Payload)
 	prepared, err := prepareEvent(event)
 	if err != nil {
 		return domain.Gate{}, err

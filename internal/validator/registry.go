@@ -3,8 +3,6 @@ package validator
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -36,22 +34,24 @@ type Definition struct {
 	Flaky                 bool          `json:"flaky"`
 	TrustedExecutablePath string        `json:"trusted_executable_path,omitempty"`
 	TrustedExecutableHash string        `json:"trusted_executable_hash,omitempty"`
+	TrustedFiles          []TrustedFile `json:"trusted_files,omitempty"`
 	Hash                  string        `json:"hash"`
 }
 
 type definitionIdentity struct {
-	ID                    string   `json:"id"`
-	Type                  string   `json:"type"`
-	Phases                []string `json:"phases"`
-	Argv                  []string `json:"argv,omitempty"`
-	CWD                   string   `json:"cwd"`
-	TimeoutNanos          int64    `json:"timeout_nanos"`
-	ExpectedExitCodes     []int    `json:"expected_exit_codes"`
-	EnvironmentAllowlist  []string `json:"environment_allowlist,omitempty"`
-	Required              bool     `json:"required"`
-	Flaky                 bool     `json:"flaky"`
-	TrustedExecutablePath string   `json:"trusted_executable_path,omitempty"`
-	TrustedExecutableHash string   `json:"trusted_executable_hash,omitempty"`
+	ID                    string        `json:"id"`
+	Type                  string        `json:"type"`
+	Phases                []string      `json:"phases"`
+	Argv                  []string      `json:"argv,omitempty"`
+	CWD                   string        `json:"cwd"`
+	TimeoutNanos          int64         `json:"timeout_nanos"`
+	ExpectedExitCodes     []int         `json:"expected_exit_codes"`
+	EnvironmentAllowlist  []string      `json:"environment_allowlist,omitempty"`
+	Required              bool          `json:"required"`
+	Flaky                 bool          `json:"flaky"`
+	TrustedExecutablePath string        `json:"trusted_executable_path,omitempty"`
+	TrustedExecutableHash string        `json:"trusted_executable_hash,omitempty"`
+	TrustedFiles          []TrustedFile `json:"trusted_files,omitempty"`
 }
 
 type Registry struct {
@@ -128,6 +128,12 @@ func (definition Definition) Validate() error {
 		(definition.TrustedExecutableHash != "" && !validDefinitionHash(definition.TrustedExecutableHash)) {
 		return errors.New("validator trusted executable binding is incomplete")
 	}
+	for i, file := range definition.TrustedFiles {
+		canonical, err := scope.NormalizeRepositoryPath(file.Path)
+		if err != nil || canonical != file.Path || (file.Mode != "100644" && file.Mode != "100755") || !validDefinitionHash(file.SHA256) || (i > 0 && definition.TrustedFiles[i-1].Path >= file.Path) {
+			return errors.New("validator trusted files must have canonical, uniquely sorted regular file identities")
+		}
+	}
 	hash, err := canonical.Hash("validator-definition", definitionVersion, definition.identity())
 	if err != nil {
 		return err
@@ -180,24 +186,8 @@ func buildDefinition(ctx context.Context, repository *gitrepo.Repository, baseCo
 		ExpectedExitCodes: expected, EnvironmentAllowlist: environment,
 		Required: configured.Required, Flaky: configured.Flaky.Enabled,
 	}
-	if strings.Contains(configured.Argv[0], "/") {
-		if !strings.HasPrefix(configured.Argv[0], "./") {
-			return Definition{}, errors.New("repository executable must use a ./ relative path")
-		}
-		executablePath, err := scope.NormalizeRepositoryPath(strings.TrimPrefix(configured.Argv[0], "./"))
-		if err != nil {
-			return Definition{}, fmt.Errorf("invalid repository executable: %w", err)
-		}
-		entry, content, err := repository.ReadFileAtRevision(ctx, baseCommit, executablePath, maxScriptBytes)
-		if err != nil {
-			return Definition{}, fmt.Errorf("read trusted executable: %w", err)
-		}
-		if entry.Mode != "100755" {
-			return Definition{}, errors.New("trusted repository executable must have Git mode 100755")
-		}
-		digest := sha256.Sum256(content)
-		definition.TrustedExecutablePath = executablePath
-		definition.TrustedExecutableHash = hex.EncodeToString(digest[:])
+	if err := bindTrustedFiles(ctx, repository, baseCommit, configured, &definition); err != nil {
+		return Definition{}, err
 	}
 	hash, err := canonical.Hash("validator-definition", definitionVersion, definition.identity())
 	if err != nil {
@@ -237,6 +227,7 @@ func (definition Definition) identity() definitionIdentity {
 		CWD: definition.CWD, TimeoutNanos: int64(definition.Timeout), ExpectedExitCodes: definition.ExpectedExitCodes,
 		EnvironmentAllowlist: definition.EnvironmentAllowlist, Required: definition.Required, Flaky: definition.Flaky,
 		TrustedExecutablePath: definition.TrustedExecutablePath, TrustedExecutableHash: definition.TrustedExecutableHash,
+		TrustedFiles: definition.TrustedFiles,
 	}
 }
 
@@ -245,5 +236,6 @@ func cloneDefinition(definition Definition) Definition {
 	definition.Argv = append([]string(nil), definition.Argv...)
 	definition.ExpectedExitCodes = append([]int(nil), definition.ExpectedExitCodes...)
 	definition.EnvironmentAllowlist = append([]string(nil), definition.EnvironmentAllowlist...)
+	definition.TrustedFiles = append([]TrustedFile(nil), definition.TrustedFiles...)
 	return definition
 }

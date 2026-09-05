@@ -322,7 +322,7 @@ func (s *Store) recoverReadyPlanningTx(ctx context.Context, tx *sql.Tx, goal dom
 		return err
 	}
 	var activated domain.PlanRevision
-	if _, err := tx.ExecContext(ctx, `UPDATE gates SET state='REVOKED',version=version+1,updated_at=? WHERE goal_id=? AND state='OPEN' AND reason_code='PLANNING_GRAPH_INCOMPLETE' AND json_extract(facts_json,'$.owner')='planning'`, s.source.Now().UTC().Format(time.RFC3339Nano), goal.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE gates SET state='REVOKED',required=0,version=version+1,updated_at=? WHERE goal_id=? AND state='OPEN' AND reason_code='PLANNING_GRAPH_INCOMPLETE' AND json_extract(facts_json,'$.owner')='planning'`, s.source.Now().UTC().Format(time.RFC3339Nano), goal.ID); err != nil {
 		return err
 	}
 	if err := s.activatePlanRevisionTx(ctx, tx, plan.ID, plan.Version, goal.Version, event, &activated); err != nil {

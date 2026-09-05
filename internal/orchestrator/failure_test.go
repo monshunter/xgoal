@@ -43,6 +43,36 @@ func TestFailureWithUnconfirmedShutdownPreservesExecutionOwnership(t *testing.T)
 	}
 }
 
+func TestTrustBindingMigrationWaitsWithActionableGoalGate(t *testing.T) {
+	for _, owner := range []string{"work", "final"} {
+		t.Run(owner, func(t *testing.T) {
+			engine, _, goal, work, _, _ := failureFixture(t)
+			work, err := engine.store.WorkItem(context.Background(), work.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owner == "final" {
+				work = domain.WorkItem{}
+			}
+			err = engine.openFailureGate(context.Background(), goal, work, domain.Attempt{}, reconcile.ValidatorUnavailable, sqlite.ErrTrustBindingMigrationRequired, reconcile.Decision{Action: reconcile.WaitGate, Reason: "trust binding upgrade"}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := engine.store.GoalStatus(context.Background(), goal.ID)
+			if err != nil || status.Goal.State != domain.GoalWaiting || len(status.Gates) != 1 {
+				t.Fatalf("migration not persisted as Waiting: %v", err)
+			}
+			gate := status.Gates[0]
+			if gate.ReasonCode != "trust_binding_migration_required" || !strings.Contains(gate.Recommendation, "trustedFiles") || !strings.Contains(gate.Recommendation, "new Goal") {
+				t.Fatalf("migration recovery not actionable: %+v", gate)
+			}
+			if gate.WorkItemID != work.ID || gate.Action != domain.ActionModifyValidator {
+				t.Fatal("wrong migration Gate owner/action")
+			}
+		})
+	}
+}
+
 func failureFixture(t *testing.T) (*Engine, *clock.Fake, domain.Goal, domain.WorkItem, domain.GoalRevision, domain.Lease) {
 	t.Helper()
 	ctx := context.Background()

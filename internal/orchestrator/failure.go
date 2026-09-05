@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -11,12 +12,23 @@ import (
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/promotion"
+	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/reconcile"
 	"github.com/monshunter/xgoal/internal/scope"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 	"github.com/monshunter/xgoal/internal/supervisor"
+	"github.com/monshunter/xgoal/internal/validator"
 )
+
+type agentOutcomeError struct {
+	Result       protocol.AgentResult
+	InvocationID string
+}
+
+func (outcome *agentOutcomeError) Error() string {
+	return fmt.Sprintf("agent returned %s: %s; blockers: %s; recommended next action: %s", outcome.Result.Status, outcome.Result.Summary, strings.Join(outcome.Result.Blockers, "; "), outcome.Result.RecommendedNextAction)
+}
 
 func (engine *Engine) failUnclaimed(ctx context.Context, goal domain.Goal, work domain.WorkItem, revision domain.GoalRevision, class reconcile.FailureClass, cause error, strategy string) error {
 	return engine.recordAndWait(ctx, goal, work, revision, domain.Attempt{}, class, cause, strategy, "", false)
@@ -125,7 +137,11 @@ func (engine *Engine) observeFailureScene(ctx context.Context, goal domain.Goal,
 		if err != nil {
 			return false, err
 		}
-		if changesValidatorConfig(captured) {
+		registry, err := validator.LoadRegistry(ctx, engine.repository, checkout.AcceptedCommit, "xgoal.yaml")
+		if err != nil {
+			return false, err
+		}
+		if changesValidatorConfig(captured, registry.ProtectedPaths()...) {
 			return false, errValidatorChange
 		}
 		policy, err := scope.NewPolicy(work.WriteScope, engine.config.ScopePolicy.Deny)
@@ -209,8 +225,23 @@ func (engine *Engine) recordAndWait(ctx context.Context, goal domain.Goal, work 
 		return checkoutErr
 	}
 	checkoutOwned := checkoutErr == nil && checkout.GoalID == goal.ID && checkout.WorkID == work.ID
-	if retry && !checkoutOwned && recorded.RepeatCount <= int64(engine.config.Orchestration.NoProgressLimit) && currentWork.State == domain.WorkReconciling {
-		return engine.store.UpdateWorkState(ctx, currentWork.ID, currentWork.Version, domain.WorkReady, event("WorkRetryReady", "kernel", map[string]any{"failure_id": failureID, "action": decision.Action}))
+	if retry && safeRetry && checkoutOwned && engine.config.Orchestration.AutoRetryLimit > 0 && currentWork.State == domain.WorkReconciling {
+		if err := engine.repository.CheckSnapshot(ctx, gitrepo.SnapshotSpec{BaseTree: checkout.AcceptedTree, ExcludePaths: []string{engine.runtimeRoot}, MaxFileBytes: maxPatchFile}, checkout.Identity, checkout.ObservedTree); err != nil {
+			cause = errors.Join(cause, err)
+			safeRetry = false
+		} else {
+			_, retryErr := engine.store.AutomaticRetryCheckoutWork(ctx, currentWork.ID, currentWork.Version, checkout.Identity, checkout.ObservedTree, sqlite.AutomaticRetry{FailureID: failureID, ConfigHash: engine.configHash, Limit: engine.config.Orchestration.AutoRetryLimit}, event("WorkAutomaticallyRetried", "kernel", map[string]any{"failure_id": failureID, "action": decision.Action, "limit": engine.config.Orchestration.AutoRetryLimit}))
+			if retryErr == nil {
+				return nil
+			}
+			if !errors.Is(retryErr, sqlite.ErrAutomaticRetryDenied) && !errors.Is(retryErr, basestore.ErrAuthorizationDenied) && !errors.Is(retryErr, sqlite.ErrCheckoutConflict) && !errors.Is(retryErr, sqlite.ErrCheckoutBusy) {
+				return retryErr
+			}
+			cause = errors.Join(cause, retryErr)
+			if errors.Is(retryErr, sqlite.ErrCheckoutBusy) || errors.Is(retryErr, sqlite.ErrCheckoutConflict) {
+				safeRetry = false
+			}
+		}
 	}
 	return engine.openFailureGate(ctx, latestGoal, currentWork, attempt, class, cause, decision, safeRetry)
 }
@@ -225,7 +256,7 @@ func (engine *Engine) openFailureGate(ctx context.Context, goal domain.Goal, wor
 	switch {
 	case errors.Is(cause, errProjectNetworkGate):
 		action, scopeValues = domain.ActionAccessProjectNetwork, []string{"project-network"}
-	case errors.Is(cause, errValidatorChange):
+	case errors.Is(cause, errValidatorChange), errors.Is(cause, sqlite.ErrTrustBindingMigrationRequired):
 		action, scopeValues = domain.ActionModifyValidator, []string{"xgoal.yaml"}
 	case class == reconcile.ScopeViolation:
 		action, scopeValues = domain.ActionExpandScope, work.WriteScope
@@ -239,6 +270,11 @@ func (engine *Engine) openFailureGate(ctx context.Context, goal domain.Goal, wor
 	}
 	recommendation := "Inspect the failure evidence and replan unless the displayed one-use scope is intentional"
 	facts := map[string]any{"failure_class": class, "error": cause.Error(), "reconcile_action": decision.Action}
+	var outcome *agentOutcomeError
+	if errors.As(cause, &outcome) {
+		facts["agent_result"] = outcome.Result
+		facts["invocation_id"] = outcome.InvocationID
+	}
 	checkout, checkoutErr := engine.store.Checkout(ctx)
 	if checkoutErr != nil && !errors.Is(checkoutErr, basestore.ErrNotFound) {
 		return checkoutErr
@@ -258,7 +294,21 @@ func (engine *Engine) openFailureGate(ctx context.Context, goal domain.Goal, wor
 		options = []map[string]string{{"id": "inspect", "effect": "inspect the active worker and preserve source files"}, {"id": "recover", "effect": "have worker recovery confirm that every writer stopped before restoring files or retrying"}}
 		recommendation = "Confirm process exit through worker recovery before changing or retrying this checkout"
 	}
-	if safeRetry {
+	if errors.Is(cause, errValidatorChange) || errors.Is(cause, sqlite.ErrTrustBindingMigrationRequired) {
+		reason = "trusted_validator_change"
+		facts["trust_update_requires_new_goal"] = true
+		unknowns = []string{"Whether the operator intends to change the trusted validation baseline"}
+		options = []map[string]string{
+			{"id": "preserve", "effect": "keep files and inspect the frozen validator entrypoints and dependencies"},
+			{"id": "new-goal", "effect": "cancel this Goal, review and commit the intended trust baseline, then create a new Goal"},
+		}
+		recommendation = "Review and commit a new trust baseline, then create a new Goal; approval or ordinary replan cannot replace this Goal's frozen validator authority"
+		if errors.Is(cause, sqlite.ErrTrustBindingMigrationRequired) {
+			reason = "trust_binding_migration_required"
+			recommendation = sqlite.ErrTrustBindingMigrationRequired.Error()
+		}
+	}
+	if safeRetry && class != reconcile.AgentBlocked {
 		reason = "checkout_retry_required"
 		unknowns = []string{"Whether the operator wants this Work to continue from its preserved, scope-checked files"}
 		options = []map[string]string{
@@ -267,6 +317,18 @@ func (engine *Engine) openFailureGate(ctx context.Context, goal domain.Goal, wor
 			{"id": "cancel", "effect": "cancel the Goal while preserving the failure scene"},
 		}
 		recommendation = "Inspect current files and explicitly retry this Work if the preserved changes are intentional"
+	}
+	if class == reconcile.AgentBlocked && outcome != nil && safeRetry {
+		unknowns = append([]string(nil), outcome.Result.Blockers...)
+		if len(unknowns) == 0 {
+			unknowns = []string{outcome.Result.Summary}
+		}
+		options = []map[string]string{
+			{"id": "answer", "effect": "decide this Gate with a reason, then retry the same Work only if its preserved scene remains unchanged"},
+			{"id": "preserve", "effect": "keep the Goal waiting for the required decision or external condition"},
+			{"id": "cancel", "effect": "cancel the Goal and preserve all files and evidence"},
+		}
+		recommendation = firstNonEmpty(outcome.Result.RecommendedNextAction, "Inspect blockers and answer the Gate before continuing")
 	}
 	_, err = engine.store.CreateGate(ctx, sqlite.GateDraft{
 		ID: gateID, GoalID: goal.ID, WorkItemID: work.ID, AttemptID: attempt.ID,

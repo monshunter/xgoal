@@ -106,11 +106,17 @@ xgoal 不创建或删除 Git worktree。Implementer、Reviewer 和 Validator 使
 
 失败或外部编辑时保留文件与诊断日志，不自动 stash、reset 或 clean。仅经过 Scope 检查并记录的同一 Work 失败现场允许 `work retry`；文件、HEAD、index 或配置再变化会拒绝重试。未处理现场不能直接 replan。晋升已更新私有 ref 而读回未完成时，先恢复提示要求的精确文件与 Git 元数据，再重启或 resume 以完成读回。
 
+合法 `blocked` 会保留问题、建议与 Invocation 引用。先通过 `approve <gate-id> --version <version> --decision ALLOW --reason <answer>` 回答，再执行 `work retry <work-id> --version <version> --reason <reason>`；续作把已消费回答交给新 Attempt，仍检查原现场和权限。拒绝、撤销、未消费的过期 Gate、取消和未确认进程都阻止继续。`orchestration.autoRetryLimit` 缺省为 `0`；配置正数可授权安全现场的有限自动修复，总数按 Work 持久化，重复无进展会停止，不能自动回答 blocked 或批准 Gate。
+
 旧 `workspace.provider: git-worktree` 配置提示 `CONFIG_MIGRATION_REQUIRED`；确认当前目录执行语义后改为 `current-directory` 并重启。旧 Goal、报告、Evidence 和 worktree 文件保留可读；未完成旧 Goal 不会自动转为原地执行，可取消旧 Goal 后从已审查的干净主目录创建新 Goal。`clean` 只处理允许删除的会话元数据，不删除当前源码或旧 worktree；服务诊断日志保留用于检查。
 
 ## 配置与安全
 
 [xgoal.example.yaml](xgoal.example.yaml) 展示完整 v0.1 配置。Validator 的 `argv` 来自版本管理配置，Agent 不能注入命令或削弱 Required Validator。远端 push、发布、生产操作和项目 Secret 默认拒绝；Provider Transport 与 CLI 自有登录态是单独的受信执行通道。
+
+Validator 的直接脚本和常见解释器脚本入口会从受信 Git 基线冻结内容和文件模式；入口相对 `cwd`，额外 `trustedFiles` 相对仓库根。Make/npm、包装命令（如 `env sh …`）、版本解释器（如 `python3.11`）、自定义 runner、解释器选项和内联 shell 需显式声明控制文件与依赖；自包含内联断言可写 `trustedFiles: [xgoal.yaml]`。这不自动发现所有传递依赖，也不冻结待开发的全部业务测试。候选修改受信文件会被阻止，包括未被当前 Work 选择的 Validator 依赖。需要更新时先保留现场、取消旧 Goal、审阅并提交新基线，再创建新 Goal；批准 Gate 或普通 replan 都不能重绑定旧验收权威。
+
+升级前已经登记过旧脚本定义的基线，若与新增文件绑定产生身份冲突，会进入 `TRUST_BINDING_MIGRATION_REQUIRED`。保留旧 Goal/Evidence，在 `xgoal.yaml` 显式添加对应脚本的 `trustedFiles`，审阅并提交配置，再创建新 Goal。旧定义和注册仍可读取，不覆盖旧证据或自动把它升级为当前证据。
 
 A、B 两个独立 Git 仓库分别拥有 daemon、状态库、锁和 socket，可同时运行；子目录和路径别名定位同一个实例。IPC 请求同时核对项目身份、协议和 daemon 实例，错误 socket 不会执行到另一个项目。CPU、内存、磁盘、端口、外部数据库/Docker、Provider 登录态与配额仍可能共享。
 

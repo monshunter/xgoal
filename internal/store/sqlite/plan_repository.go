@@ -254,7 +254,7 @@ func (s *Store) UpdateWorkState(
 			return err
 		}
 		if state == domain.WorkReady {
-			if err := ensureWorkCanBecomeReady(ctx, tx, work); err != nil {
+			if err := ensureWorkCanBecomeReady(ctx, tx, work, s.source.Now()); err != nil {
 				return err
 			}
 		}
@@ -276,7 +276,7 @@ WHERE id = ? AND version = ?`, state, s.source.Now().UTC().Format(time.RFC3339Na
 	})
 }
 
-func ensureWorkCanBecomeReady(ctx context.Context, tx *sql.Tx, work domain.WorkItem) error {
+func ensureWorkCanBecomeReady(ctx context.Context, tx *sql.Tx, work domain.WorkItem, now time.Time) error {
 	var planStatus domain.PlanRevisionState
 	var goalState domain.GoalState
 	var activeRevisionID, planGoalRevisionID string
@@ -311,11 +311,11 @@ FROM gates gate_record
 JOIN plan_revisions plan ON plan.id = ?
 JOIN goal_revisions goal_revision ON goal_revision.id = plan.goal_revision_id
 WHERE gate_record.goal_id = goal_revision.goal_id
-  AND gate_record.state = ?
+  AND `+gateBlocksExecution+`
   AND gate_record.required = 1
   AND (gate_record.work_item_id IS NULL OR gate_record.work_item_id = ?)`,
 		work.PlanRevisionID,
-		domain.GateOpen,
+		now.UTC().Format(time.RFC3339Nano),
 		work.ID,
 	).Scan(&openRequiredGates); err != nil {
 		return fmt.Errorf("read required gates for work %q: %w", work.ID, err)

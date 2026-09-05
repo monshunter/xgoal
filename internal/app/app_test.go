@@ -82,7 +82,7 @@ workspace: {provider: current-directory, keepFailed: true, cleanupCompletedAfter
 runtime: {provider: local-process, isolationLevelRequired: L0, projectNetwork: deny, projectSecrets: deny}
 scopePolicy: {deny: ["/.git/**", "/.env"], validatorChanges: human-gate}
 validators:
-  - {id: output-check, type: command, phases: [change, final], argv: [sh, -c, "test -f output.txt"], timeout: 5s, required: true}
+  - {id: output-check, type: command, phases: [change, final], trustedFiles: [xgoal.yaml], argv: [sh, -c, "test -f output.txt"], timeout: 5s, required: true}
 review: {requiredInStandard: true, blockSeverities: [blocker, high], requireIndependentSession: true, preferDifferentProvider: true}
 policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
 report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}

@@ -14,6 +14,7 @@ import (
 	"github.com/monshunter/xgoal/internal/evidence"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/protocol"
+	"github.com/monshunter/xgoal/internal/reconcile"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 	"github.com/monshunter/xgoal/internal/supervisor"
@@ -78,6 +79,9 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 		return errors.New("final validation config differs from the frozen Goal Revision")
 	}
 	if _, err := engine.store.RecordValidatorRegistry(ctx, registry); err != nil {
+		if errors.Is(err, sqlite.ErrTrustBindingMigrationRequired) {
+			return engine.openFailureGate(ctx, goal, domain.WorkItem{}, domain.Attempt{}, reconcile.ValidatorUnavailable, err, reconcile.Decision{Action: reconcile.WaitGate, Reason: err.Error()}, false)
+		}
 		return err
 	}
 	attempt, err := lastSuccessfulAttempt(status.Attempts)

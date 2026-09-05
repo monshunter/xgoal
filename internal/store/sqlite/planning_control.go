@@ -41,7 +41,14 @@ func (s *Store) planningGateTx(ctx context.Context, tx *sql.Tx, goalID string, g
 }
 
 func (s *Store) clearPlanningGatesTx(ctx context.Context, tx *sql.Tx, goalID, reason string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM gates WHERE goal_id=? AND state='OPEN' AND json_extract(facts_json,'$.owner')='planning'`, goalID)
+	var rejected int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM gates WHERE goal_id=? AND required=1 AND (state IN ('DENIED','REVOKED','EXPIRED') OR (state='APPROVED' AND used=0 AND julianday(expires_at)<=julianday(?))) AND json_extract(facts_json,'$.owner')='planning'`, goalID, s.source.Now().UTC().Format(time.RFC3339Nano)).Scan(&rejected); err != nil {
+		return err
+	}
+	if rejected != 0 {
+		return basestore.ErrAuthorizationDenied
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM gates WHERE goal_id=? AND required=1 AND (state='OPEN' OR (state='APPROVED' AND decision='ALLOW')) AND json_extract(facts_json,'$.owner')='planning'`, goalID)
 	if err != nil {
 		return err
 	}
@@ -63,7 +70,7 @@ func (s *Store) clearPlanningGatesTx(ctx context.Context, tx *sql.Tx, goalID, re
 		return closeErr
 	}
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `UPDATE gates SET state='REVOKED',version=version+1,updated_at=? WHERE id=? AND state='OPEN'`, s.source.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE gates SET state=CASE WHEN state='OPEN' THEN 'REVOKED' ELSE state END,required=0,version=version+1,updated_at=? WHERE id=?`, s.source.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
 			return err
 		}
 		if err := s.planningEvent(ctx, tx, "gate", id, "PlanningGateResolved", map[string]any{"reason": reason}); err != nil {

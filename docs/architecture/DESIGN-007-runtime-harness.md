@@ -1,0 +1,114 @@
+# DESIGN-007：运行时 Harness 接入、恢复与观测
+
+本设计拥有 OBJ-004 的跨组件接缝。产品行为由根产品 SPEC 第 20 节拥有；技术不变量由技术 SPEC 第 35 节拥有。DESIGN-001–005 继续拥有 Git/环境/验证、Adapter、Review、Control 和最终报告内部机制；本设计对其新增接入点作增量细化，不复制整套架构。基线为 `a9b6192`，实施前需独立 Design Review。
+
+## 目标与取舍
+
+目标是让用户配置的能力真正贯通任务、执行、环境、证据、失败处理与观测。默认保留三角色；可选 Acceptance 只对动态测试增加独立会话。保留 SQLite 的事务状态、Git 的代码身份和文件的不可变制品，不引入文件 Store、Manager LLM、新的服务平台或通用工作流引擎。
+
+系统边界是一个可信本地 Git 项目与其 daemon：单执行槽、同一主目录、可归属子进程、不可变候选 Tree。Provider/登录态、端口和外部服务处于开放边界，有超时、Probe、退出确认和 Gate；Prompt 不是同 UID 安全隔离。服务成功不代表业务正确，Agent 成功不代表交付完成，日志输出不代表实质进展。
+
+## 接入关系
+
+```text
+Config + trusted Git baseline + project rules
+    → Profile/Harness/Validator preflight
+    → immutable planning request / Work Packet / acceptance input
+    → Provider Adapter + process intent + bounded event files
+    → stopped scene + Patch/Tree verification
+    → Environment services/readiness + deterministic assertions
+    → independent Review / optional Acceptance + final assertions
+    → Evidence Set + Report + existing Completion Predicate
+
+Failure → typed record + scene observation → bounded repair OR durable Gate
+Gate decision + owner CAS → next planning generation / Work Attempt / final invocation
+SQLite + immutable file references → status/context/log cursors / consistent export
+```
+
+## Profile、角色和原生 CLI
+
+在 `config.Agent` 增加可选 `model` 与 `reasoningEffort`；`orchestration.roleProfiles` 为 role→Profile ID 映射。Profile 可由多个角色复用，角色默认权限由统一解析器生成。绑定需存在且 Profile 声明支持该角色；未绑定保留当前 Implementer 首个匹配、Reviewer 独立会话/优先不同 Provider 的选择，诊断显示实际选择来源。新角色只有显式配置验收场景才执行。
+
+统一有效执行结构由 config/adapter 边界共享，不为 Planner、Reviewer 另造参数语义。至少包含 profile ID、provider、request model/effort、权限、工具、source、CLI version；缺省模型标识 native inheritance，Provider 未报告实际模型时 observation 为 unknown。所有 Invocation 的可恢复身份包含该结构及原有输入身份，CLI 升级或显式配置变化也不能默默复用旧会话。模型字符串不伪装成一份静态最新型号列表；拒绝空白/控制字符，原生 CLI 对模型/effort 组合的拒绝归为可诊断执行失败，主动 Probe 可提前验证。
+
+Codex 始终使用 `exec --json --output-schema`，`--ask-for-approval never`，角色 sandbox 上限；显式模型经 `--model`，effort 经安全 argv `-c model_reasoning_effort="…"`，不用 shell 拼接。Claude 始终使用 `-p --output-format stream-json --json-schema`，`dontAsk` 和明确工具，模型/effort 分别经 `--model`/`--effort`。原生 plan/auto/default/acceptEdits/bypassPermissions 不作为 xgoal fast/standard；无人值守或角色不兼容的配置给出迁移错误。多角色 Profile 可以未指定 sandbox，由角色推导；指定时必须兼容所有已声明角色，不能静默忽略。
+
+只读角色的默认工具为读取。本增量的 Acceptance 支持矩阵明确区分：Codex 支持 read-only 的无网络观察场景；需要本地服务交互的场景使用 Claude `dontAsk`，`--tools` 只包含 Bash/读取等基础工具名，`--allowedTools` 独立使用配置中受信客户端命令的原生允许规则（例如限定脚本入口的 `Bash(… *)`），不能将规则字符串误传到基础工具集合。无命令允许规则的无限制 Bash 配置不符合 Acceptance 上限；客户端控制脚本适用 trustedFiles 绑定。仍进行源 Tree 和 Git 身份前后核对。Codex 加网络场景在 preflight 明确拒绝并提示选兼容 Profile，不改成 workspace-write/full access 或静默开放网络。Claude 规则不构成 OS 级只读或端点隔离，仍属于 L0 可信 Agent 执行；配置中的项目网络授权与测试目标独立核对，越界修改使验收失败。需要动态交互的原生权限请求在非交互边界失败或转换为结构化 blocked/Gate，不维护无限 stdin 问答通道。
+
+该矩阵避免为一个可选场景引入另一套 beta 权限/代理配置。官方 [Codex Permissions](https://developers.openai.com/codex/permissions) 支持 read-only 与网络分开，但 profiles 不能与旧 `--sandbox`/原生配置混用，域名约束还依赖启用原生 proxy；仅添加配置字段不能证明限制已生效。若以后扩展该组合，必须独立证明实际 sandbox、网络与原生配置栈兼容，不能把它视为本次已支持。Claude 工具的可用与允许边界见 [Permissions](https://code.claude.com/docs/en/permissions)。
+
+继承原生模型/effort 而无法冻结完整有效身份时，只允许 fresh Invocation，resume 给出身份不完整诊断。显式模型/effort、角色权限、工具、CLI 版本及 Packet 都可绑定时才允许兼容 resume；不因两次“未填写”就推断原生配置未变，不读取用户凭据来推测身份。历史会话可读但缺少新增身份的旧会话不能自动恢复为新执行。
+
+## 项目 Harness 与委派规则
+
+复用 `project.harness`。发现 AGENTS.md、对应 Provider 的规则入口、项目 Skills/manifest 和引用的知识路径，记录路径及内容哈希；不扫描凭据或整个用户目录。必需 autogo 缺少入口/manifest 或不支持所选 Provider 时给出准备步骤并在启动前停止。可选无 Harness 不阻断。
+
+为每次 Packet 加入委派职责和被发现规则摘要，原生 Provider 通过本机支持的指令入口/系统提示附加机制获得明确边界：xgoal 管理上层状态、分支/提交、环境归属和完成判定；worker 只执行当前角色。项目业务规则继续加载。检测路径、提供给 Agent、可观测读取/回执是三种事实，不能互相替代；日志中没有证明则 loaded 为 unknown。doctor 显示 found/compatible，Invocation 显示 inputs/observations。初始化可以生成项目局部、可审查的 xgoal 委派说明，但不得覆盖 AGENTS.md、克隆全局 Skills 或设置另一份运行状态。
+
+## 受信入口
+
+在 Validator 配置增加 `trustedFiles: []string`（相对仓库根的精确 regular 文件，不支持 glob）。Definition 增加排序去重的 `{path, mode, sha256}`；旧 `trusted_executable_*` 字段保留以读取历史定义。直接 `./entry` 相对 CWD 解析，常见 `sh/bash/python/python3/node/ruby/perl` 的脚本位置按明确的 argv 规则自动加入；不支持或含解释器求值参数的形式必须由操作者显式声明，不猜测任意 shell 语法和传递依赖。Make/npm/内联 shell 的规则入口和必要依赖由 `trustedFiles` 声明，缺少时迁移诊断。CWD 与路径必须 canonical，拒绝逃逸和 symlink；读取固定 Git baseline 的 blob/mode，执行前后检查当前文件同一身份。
+
+`Registry.ProtectedPaths` 提供 xgoal.yaml 与全量受信文件集；Patch 的新旧路径触及这些内容均拒绝，涵盖 rename/delete/mode。失败现场观察调用同一能力，避免“失败后自动修复”绕过信任门禁。Runner 即使被独立调用也核对冻结文件，候选 Tree 中篡改脚本不能执行。直接入口的 legacy hash 可继续验证；新绑定影响 Definition hash，旧 Evidence 不能标为 current。信任更新唯一产品路径是审阅提交新基线并创建新 Goal；approve 或普通 replan 不重绑定。
+
+自包含内联断言可显式声明 `trustedFiles: [xgoal.yaml]`，表示可执行断言全部在冻结配置内；加载其他程序文件时必须列出真实依赖，不能以此声明替代。这样不需另增 inline 信任开关，也不通过猜测 shell 文本来推断传递依赖。
+
+命令识别采用封闭缺省：包装命令、版本解释器和自定义 runner 无显式声明即拒绝。已知直接断言仅包括 `test/true/false/sleep`、`git diff --check` 与 Go `test/vet/version`；Go 自定义 `-exec/-toolexec/-vettool` 仍需声明。宿主可执行程序、系统配置和工具链属于可信本地环境；该文件绑定不是供应链沙箱。
+
+旧 `(config_hash, base_commit, validator_id)` 注册保持唯一且不改写。新增 TrustedFiles 使相同旧键对应不同定义时，返回 `TRUST_BINDING_MIGRATION_REQUIRED` 并让 Work/最终验收进入可操作 Waiting Gate；在配置显式列出脚本依赖、审阅提交新配置并创建新 Goal 后登记新键。保留旧 Definition/Receipt 身份，不为注册迁移扩充第二套版本状态，也不将旧 Evidence 标为当前。
+
+该机制不冻结全部业务源码/测试，不声称发现所有解释器动态导入。验证权威只在所声明的信任闭包内成立；Local Process 不防御同 UID 恶意并发写回，需要保持现有可信仓库前提及运行前后检查。
+
+## 合法结果、Gate 与重试
+
+增加 FailureClass `AGENT_BLOCKED`/`AGENT_FAILED`。AgentResult.Validate 继续接受三种合法状态，消费端把 blocked 转 WAIT_GATE，failed 进入有界修复候选，只有 malformed/缺失结果使用 AGENT_PROTOCOL_INVALID。用类型化错误保存完整 summary/blockers/recommended action 和 Invocation 引用，Failure 保存规范化 fingerprint，Gate 保存脱敏结构化事实。safe scene 只证明能继续，不证明用户问题已回答，不能把 `agent_blocked` 覆盖为 `checkout_retry_required`。
+
+`orchestration.autoRetryLimit` 是非负整数，缺省 0。自动决策需要当前 Work 的总自动重试数小于上限、已完成失败记录属于同一 Work/config、允许的 class、无重复 fingerprint+strategy 且无进展、无必要 Gate、无未完成 Promotion、所有进程/Lease 已结束以及 exact observed Tree/HEAD/index。允许首次失败反馈驱动同一 Work 修复；不以新 session ID/错误措辞作为进展。不自动处理 blocked、policy、scope、环境依赖不明、未知进程或外部编辑。
+
+Store 提供自动续作事务，与人工 Retry 共用现场核验但不自动批准任何 Gate。事务内检查 Goal/active plan/Work version、checkout owner/observed identity、失败 ID/配置、进程闲置、次数和必要 Gate，原子递增计数并记录 kernel actor、Work Ready、checkout retry authorization。人工调用保留 human actor 和原有 CAS。计数存在 Work 上，重启、换 fingerprint 不重置；新 Work/新 Goal 才有新计数。外部写入无法与 SQLite 原子锁定，执行前仍重新 Snapshot，漂移拒绝。
+
+Packet 的可选 prior_attempt 加入实际错误、建议和证据；`decisions[]` 保存最新失败 Attempt 对应已消费 ALLOW 的 `{gate_id, gate_version, answer}`，其他失败的旧回答不注入。决定是用户输入而非不受限系统指令；权限仍从配置/Gate action/scope 解析。工作重试事务只消费 EXEC_COMMAND 的 `agent_blocked/checkout_retry_required` 续作决定，独立权限 Gate 保留自己的动作消费者。拒绝/撤销/未消费过期 Gate 在调度、领取、重试、晋升和完成判断中共用阻断谓词；已消费决定的事实不因时间流逝追溯失效，也不能再次消费。Kernel 已解决的历史规划 Gate 取消 required 标志，与用户撤销权限分开；迁移保持原决定和事件。CLI 的一次“决定并继续”先记录决定，再进入 owner-specific CAS；若第二步遇到外部编辑，保留已生效决定并返回待恢复原因，重试不重复决定。
+
+初始规划有 request/config hash、input Tree 和 generation，不要求尚不存在的 Goal Revision。问题/失败保留在规划 effect/阶段 Gate；续作时新 generation 消费反馈，成功 Proposal 才原子冻结 Revision。Work 续作建新 Attempt。最终验收问题保留 final owner 与当前 Revision/Tree，续作重新准备环境并新建验收 Invocation；不借用一个虚构 Work 修改状态。三条路径保留现有 daemon 项目槽和进程意图记录。
+
+## 环境、场景与 Acceptance
+
+增加 `services[]`：ID、argv、CWD、dependsOn、env.allow、network、readiness 的 argv/timeout/interval 与停止 grace period。配置校验重复/缺失依赖/环及正超时；依赖拓扑排序稳定，停止按逆序。优先复用 Supervisor 的 command Probe，HTTP/业务探针可用已提交受信脚本，不建插件化探针框架。冻结的是启动配置以及明确声明的控制/断言脚本；被测 `python app.py` / `node server.js` 等业务程序只绑定当前候选 Tree，不能因作为服务入口而自动加入 ProtectedPaths。readiness/Validator 的控制与断言入口适用前述受信规则。network 授权仍独立，只启动当前 Validator/Scenario 需要的依赖闭包。
+
+准备环境/服务过程复用 Local Provider/Supervisor 与持久 Owner；start intent 必须在执行前提交，PID/start identity 在进程放行前记录。Kernel 分配项目运行目录下的独立场景目录，服务端点和临时文件通过明确 `XGOAL_*` 值注入，禁止展开任意宿主变量/Secret；配置可声明固定端点，也可由服务向该私有目录发布动态端点供探针/客户端读取。bootstrap 使用同一诊断路径并限制输出，不能只丢弃 stdout/stderr。
+
+配置增加 `scenarios[]`（ID、描述/步骤、services、validators、artifactPaths）以及可选 `acceptance`（场景 IDs 和是否允许安全重放）；Profile 通过 roleProfiles.acceptance 选择。Validator 增加 description/scenario IDs/services。Planner Packet 提供实际能力和场景说明；冻结 Goal 编译器校验引用存在/必要验证器包含在 Criterion 中，不能从名称推断覆盖。旧未描述 Validator 标为未说明覆盖；人工给定合同仍保留，但不能虚构业务能力。
+
+最终验证在同一个准备好的 Environment 生命周期内：核对 Tree → bootstrap/服务 readiness → 配置的 Acceptance 独立 Invocation → 核对 Tree/HEAD/index → 受信最终断言 → hash/封存场景制品及必要业务 Evidence → 逆序停止服务并确认全部进程退出 → 再核对 Tree/HEAD/index 和进程屏障 → Final Report/Completion 提交。Store.FinalizeGoal 的事务除 active Lease 外必须拒绝任何未确认 process_invocations/worker ownership；停止失败不发布 Completed，只保存当前失败和恢复 Gate。Acceptance 只读源码、可操作测试数据，不产生 Patch/Promotion；其 AgentResult 永远是 Claim，后续断言失败必须失败。blocked 打开 Gate并保留日志/现场，服务安全停止后等待；再次运行创建新环境，只有声明可重放的测试场景能自动重演，否则先询问具体外部条件。配置默认不启用 Acceptance，也不新增第4类必需 Work。
+
+服务退出未知使 Cleanup 返回 ErrProcessUnconfirmed，保留项目槽和持久进程记录；恢复先回收拥有的进程再允许新验证。准备失败、探针失败、断言失败、取消都记录阶段/命令/输出引用并执行逆序停止；停止失败优先返回，不能隐藏在 defer。不得删除用户数据或未知资源。
+
+## 实时上下文与操作
+
+新增 Invocation 索引（与已有 process_invocations 分工：前者是 Agent 会话观测，后者是全部子进程的恢复屏障）。字段包含 ID、Goal、owner kind/id/generation、role/Profile、输入与有效配置引用、Provider目录、状态、已持久事件游标/截断状态。规划、Work、Review、Acceptance 在调用前登记；完成后关联会话/结果。进程恢复通过原有 owner 判断安全，不依赖日志索引是否追上。
+
+Adapter 已把脱敏公开事件写为有序不可变文件，复用这些文件作为日志事实，不再逐 token 复制到全局业务 events。EventSink 使用有界异步通知触发索引刷新，不允许慢订阅者阻塞 Adapter/心跳；队列满丢通知不丢已落盘事件，通过目录序号恢复索引。日志 I/O 失败/限额明确标记并取消该会话，回收仍独立执行。stdout/stderr 均有上限与脱敏，截断消息占用预留空间。
+
+Control 提供 Goal 的 invocations、Invocation context 和 logs 页/流（稳定 invocation ID + sequence 游标）。只读解析已登记的私有路径和已校验文件，拒绝任意路径读取；短 ID 定位有唯一性约束。上下文展示 Packet、指令输入、有效配置、公开消息/工具事件和已观察模型，私有推理不展示。
+
+CLI 保留旧 logs <attempt-id> 和默认 JSON，增加按 Goal/role/invocation 查询及 --follow/游标；显式 --format human 展示概览。wait 的人类反馈写 stderr，最终 JSON/退出码保持；heartbeat、last_output、last_material_progress 三个时间独立。新增 ID 补全/唯一前缀解析、版本展示和 Gate 决定后续作便利参数，变更仍传版本 CAS；歧义返回候选且不写入。init 从 go.mod/package.json/已知 Python 测试配置发现入口，不执行依赖安装，未知项目输出覆盖缺口及准备命令。
+
+## 一致导出与迁移
+
+使用已有 `VACUUM INTO` 模式取得数据库一致快照，完整性验证后从快照读取指定 Goal 的结构化状态及引用。在线导出使用独立只读 SQLite 连接和有界 context，不占用控制 Store 的唯一连接；WAL 读快照与心跳/CAS 并发，复制/hash 阶段完全不持有控制连接或写事务。若平台的只读连接不支持该快照入口，返回明确不支持而不回退到锁住控制连接。为兑现本地备份用途可包含该项目的完整数据库快照，清楚标注范围；Goal JSON 只是其投影。只从快照冻结的引用复制不可变制品及已落盘日志序号范围，逐文件路径/regular/mode/size/hash 验证，未索引的较新运行日志不纳入该时间边界。索引滞后但文件存在不破坏已导出边界，清楚展示 durable cursor。
+
+包含完整项目数据库快照时，文件闭包也必须覆盖快照内所有 Goal 的被引用制品；不能只复制选定 Goal 文件而将整库标成完整备份。选定 Goal 的结构化视图是操作焦点，导出范围和其他 Goal 包含事实由 manifest 明示。
+
+使用私有临时导出目录，snapshot/data/files/manifest 的清单最后写入并 fsync/rename；任一缺失/损坏/清理竞态导致 incomplete，不发布 complete。clean 与导出串行或有引用保护，避免导出期间主动删除引用。导出仅本地只读，不提供导入执行或跨机器进程恢复；不要复制宿主凭据、未脱敏原生会话库或可写工作区冒充完成制品。
+
+新增 migration 0011 扩展 failure CHECK 并保留旧 BUDGET_EXHAUSTED 等历史行（不恢复运行功能），重建引用它的 reconcile 表时先复制关系、删除旧 child/parent、重命名并 FK 检查；追加 Work 自动计数。后续 Invocation 表按独立 migration 追加。旧 migrations 不修改。可选 JSON 字段 omitempty，历史 Definition/Packet/Config 可读取；新解释器信任绑定故意改变 Definition hash，当前运行须重新验收。旧冲突配置给出具体字段和迁移步骤，不静默容忍。
+
+运行时升级先停止旧 daemon/确认旧进程归属，沿用迁移备份；回退仅使用升级前备份并重新核对现场，不允许旧二进制写新库或 reset 用户文件。没有生产部署和外部发布动作。
+
+## 验证策略与剩余限制
+
+PLAN-012 验证信任变更和失败恢复；PLAN-013 验证 Profile、规则与实际双 Provider；PLAN-014 从真实服务/客户端证明可选验收及断言错误阻断；PLAN-015 从 CLI/daemon 验证实时日志、决定续作、一致导出和完整发布门禁。每份 Plan 独立 Change Review 后提交，最后按 AC-HR-001–018 对账。真实 Provider 费用与可用性通过原有显式 smoke 入口控制，本 Objective 已授权实际功能验收。
+
+关键负向场景：候选脚本/依赖篡改、入口 mode/symlink/CWD 逃逸、同 fingerprint 机械重试、变化 fingerprint 耗尽总数、旧 generation、人工外部编辑、取消与未知进程、准备/探针/业务断言失败、错误 Acceptance Claim、输入变更或继承身份未知时的 session resume、慢日志读者与损坏制品、长导出同时仍能心跳/CAS/取消和迁移外键历史。fixture Adapter 用于可重复注入故障；实际 Codex/Claude 调用与真实服务从用户入口验收，不能互相替代。
+
+仍不承诺任意测试的语义完备、模型一定遵守规则、同 UID 敌对隔离、共享外部数据自动回滚、未知 Provider 私有上下文读取或本次未运行的完整 Benchmark 成绩。

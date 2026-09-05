@@ -86,7 +86,7 @@ func (s *Store) ConsumeAuthorization(ctx context.Context, gateID string, request
 		}
 		now := s.source.Now().UTC()
 		if !now.Before(gate.ExpiresAt) {
-			if gate.State == domain.GateOpen || gate.State == domain.GateApproved {
+			if gate.Used == 0 && (gate.State == domain.GateOpen || gate.State == domain.GateApproved) {
 				updated, updateErr := tx.ExecContext(ctx, `UPDATE gates SET state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`, domain.GateExpired, now.Format(time.RFC3339Nano), gate.ID, gate.Version)
 				if updateErr != nil {
 					return fmt.Errorf("expire gate %q: %w", gate.ID, updateErr)

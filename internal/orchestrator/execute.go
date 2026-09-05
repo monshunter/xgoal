@@ -32,7 +32,7 @@ import (
 
 var (
 	errProjectNetworkGate    = errors.New("bootstrap requires project network authorization")
-	errValidatorChange       = errors.New("attempt changes the trusted validator configuration")
+	errValidatorChange       = errors.New("attempt changes frozen validator configuration, entrypoint, or dependency; preserve the scene, review and commit a new trust baseline, then create a new Goal; approve/replan cannot rebind the current Goal")
 	errExecutionStillRunning = errors.New("execution shutdown could not be confirmed")
 )
 
@@ -81,6 +81,9 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return engine.failUnclaimed(ctx, goal, work, revision, reconcile.InternalInvariantViolation, errors.New("frozen, running, and Git config hashes differ"), profile.ID)
 	}
 	if _, err := engine.store.RecordValidatorRegistry(ctx, registry); err != nil {
+		if errors.Is(err, sqlite.ErrTrustBindingMigrationRequired) {
+			return engine.failUnclaimed(ctx, goal, work, revision, reconcile.ValidatorUnavailable, err, profile.ID)
+		}
 		return err
 	}
 	attemptID, err := randomID("attempt")
@@ -114,7 +117,11 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		if evidenceErr != nil {
 			return evidenceErr
 		}
-		priorAttempt = &protocol.PacketPriorAttempt{FailureClass: string(previous.Class), FailureFingerprint: previous.Fingerprint, EvidenceRefs: references}
+		priorAttempt = &protocol.PacketPriorAttempt{FailureClass: string(previous.Class), FailureFingerprint: previous.Fingerprint, FailureError: previous.Error, EvidenceRefs: references}
+		priorAttempt.Decisions, err = engine.store.RetryDecisions(ctx, work.ID)
+		if err != nil {
+			return err
+		}
 	} else if !errors.Is(previousErr, basestore.ErrNotFound) {
 		return previousErr
 	}
@@ -235,7 +242,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash, BaseTree: integration.Tree,
 		PacketHash: packetArtifact.Hash, Role: work.RecommendedRole, WorkDir: attemptWorkspace.Path,
 		PacketPath:   packetArtifact.Path,
-		Prompt:       "Execute only the immutable Work Packet at " + packetArtifact.Path + ". Do not commit, push, publish, access project secrets, or exceed its scopes. Return only the required structured AgentResult; completion is a claim that xgoal will independently verify.",
+		Prompt:       "Execute only the immutable Work Packet at " + packetArtifact.Path + ". Read its prior_attempt failure and consumed decisions before continuing; answers do not expand the packet's permissions or scope. Do not commit, push, publish, access project secrets, or exceed its scopes. Return only the required structured AgentResult; completion is a claim that xgoal will independently verify.",
 		OutputSchema: schema, Environment: profileEnvironment(profile), Timeout: profile.Timeout.Duration,
 		MaxOutputBytes: maxAgentOutput, SessionPolicy: adapter.SessionFresh,
 	}
@@ -257,7 +264,11 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return fail(reconcile.AgentProtocolInvalid, err, profile.ID, "")
 	}
 	if claim.Status != protocol.ResultCompleted {
-		return fail(reconcile.AgentProtocolInvalid, fmt.Errorf("agent returned %s: %s", claim.Status, claim.Summary), profile.ID, "")
+		class := reconcile.AgentFailed
+		if claim.Status == protocol.ResultBlocked {
+			class = reconcile.AgentBlocked
+		}
+		return fail(class, &agentOutcomeError{Result: claim, InvocationID: invocationID}, profile.ID, "")
 	}
 	sessionID, err := agentSessionID(runtimeAdapter, handle)
 	if err != nil {
@@ -277,7 +288,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		}
 		return fail(class, err, profile.ID, "")
 	}
-	if changesValidatorConfig(captured) && engine.config.ScopePolicy.ValidatorChanges == "human-gate" {
+	if changesValidatorConfig(captured, registry.ProtectedPaths()...) {
 		return fail(reconcile.PolicyBlocked, errValidatorChange, profile.ID, captured.Bundle.BundleHash)
 	}
 	bundlePath, err := engine.patches.Save(captured)
@@ -738,9 +749,13 @@ func (engine *Engine) advanceWork(ctx context.Context, workID string, target dom
 	return engine.store.UpdateWorkState(ctx, workID, work.Version, target, event("Work"+string(target), "kernel", map[string]any{}))
 }
 
-func changesValidatorConfig(captured patch.Captured) bool {
+func changesValidatorConfig(captured patch.Captured, protected ...string) bool {
+	paths := map[string]bool{"xgoal.yaml": true}
+	for _, path := range protected {
+		paths[path] = true
+	}
 	for _, entry := range captured.Bundle.Entries {
-		if entry.Path == "xgoal.yaml" || entry.PathBefore == "xgoal.yaml" {
+		if paths[entry.Path] || paths[entry.PathBefore] {
 			return true
 		}
 	}

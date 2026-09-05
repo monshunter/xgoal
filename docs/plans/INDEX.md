@@ -14,4 +14,8 @@
 | PLAN-009 | PLAN-009：统一项目身份与 Daemon 生命周期 | [PLAN-009.md](PLAN-009.md) |
 | PLAN-010 | PLAN-010：持久后台规划与跨项目恢复验收 | [PLAN-010.md](PLAN-010.md) |
 | PLAN-011 | PLAN-011：改为当前工作目录执行并移除 Git worktree | [PLAN-011.md](PLAN-011.md) |
+| PLAN-012 | PLAN-012：统一改进合同并保护验收与恢复边界 | [PLAN-012.md](PLAN-012.md) |
+| PLAN-013 | PLAN-013：贯通 Agent Profile 与项目 Harness | [PLAN-013.md](PLAN-013.md) |
+| PLAN-014 | PLAN-014：完成受信环境与场景验收链路 | [PLAN-014.md](PLAN-014.md) |
+| PLAN-015 | PLAN-015：完善实时观测、用户操作与综合验收 | [PLAN-015.md](PLAN-015.md) |
 <!-- AGENT-HARNESS:END INDEX -->

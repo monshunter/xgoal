@@ -165,11 +165,8 @@ func (s *Store) CompleteGoal(
 		if err != nil {
 			return err
 		}
-		var openRequiredGates int
-		if err := tx.QueryRowContext(ctx, `
-SELECT COUNT(*)
-FROM gates
-WHERE goal_id = ? AND required = 1 AND state = ?`, goalID, domain.GateOpen).Scan(&openRequiredGates); err != nil {
+		openRequiredGates, err := countBlockingRequiredGates(ctx, tx, goalID, "", s.source.Now())
+		if err != nil {
 			return fmt.Errorf("count open required gates for goal %q: %w", goalID, err)
 		}
 		result = completion.Evaluate(completion.Input{

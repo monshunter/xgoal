@@ -60,6 +60,7 @@ type Orchestration struct {
 	LeaseTTL                Duration `yaml:"leaseTTL" json:"leaseTTL"`
 	HeartbeatInterval       Duration `yaml:"heartbeatInterval" json:"heartbeatInterval"`
 	NoProgressLimit         int      `yaml:"noProgressLimit,omitempty" json:"noProgressLimit,omitempty"`
+	AutoRetryLimit          int      `yaml:"autoRetryLimit,omitempty" json:"autoRetryLimit,omitempty"`
 	IntegrationBranchPrefix string   `yaml:"integrationBranchPrefix,omitempty" json:"integrationBranchPrefix,omitempty"`
 }
 
@@ -113,6 +114,7 @@ type Validator struct {
 	Type              string      `yaml:"type" json:"type"`
 	Phases            []string    `yaml:"phases" json:"phases"`
 	Argv              []string    `yaml:"argv,omitempty" json:"argv,omitempty"`
+	TrustedFiles      []string    `yaml:"trustedFiles,omitempty" json:"trustedFiles,omitempty"`
 	CWD               string      `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	Timeout           Duration    `yaml:"timeout" json:"timeout"`
 	ExpectedExitCodes []int       `yaml:"expectedExitCodes,omitempty" json:"expectedExitCodes,omitempty"`
@@ -240,6 +242,9 @@ func (c Config) Validate() error {
 	}
 	if c.Orchestration.NoProgressLimit < 0 {
 		return fmt.Errorf("orchestration.noProgressLimit must be non-negative")
+	}
+	if c.Orchestration.AutoRetryLimit < 0 {
+		return fmt.Errorf("orchestration.autoRetryLimit must be non-negative")
 	}
 	if len(c.Agents) == 0 {
 		return fmt.Errorf("at least one agent profile is required")
@@ -378,6 +383,11 @@ func validateValidators(validators []Validator) error {
 			return fmt.Errorf("%s.cwd must be a safe repository-relative path", prefix)
 		}
 		if err := validateNames(prefix+".env.allow", validator.Environment.Allow, validEnvironmentName); err != nil {
+			return err
+		}
+		if err := validateNames(prefix+".trustedFiles", validator.TrustedFiles, func(value string) bool {
+			return value != "" && value != "." && validRelativePath(value) && !strings.ContainsAny(value, "*?[]\r\n")
+		}); err != nil {
 			return err
 		}
 	}

@@ -17,6 +17,8 @@ orchestration:
   leaseTTL: 90s
   heartbeatInterval: 20s
   noProgressLimit: 2
+  # Opt in to a finite number of safe, same-Work automatic repairs. Default: 0.
+  autoRetryLimit: 0
   integrationBranchPrefix: xgoal/
 
 agents:
@@ -73,6 +75,9 @@ validators:
     type: command
     phases: [change, final]
     argv: [sh, scripts/xgoal/gofmt-check.sh]
+    # Direct/interpreter entrypoints are frozen automatically. List any further
+    # control dependencies here (repository-relative; regular files, no globs).
+    trustedFiles: [scripts/xgoal/gofmt-check.sh]
     timeout: 2m
     required: true
 

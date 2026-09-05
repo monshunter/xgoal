@@ -78,9 +78,17 @@ type PacketEnvironment struct {
 }
 
 type PacketPriorAttempt struct {
-	FailureClass       string   `json:"failure_class"`
-	FailureFingerprint string   `json:"failure_fingerprint"`
-	EvidenceRefs       []string `json:"evidence_refs,omitempty"`
+	FailureClass       string           `json:"failure_class"`
+	FailureFingerprint string           `json:"failure_fingerprint"`
+	FailureError       string           `json:"failure_error,omitempty"`
+	EvidenceRefs       []string         `json:"evidence_refs,omitempty"`
+	Decisions          []PacketDecision `json:"decisions,omitempty"`
+}
+
+type PacketDecision struct {
+	GateID      string `json:"gate_id"`
+	GateVersion int64  `json:"gate_version"`
+	Answer      string `json:"answer"`
 }
 
 func (packet WorkPacket) Validate() error {
@@ -126,6 +134,13 @@ func (packet WorkPacket) Validate() error {
 	}
 	if packet.PriorAttempt != nil && (strings.TrimSpace(packet.PriorAttempt.FailureClass) == "" || strings.TrimSpace(packet.PriorAttempt.FailureFingerprint) == "") {
 		return fmt.Errorf("prior_attempt failure_class and failure_fingerprint are required")
+	}
+	if packet.PriorAttempt != nil {
+		for _, decision := range packet.PriorAttempt.Decisions {
+			if decision.GateID == "" || decision.GateVersion <= 0 || strings.TrimSpace(decision.Answer) == "" {
+				return fmt.Errorf("prior_attempt decision requires gate_id, positive gate_version and answer")
+			}
+		}
 	}
 	if packet.RequiredOutputSchema != AgentResultVersion {
 		return fmt.Errorf("required_output_schema must be %q", AgentResultVersion)

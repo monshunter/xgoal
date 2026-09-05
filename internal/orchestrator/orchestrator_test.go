@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,8 +32,24 @@ func TestEngineRejectsFinalValidationPrivateRefMutation(t *testing.T) {
 	runCurrentDirectoryFixture(t, "final-ref")
 }
 
+func TestEnginePreservesLegalBlockedAndFailedResults(t *testing.T) {
+	for _, status := range []string{"blocked", "failed"} {
+		t.Run(status, func(t *testing.T) { runCurrentDirectoryFixture(t, status) })
+	}
+}
+
+func TestEngineAutomaticallyRepairsOnlyWithinConfiguredLimit(t *testing.T) {
+	for _, behavior := range []string{"auto", "auto-exhaust"} {
+		t.Run(behavior, func(t *testing.T) { runCurrentDirectoryFixture(t, behavior) })
+	}
+}
+
+func TestEngineContinuesBlockedResultWithConsumedAnswerAfterRestart(t *testing.T) {
+	runCurrentDirectoryFixture(t, "blocked-answer")
+}
+
 func TestEngineRejectsValidatorAndReviewerSourceMutations(t *testing.T) {
-	for _, phase := range []string{"validator", "reviewer"} {
+	for _, phase := range []string{"validator", "reviewer", "trust"} {
 		t.Run(phase, func(t *testing.T) { runCurrentDirectoryFixture(t, phase) })
 	}
 }
@@ -51,6 +68,16 @@ func runCurrentDirectoryFixture(t *testing.T, behavior string) {
 	project, _ = filepath.EvalSymlinks(project)
 	codex := fixtureCodex(t, root)
 	claude := fixtureClaude(t, root)
+	if strings.HasPrefix(behavior, "blocked") || behavior == "failed" {
+		if err := os.WriteFile(filepath.Join(root, "result-status"), []byte(strings.TrimSuffix(behavior, "-answer")), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if behavior == "auto-exhaust" {
+		if err := os.WriteFile(filepath.Join(root, "result-status"), []byte("failed"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	configurationText := fmt.Sprintf(`apiVersion: xgoal.dev/v1alpha1
 kind: Project
 metadata: {name: fixture}
@@ -90,12 +117,14 @@ validators:
   - id: one-check
     type: command
     phases: [change, final]
+    trustedFiles: [xgoal.yaml]
     argv: [sh, -c, "test -f one.txt"]
     timeout: 5s
     required: true
   - id: two-check
     type: command
     phases: [change, final]
+    trustedFiles: [xgoal.yaml]
     argv: [sh, -c, "test -f two.txt"]
     timeout: 5s
     required: true
@@ -107,6 +136,9 @@ review:
 policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
 report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}
 `, codex, claude)
+	if behavior == "auto" || behavior == "auto-exhaust" {
+		configurationText = strings.Replace(configurationText, "  noProgressLimit: 2\n", "  noProgressLimit: 2\n  autoRetryLimit: 1\n", 1)
+	}
 	if behavior == "final-ref" {
 		configurationText = strings.Replace(configurationText, "test -f one.txt", "test -f one.txt; if test -f two.txt; then git update-ref --no-deref refs/xgoal/goals/goal_e2e/integration HEAD; fi", 1)
 	}
@@ -118,11 +150,27 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 			t.Fatal(err)
 		}
 	}
+	if behavior == "trust" {
+		configurationText = strings.Replace(configurationText, "trustedFiles: [xgoal.yaml]", "trustedFiles: [xgoal.yaml, scripts/check.sh]", 1)
+		configurationText = strings.Replace(configurationText, "test -f one.txt", "sh scripts/check.sh", 1)
+		if err := os.Mkdir(filepath.Join(project, "scripts"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, "scripts/check.sh"), []byte("test -f one.txt\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "trust-mutation"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(project, "xgoal.yaml"), []byte(configurationText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	git(t, project, "init", "-b", "main")
 	git(t, project, "add", "xgoal.yaml")
+	if behavior == "trust" {
+		git(t, project, "add", "scripts/check.sh")
+	}
 	git(t, project, "-c", "user.name=xgoal", "-c", "user.email=xgoal@example.invalid", "commit", "--no-verify", "-m", "fixture")
 	configuration, err := config.LoadFile(filepath.Join(project, "xgoal.yaml"))
 	if err != nil {
@@ -149,6 +197,9 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		{ClientKey: "one", Title: "create one", Objective: "create one.txt", ReadScope: []string{"/**"}, WriteScope: []string{"/one.txt"}, AcceptanceCriteria: []string{"AC-1"}, Validators: []string{"one-check"}, RecommendedRole: domain.RoleImplementer, Required: true},
 		{ClientKey: "two", Title: "create two", Objective: "create two.txt", DependsOn: []string{"one"}, ReadScope: []string{"/**"}, WriteScope: []string{"/two.txt"}, AcceptanceCriteria: []string{"AC-2"}, Validators: []string{"two-check"}, RecommendedRole: domain.RoleImplementer, Required: true},
 	}}
+	if behavior == "trust" {
+		plan.WorkItems[0].WriteScope = append(plan.WorkItems[0].WriteScope, "/scripts/**")
+	}
 	compiled, err := goalcompile.Compile(goalID, goalID+"_revision_1", goalID+"_plan_1", contract, plan, map[string]bool{"one-check": true, "two-check": true})
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +242,121 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if err != nil {
 		t.Fatal(err)
 	}
+	if behavior == "auto" || behavior == "auto-exhaust" {
+		if behavior == "auto-exhaust" {
+			if failed.Goal.State != domain.GoalWaiting || len(failed.Attempts) != 2 || len(failed.Failures) != 2 || failed.Failures[0].Fingerprint == failed.Failures[1].Fingerprint {
+				t.Fatalf("changing failures escaped total retry limit: state=%s attempts=%d failures=%+v", failed.Goal.State, len(failed.Attempts), failed.Failures)
+			}
+		} else {
+			if failed.Goal.State != domain.GoalCompleted || len(failed.Attempts) != 3 || len(failed.Gates) != 0 {
+				t.Fatalf("safe configured repair did not finish: state=%s attempts=%d gates=%d", failed.Goal.State, len(failed.Attempts), len(failed.Gates))
+			}
+			packets, err := workpacket.NewStore(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			feedback := false
+			for _, attempt := range failed.Attempts {
+				artifact, err := packets.Load(attempt.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if artifact.Packet.PriorAttempt != nil {
+					encoded, _ := json.Marshal(artifact.Packet.PriorAttempt)
+					feedback = strings.Contains(string(encoded), `"failure_error"`)
+				}
+			}
+			if !feedback {
+				t.Fatal("automatic repair did not receive actual failure feedback")
+			}
+		}
+		if err := repository.CheckCheckoutIdentity(ctx, originalIdentity); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	if failed.Goal.State != domain.GoalWaiting || len(failed.Attempts) != 1 {
 		t.Fatalf("failed attempt must wait for explicit checkout retry: %+v", failed)
+	}
+	if strings.HasPrefix(behavior, "blocked") || behavior == "failed" {
+		want := "AGENT_" + strings.ToUpper(strings.TrimSuffix(behavior, "-answer"))
+		if len(failed.Failures) != 1 || string(failed.Failures[0].Class) != want || failed.Attempts[0].State == domain.AttemptInvalidOutput {
+			t.Fatalf("legal %s was misclassified: failures=%+v attempts=%+v", behavior, failed.Failures, failed.Attempts)
+		}
+		if !strings.Contains(failed.Failures[0].Error, "Choose cache strategy") {
+			t.Fatalf("result details lost: %+v", failed.Failures)
+		}
+		if strings.HasPrefix(behavior, "blocked") {
+			found := false
+			for _, gate := range failed.Gates {
+				if gate.ReasonCode == "agent_blocked" && strings.Contains(gate.Recommendation, "Choose cache strategy") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("blocked decision overwritten by generic checkout retry: %+v", failed.Gates)
+			}
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := sqlite.Open(ctx, state, clock.Real{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		restored, err := reopened.GoalStatus(ctx, goalID)
+		if err != nil || len(restored.Gates) != 1 || !strings.Contains(string(restored.Gates[0].FactsJSON), `"agent_result"`) || !strings.Contains(string(restored.Gates[0].FactsJSON), `"invocation_id"`) || !strings.Contains(string(restored.Gates[0].FactsJSON), "Choose cache strategy") {
+			t.Fatalf("result context did not survive restart: %v", err)
+		}
+		if behavior == "blocked-answer" {
+			gate := restored.Gates[0]
+			answer := "use local cache for this work"
+			if _, err := reopened.DecideGate(ctx, gate.ID, gate.Version, domain.GateAllow, "fixture-user", answer, sqlite.EventInput{Type: "GateDecided", ActorType: "human", Payload: map[string]any{"answer": answer}}); err != nil {
+				t.Fatal(err)
+			}
+			checkout, err := reopened.Checkout(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, err := reopened.WorkItem(ctx, checkout.WorkID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reopened.RetryCheckoutWork(ctx, work.ID, work.Version, originalIdentity, checkout.ObservedTree, sqlite.EventInput{Type: "WorkRetryRequested", ActorType: "human", Payload: map[string]any{"reason": answer}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(root, "result-status")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "codex-execution-count"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "expected-answer"), []byte(answer), 0600); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := orchestrator.New(ctx, reopened, project, configuration)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := restarted.RunGoal(ctx, goalID); err != nil {
+				t.Fatal(err)
+			}
+			completed, err := reopened.GoalStatus(ctx, goalID)
+			if err != nil || completed.Goal.State != domain.GoalCompleted || len(completed.Attempts) != 3 {
+				t.Fatalf("answer did not reach a successful continuation: state=%s attempts=%d failures=%+v error=%v", completed.Goal.State, len(completed.Attempts), completed.Failures, err)
+			}
+			if completed.Gates[0].Used != 1 || completed.Gates[0].Version != 3 {
+				t.Fatalf("decision consumption not atomic: %+v", completed.Gates[0])
+			}
+			if _, err := os.Stat(filepath.Join(root, "answer-observed")); err != nil {
+				t.Fatal("provider did not observe the decision")
+			}
+			if err := repository.CheckCheckoutIdentity(ctx, originalIdentity); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
 	}
 	checkout, err := store.Checkout(ctx)
 	if err != nil {
@@ -254,6 +418,20 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if behavior != "complete" {
 		if status.Goal.State != domain.GoalWaiting || len(status.Attempts) != 2 {
 			t.Fatalf("phase mutation did not stop execution: %+v", status)
+		}
+		if behavior == "trust" {
+			found := false
+			for _, gate := range status.Gates {
+				if gate.ReasonCode == "trusted_validator_change" && strings.Contains(gate.Recommendation, "new Goal") {
+					found = true
+					if _, err := store.DecideGate(ctx, gate.ID, gate.Version, domain.GateAllow, "fixture-user", "approval must not rebind frozen trust", sqlite.EventInput{Type: "GateDecided", ActorType: "human", Payload: map[string]any{"decision": "ALLOW"}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("trust mutation lacks actionable baseline Gate: %+v", status.Gates)
+			}
 		}
 		for _, work := range status.WorkItems {
 			if work.State == domain.WorkCompleted {
@@ -371,6 +549,24 @@ if [ "${1:-}" = "exec" ] && [ "${2:-}" = "--help" ]; then echo '--json --output-
 if [ "${1:-}" = "exec" ] && [ "${2:-}" = "resume" ] && [ "${3:-}" = "--help" ]; then echo '--json --output-schema'; exit 0; fi
 if [ "${1:-}" = "login" ]; then echo 'Logged in'; exit 0; fi
 counter="$(dirname "$0")/codex-execution-count"
+if [ -f "$(dirname "$0")/expected-answer" ]; then
+  input="$(cat)"
+  packet="$(printf '%s' "$input" | sed -n 's/^Execute only the immutable Work Packet at \(.*\/packet.json\)\..*/\1/p')"
+  grep -F "$(cat "$(dirname "$0")/expected-answer")" "$packet" >/dev/null || exit 17
+  mv "$(dirname "$0")/expected-answer" "$(dirname "$0")/answer-observed"
+fi
+if [ -f "$(dirname "$0")/result-status" ]; then
+  result_status="$(cat "$(dirname "$0")/result-status")"
+  outcome_counter="$(dirname "$0")/outcome-counter"
+  outcome_count="$(cat "$outcome_counter" 2>/dev/null || echo 0)"
+  outcome_count=$((outcome_count + 1))
+  printf '%s' "$outcome_count" > "$outcome_counter"
+  printf '%s\n' '{"type":"thread.started","thread_id":"codex-legal-result"}'
+  printf '%s\n' '{"type":"turn.started"}'
+  printf '%s\n' "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"protocol_version\\\":\\\"xgoal.agent-result/v1alpha1\\\",\\\"status\\\":\\\"$result_status\\\",\\\"summary\\\":\\\"Need a decision $outcome_count\\\",\\\"blockers\\\":[\\\"Choose cache strategy\\\"],\\\"recommended_next_action\\\":\\\"Choose cache strategy and continue\\\"}\"}}"
+  printf '%s\n' '{"type":"turn.completed"}'
+  exit 0
+fi
 if [ ! -f "$counter" ]; then
   : > "$counter"
   printf 'partial\n' > one.txt
@@ -381,6 +577,7 @@ if [ ! -f "$counter" ]; then
   exit 0
 fi
 if [ "$(cat one.txt 2>/dev/null || true)" != "one" ]; then printf 'one\n' > one.txt; changed=one.txt; else printf 'two\n' > two.txt; changed=two.txt; fi
+if [ -f "$(dirname "$0")/trust-mutation" ]; then printf 'exit 0\n' > scripts/check.sh; fi
 sleep 0.1
 session="codex-session-$$"
 printf '%s\n' "{\"type\":\"thread.started\",\"thread_id\":\"$session\"}"

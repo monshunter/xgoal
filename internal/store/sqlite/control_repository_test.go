@@ -356,6 +356,10 @@ func TestLeaseHeartbeatExpiryGenerationAndLateWriteIsolation(t *testing.T) {
 }
 
 func seedReadyWork(t *testing.T, store *Store, workID string) (domain.Goal, domain.WorkItem) {
+	return seedReadyWorkWithContract(t, store, workID, map[string]any{"criteria": []any{"AC-1"}})
+}
+
+func seedReadyWorkWithContract(t *testing.T, store *Store, workID string, contract any) (domain.Goal, domain.WorkItem) {
 	t.Helper()
 	ctx := context.Background()
 	goal := domain.Goal{ID: "goal_" + workID, State: domain.GoalDraft, Version: 1}
@@ -363,7 +367,7 @@ func seedReadyWork(t *testing.T, store *Store, workID string) (domain.Goal, doma
 		t.Fatalf("CreateGoal() error = %v", err)
 	}
 	revision, err := store.FreezeGoalRevision(ctx, GoalRevisionDraft{
-		ID: "goalrev_" + workID, GoalID: goal.ID, Revision: 1, RawGoal: "goal", Contract: map[string]any{"criteria": []any{"AC-1"}},
+		ID: "goalrev_" + workID, GoalID: goal.ID, Revision: 1, RawGoal: "goal", Contract: contract,
 	}, 1, EventInput{Type: "GoalRevisionFrozen", ActorType: "kernel", Payload: map[string]any{}})
 	if err != nil {
 		t.Fatalf("FreezeGoalRevision() error = %v", err)

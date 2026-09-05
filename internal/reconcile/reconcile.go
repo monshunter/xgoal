@@ -17,6 +17,8 @@ type FailureClass string
 
 const (
 	AgentUnavailable           FailureClass = "AGENT_UNAVAILABLE"
+	AgentBlocked               FailureClass = "AGENT_BLOCKED"
+	AgentFailed                FailureClass = "AGENT_FAILED"
 	AgentProtocolInvalid       FailureClass = "AGENT_PROTOCOL_INVALID"
 	AgentTimeout               FailureClass = "AGENT_TIMEOUT"
 	AgentInterrupted           FailureClass = "AGENT_INTERRUPTED"
@@ -34,7 +36,7 @@ const (
 )
 
 var failureClasses = map[FailureClass]struct{}{
-	AgentUnavailable: {}, AgentProtocolInvalid: {}, AgentTimeout: {}, AgentInterrupted: {},
+	AgentUnavailable: {}, AgentBlocked: {}, AgentFailed: {}, AgentProtocolInvalid: {}, AgentTimeout: {}, AgentInterrupted: {},
 	EnvironmentPrepFailed: {}, ScopeViolation: {}, PatchEmpty: {}, PatchConflict: {},
 	ValidatorFailed: {}, ValidatorUnavailable: {}, ReviewBlocked: {}, GoalAmbiguous: {},
 	PolicyBlocked: {}, NoMaterialProgress: {}, InternalInvariantViolation: {},
@@ -175,7 +177,7 @@ func Decide(input Input) (Decision, error) {
 		return Decision{Action: Diagnose, Reason: "same fingerprint and strategy produced no material progress"}, nil
 	}
 	switch input.Failure.Class {
-	case AgentUnavailable, AgentProtocolInvalid, AgentTimeout, AgentInterrupted:
+	case AgentUnavailable, AgentFailed, AgentProtocolInvalid, AgentTimeout, AgentInterrupted:
 		if input.SideEffectsObserved {
 			return Decision{Action: Diagnose, Reason: "agent failure may have produced side effects"}, nil
 		}
@@ -190,7 +192,7 @@ func Decide(input Input) (Decision, error) {
 		return Decision{Action: FixWorkItem, Reason: "candidate must be rebased or repaired against current integration"}, nil
 	case ValidatorFailed:
 		return Decision{Action: FixWorkItem, Reason: "validator failure has current evidence for a fix"}, nil
-	case ValidatorUnavailable, GoalAmbiguous, PolicyBlocked:
+	case AgentBlocked, ValidatorUnavailable, GoalAmbiguous, PolicyBlocked:
 		return Decision{Action: WaitGate, Reason: "human decision or restored authority is required"}, nil
 	case ReviewBlocked:
 		return Decision{Action: FixWorkItem, Reason: "blocking review finding requires a fix or waiver gate"}, nil

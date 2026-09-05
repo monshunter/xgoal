@@ -50,4 +50,8 @@
 | REVIEW-045-change-current-directory | REVIEW-045：PLAN-011 当前主目录执行 Change Review | [REVIEW-045-change-current-directory.md](REVIEW-045-change-current-directory.md) |
 | REVIEW-046-design-planning-lifecycle | REVIEW-046：后台规划配置与进程归属细化审查 | [REVIEW-046-design-planning-lifecycle.md](REVIEW-046-design-planning-lifecycle.md) |
 | REVIEW-047-change-durable-planning | REVIEW-047：持久规划、执行归属与恢复变更审查 | [REVIEW-047-change-durable-planning.md](REVIEW-047-change-durable-planning.md) |
+| REVIEW-048-plans-runtime-harness | REVIEW-048：PLAN-012 至 PLAN-015 运行时 Harness Plan Review | [REVIEW-048-plans-runtime-harness.md](REVIEW-048-plans-runtime-harness.md) |
+| REVIEW-049-runtime-harness-spec | REVIEW-049：OBJ-004 运行时 Harness 产品 Spec Review | [REVIEW-049-runtime-harness-spec.md](REVIEW-049-runtime-harness-spec.md) |
+| REVIEW-050-runtime-harness-design | REVIEW-050：OBJ-004 运行时 Harness Design Review | [REVIEW-050-runtime-harness-design.md](REVIEW-050-runtime-harness-design.md) |
+| REVIEW-051-runtime-trust-recovery | REVIEW-051：PLAN-012 受信验收与恢复边界 Change Review | [REVIEW-051-runtime-trust-recovery.md](REVIEW-051-runtime-trust-recovery.md) |
 <!-- AGENT-HARNESS:END INDEX -->

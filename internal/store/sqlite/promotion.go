@@ -145,11 +145,8 @@ WHERE attempt.id = ?`, request.LeaseID, request.BundleHash, request.AttemptID).S
 				return fmt.Errorf("promotion evidence %q is stale", evidenceID)
 			}
 		}
-		var openGates int
-		if err := tx.QueryRowContext(ctx, `
-SELECT COUNT(*) FROM gates
-WHERE goal_id = ? AND required = 1 AND state = 'OPEN'
-  AND (work_item_id IS NULL OR work_item_id = ?)`, request.GoalID, request.WorkItemID).Scan(&openGates); err != nil {
+		openGates, err := countBlockingRequiredGates(ctx, tx, request.GoalID, request.WorkItemID, s.source.Now())
+		if err != nil {
 			return err
 		}
 		if openGates != 0 {

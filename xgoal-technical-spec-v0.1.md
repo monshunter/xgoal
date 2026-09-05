@@ -7,7 +7,7 @@
 > **实现语言**：Go  
 > **目标平台**：macOS、Linux  
 > **配套文档**：《xgoal 产品设计 SPEC v0.1》
-> **状态**：v0.1 技术实现与发布验收完成；真实三组 Provider Benchmark 待显式运行
+> **状态**：v0.1 技术基线已验收；OBJ-004 运行时 Harness 增量正在实施，见第 35 节；真实三组 Provider Benchmark 待显式运行
 
 ---
 
@@ -2047,3 +2047,18 @@ v0.1 成功的标志不是“同时跑了多少 Agent”，而是：**系统在�
 - Claude Code CLI：以 Print Mode、JSON/Stream JSON、JSON Schema、会话恢复、工具白名单和权限模式的实际 Probe 结果为准。
 
 > Agent CLI 属于外部演进依赖。xgoal 必须把版本探测、能力协商和 Adapter Contract Test 视为发布功能，而不是安装说明中的假设。
+
+---
+
+## 35. 运行时 Harness 增量技术合同（OBJ-004）
+
+本节细化既有 Profile、Environment、Validator、Reconcile、Control 与 Store 接缝，不改变 SQLite/Git/文件分工、当前目录串行、Lease Generation、Effect Journal 或 Completion Predicate。产品验收由产品 SPEC 的 AC-HR-001–018 拥有；组件接入和迁移取舍由 [DESIGN-007](docs/architecture/DESIGN-007-runtime-harness.md) 拥有。增量尚在实施，旧章节勾选仅证明其历史范围。
+
+1. **角色和 Invocation**：增加可选 `acceptance` 角色，默认三角色不变。逻辑角色约束职责/权限，`agents[]` Profile 承载模型、effort、CLI 非交互参数和工具；`orchestration.roleProfiles` 可显式选择 ID。初始规划绑定 request/config/input Tree/generation，其余执行绑定冻结 Goal Revision。验收会话是最终验证中的独立 Invocation，复用有归属的进程生命周期，不增加 Manager Agent、并行写槽或由 Claim 直接通过的 Evidence。
+2. **统一执行配置**：所有调用路径解析同一有效配置并记录来源和 CLI 版本；请求模型与 Provider 可观测实际模型分开。Codex 使用 exec、结构化 JSONL、`--model` 和 `model_reasoning_effort` 覆盖；Claude 使用 print/stream-json、`--model`、`--effort`。权限默认非交互，角色上限与已声明 Profile 必须兼容。Unsupported/冲突组合执行前拒绝；无法被动证明的模型能力只能通过实际请求确认。有效配置进入会话恢复身份。
+3. **项目 Harness**：发现目标项目规则/Skills 作为知识输入，以文件路径/内容哈希记录发现，与 Agent 实际加载观察分开。必需 Harness 缺失或 Provider 不兼容先拒绝。由 xgoal 注入最小委派职责，避免原生 Agent 另起提交/分支/上层调度循环，不复制一套可写状态或用户全局配置。
+4. **受信验收**：Definition 冻结直接入口、解释器脚本及显式 `trustedFiles` 的 canonical 仓库路径、Git mode、SHA-256。入口相对 Validator CWD 解析，显式文件相对仓库根。候选 Patch 和执行前后都校验；基线不从不受信候选 Tree 重新生成。普通 replan 不更新信任；用户审阅提交新基线并创建新 Goal。旧 Definition 仍可读取，新增绑定改变定义哈希使旧 Evidence 过期。
+5. **环境和场景**：配置描述服务依赖、有界 readiness 和环境白名单；Kernel 通过现有 Local Provider/Supervisor 准备、启动、验证、逆序停止，持久进程意图与身份先于执行。场景关联服务、步骤、受信业务 Validator 与制品；Planner 接收能力说明。可选 Acceptance 操作场景后仍运行确定性断言，整个阶段前后核对最终 Tree/HEAD/index。bootstrap/服务诊断落入私有运行目录并脱敏，退出不明保留执行归属。
+6. **失败和恢复**：增加 `AGENT_BLOCKED`、`AGENT_FAILED`，合法结果不再归为协议损坏；原始结构化事实与 Invocation 保留在 Gate/制品。有限自动修复由配置授权并受总数、重复无进展和当前现场约束；人工与自动 actor 区分。Gate 决定通过版本 CAS，owner-specific 续作消费该决定：初始规划下一 generation、Work 新 Attempt、最终验收重新进入同一 Revision/Tree。配置/现场漂移和不确认退出拒绝续作。
+7. **观测和导出**：Invocation 索引连接四角色与有界脱敏公开事件，稳定序号游标可恢复读取；日志通道与低频业务事件/心跳解耦。上下文只暴露输入与 Provider 可观测数据。新增显式 human 展示、wait 反馈、定位/补全和 Gate 续作，不改变默认 JSON/退出码。SQLite 一致快照加关联不可变文件校验构成只读导出；完成清单最后发布，未知/损坏引用导致不完整失败，不能用复制 WAL 主文件代替一致备份。
+8. **兼容和迁移**：新增可选字段用 `omitempty` 保持缺省旧输入的 canonical 身份；新增 SQLite migration 保留历史失败与外键关系，不修改旧 migration。旧安全配置保持行为，过去被忽略的冲突权限或无法确定入口的缺失依赖声明需显式迁移诊断。新增受信文件绑定与旧注册键冲突时返回 TRUST_BINDING_MIGRATION_REQUIRED，保留旧定义/注册并要求显式配置声明、审阅提交新基线和新 Goal。状态库升级前沿用一致备份，回退旧二进制只能使用升级前备份，不能降级写新库。历史 tokens/cost/budget 功能不恢复。

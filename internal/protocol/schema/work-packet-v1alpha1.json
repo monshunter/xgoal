@@ -72,7 +72,17 @@
       "properties": {
         "failure_class": {"type": "string", "minLength": 1},
         "failure_fingerprint": {"type": "string", "minLength": 1},
-        "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        "failure_error": {"type": "string"},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "decisions": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["gate_id", "gate_version", "answer"],
+          "properties": {
+            "gate_id": {"type": "string", "minLength": 1},
+            "gate_version": {"type": "integer", "minimum": 1},
+            "answer": {"type": "string", "minLength": 1}
+          }
+        }}
       }
     },
     "required_output_schema": {"const": "xgoal.agent-result/v1alpha1"}

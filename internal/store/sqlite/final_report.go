@@ -125,7 +125,7 @@ func (s *Store) FinalizeGoal(
 		if err != nil {
 			return err
 		}
-		openGates, err := countOpenRequiredGates(ctx, tx, goalID)
+		openGates, err := countBlockingRequiredGates(ctx, tx, goalID, "", s.source.Now())
 		if err != nil {
 			return err
 		}
@@ -399,12 +399,6 @@ JOIN work_items work ON work.id = attempt.work_item_id
 JOIN plan_revisions plan ON plan.id = work.plan_revision_id
 JOIN goal_revisions revision ON revision.id = plan.goal_revision_id
 WHERE revision.goal_id = ? AND finding.state = 'OPEN' AND finding.severity IN ('blocker','high')`, goalID).Scan(&count)
-	return count, err
-}
-
-func countOpenRequiredGates(ctx context.Context, tx *sql.Tx, goalID string) (int, error) {
-	var count int
-	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM gates WHERE goal_id = ? AND required = 1 AND state = ?`, goalID, domain.GateOpen).Scan(&count)
 	return count, err
 }
 

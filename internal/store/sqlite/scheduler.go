@@ -58,12 +58,12 @@ WHERE goal.id = ?
       SELECT 1
       FROM gates gate_record
       WHERE gate_record.goal_id = goal.id
-        AND gate_record.state = ?
+        AND `+gateBlocksExecution+`
         AND gate_record.required = 1
         AND (gate_record.work_item_id IS NULL OR gate_record.work_item_id = work_items.id)
   )
 ORDER BY work_items.id
-LIMIT 1`, goalID, domain.GoalRunning, domain.PlanActive, domain.WorkReady, domain.GateOpen).Scan(&workID)
+LIMIT 1`, goalID, domain.GoalRunning, domain.PlanActive, domain.WorkReady, s.source.Now().UTC().Format(time.RFC3339Nano)).Scan(&workID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.WorkItem{}, fmt.Errorf("ready work for goal %q: %w", goalID, basestore.ErrNotFound)
 	}
@@ -103,7 +103,7 @@ WHERE goal_revision.goal_id = ?
       SELECT 1
       FROM gates gate_record
       WHERE gate_record.goal_id = ?
-        AND gate_record.state = ?
+        AND `+gateBlocksExecution+`
         AND gate_record.required = 1
         AND (gate_record.work_item_id IS NULL OR gate_record.work_item_id = work.id)
   )
@@ -115,7 +115,7 @@ ORDER BY work.id`,
 		domain.DependencyHard,
 		domain.WorkCompleted,
 		goalID,
-		domain.GateOpen,
+		s.source.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return fmt.Errorf("find ready work for goal %q: %w", goalID, err)

@@ -94,6 +94,7 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	var execution supervisor.Execution
 	var runErr error
 	var checkoutErr error
+	var trustErr error
 	limiter := &outputLimiter{remaining: request.MaxOutputBytes}
 	preflightContext, stopPreflight := context.WithTimeout(ctx, 30*time.Second)
 	checkoutErr = runner.environment.VerifyTree(preflightContext, runner.handle, request.TreeHash)
@@ -103,7 +104,10 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	if checkoutErr != nil {
 		runErr = checkoutErr
 	} else if err := verifyTrustedExecutable(runner.handle.Worktree, definition); err != nil {
-		runErr = err
+		trustErr = fmt.Errorf("%w: %v", ErrTrustedFileChanged, err)
+		runErr = trustErr
+	} else if err := verifyTrustedFiles(runner.handle.Worktree, definition); err != nil {
+		trustErr, runErr = err, err
 	} else {
 		execution, runErr = runner.environment.RunCommand(runContext, runner.handle, environment.CommandSpec{
 			Argv: definition.Argv, CWD: definition.CWD, EnvironmentAllowlist: definition.EnvironmentAllowlist,
@@ -122,6 +126,15 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 		}
 	}
 	stopVerify()
+	if err := verifyTrustedFiles(runner.handle.Worktree, definition); err != nil {
+		trustErr = errors.Join(trustErr, err)
+		if !execution.StartedAt.IsZero() {
+			result = protocol.CommandFailed
+		}
+	}
+	if trustErr != nil {
+		_, _ = fmt.Fprintf(&limitedLog{file: stderr, limiter: limiter}, "\nxgoal trust verification failed: %v\n", trustErr)
+	}
 	if checkoutErr != nil {
 		_, _ = fmt.Fprintf(&limitedLog{file: stderr, limiter: limiter}, "\nxgoal checkout verification failed: %v\n", checkoutErr)
 	}
@@ -154,8 +167,8 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	if err := writeReceipt(runner.root, receipt); err != nil {
 		return protocol.CommandReceipt{}, err
 	}
-	if checkoutErr != nil {
-		return receipt, checkoutErr
+	if checkoutErr != nil || trustErr != nil {
+		return receipt, errors.Join(checkoutErr, trustErr)
 	}
 	if ctx.Err() != nil && !errors.Is(runErr, context.DeadlineExceeded) {
 		return receipt, ctx.Err()

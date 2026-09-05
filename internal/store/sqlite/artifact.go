@@ -332,6 +332,8 @@ func (s *Store) EnvironmentArtifact(ctx context.Context, id string) (Environment
 	return readEnvironmentArtifact(ctx, s.db, id)
 }
 
+var ErrTrustBindingMigrationRequired = errors.New("TRUST_BINDING_MIGRATION_REQUIRED: preserve the historical Goal and Evidence; explicitly declare trustedFiles for validator entrypoints in xgoal.yaml, review and commit that configuration as a new trust baseline, then create a new Goal; approve/replan cannot upgrade this frozen registration")
+
 func (s *Store) RecordValidatorRegistry(ctx context.Context, registry *validator.Registry) (int, error) {
 	if registry == nil || !artifactObjectID(registry.BaseCommit()) || !artifactObjectID(registry.BaseTree()) || !artifactSHA256(registry.ConfigHash()) {
 		return 0, errors.New("validator registry is required")
@@ -383,6 +385,15 @@ INSERT INTO validator_definitions(
 
 			registration, err := readValidatorRegistrationArtifact(ctx, tx, registry.ConfigHash(), registry.BaseCommit(), item.definition.ID)
 			if err == nil {
+				if registration.DefinitionHash != item.definition.Hash && len(item.definition.TrustedFiles) > 0 {
+					previous, err := readValidatorDefinitionArtifact(ctx, tx, registration.DefinitionHash)
+					if err != nil {
+						return err
+					}
+					if len(previous.Definition.TrustedFiles) == 0 {
+						return fmt.Errorf("validator %q: %w", item.definition.ID, ErrTrustBindingMigrationRequired)
+					}
+				}
 				if registration.BaseTree != registry.BaseTree() || registration.DefinitionHash != item.definition.Hash {
 					return fmt.Errorf("validator registration %q: %w", item.definition.ID, basestore.ErrIdempotencyConflict)
 				}

@@ -9,5 +9,6 @@
 | DESIGN-004-m5-control-daemon | DESIGN-004：确定性控制面、项目隔离与持久后台执行 | [DESIGN-004-m5-control-daemon.md](DESIGN-004-m5-control-daemon.md) |
 | DESIGN-005-m6-finalization-release | DESIGN-005：M6 最终闭环、Benchmark 与发布 | [DESIGN-005-m6-finalization-release.md](DESIGN-005-m6-finalization-release.md) |
 | DESIGN-006-cobra-cli | DESIGN-006：Cobra CLI 迁移设计 | [DESIGN-006-cobra-cli.md](DESIGN-006-cobra-cli.md) |
+| DESIGN-007-runtime-harness | DESIGN-007：运行时 Harness 接入、恢复与观测 | [DESIGN-007-runtime-harness.md](DESIGN-007-runtime-harness.md) |
 | THREAT-MODEL-v0.1 | xgoal v0.1 威胁模型 | [THREAT-MODEL-v0.1.md](THREAT-MODEL-v0.1.md) |
 <!-- AGENT-HARNESS:END INDEX -->

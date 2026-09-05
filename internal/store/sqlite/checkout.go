@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/gitrepo"
+	"github.com/monshunter/xgoal/internal/reconcile"
+	"github.com/monshunter/xgoal/internal/redact"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/workspace"
 )
@@ -217,7 +220,27 @@ func workGoalID(ctx context.Context, q rowQueryer, work domain.WorkItem) (string
 	return id, err
 }
 
+var ErrAutomaticRetryDenied = errors.New("AUTOMATIC_RETRY_DENIED: bounded automatic repair is exhausted or the failure is not eligible")
+
+type AutomaticRetry struct {
+	FailureID  string
+	ConfigHash string
+	Limit      int
+}
+
+func (s *Store) AutomaticRetryCheckoutWork(ctx context.Context, workID string, expectedVersion int64, identity gitrepo.CheckoutIdentity, tree string, authorization AutomaticRetry, event EventInput) (domain.WorkItem, error) {
+	if authorization.Limit <= 0 || authorization.FailureID == "" || authorization.ConfigHash == "" || event.ActorType != "kernel" {
+		return domain.WorkItem{}, ErrAutomaticRetryDenied
+	}
+	return s.retryCheckoutWork(ctx, workID, expectedVersion, identity, tree, &authorization, event)
+}
+
 func (s *Store) RetryCheckoutWork(ctx context.Context, workID string, expectedVersion int64, identity gitrepo.CheckoutIdentity, tree string, event EventInput) (domain.WorkItem, error) {
+	return s.retryCheckoutWork(ctx, workID, expectedVersion, identity, tree, nil, event)
+}
+
+func (s *Store) retryCheckoutWork(ctx context.Context, workID string, expectedVersion int64, identity gitrepo.CheckoutIdentity, tree string, automatic *AutomaticRetry, event EventInput) (domain.WorkItem, error) {
+	event.Payload = redact.Value(event.Payload)
 	prepared, err := prepareEvent(event)
 	if err != nil {
 		return domain.WorkItem{}, err
@@ -259,12 +282,27 @@ func (s *Store) RetryCheckoutWork(ctx context.Context, workID string, expectedVe
 		if current.GoalID != goalID || (current.WorkID != workID && (current.WorkID != "" || current.AcceptedTree != tree)) || current.Identity != identity || current.ObservedTree != tree {
 			return ErrCheckoutConflict
 		}
-		if err := checkoutIdle(ctx, tx); err != nil {
+		if err := executionIdle(ctx, tx); err != nil {
 			return err
+		}
+		if automatic != nil {
+			if goal.State != domain.GoalRunning || work.State != domain.WorkReconciling {
+				return ErrAutomaticRetryDenied
+			}
+			var eligible int
+			// This is an authorization check, not a second reconciliation policy:
+			// bind the newest failure, immutable revision/config, repetition and total.
+			err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM failure_records f JOIN goal_revisions r ON r.id=? JOIN work_items w ON w.id=f.work_item_id WHERE f.id=? AND f.goal_id=? AND f.work_item_id=? AND f.config_hash=? AND f.goal_revision_hash=r.contract_hash AND json_extract(r.contract_json,'$.config_hash')=f.config_hash AND f.repeat_count=1 AND f.failure_class IN (?,?,?,?,?) AND w.auto_retry_count<? AND f.id=(SELECT id FROM failure_records WHERE work_item_id=? ORDER BY created_at DESC,id DESC LIMIT 1)`, goal.ActiveRevisionID, automatic.FailureID, goalID, workID, automatic.ConfigHash, reconcile.AgentFailed, reconcile.AgentProtocolInvalid, reconcile.AgentTimeout, reconcile.AgentInterrupted, reconcile.ValidatorFailed, automatic.Limit, workID).Scan(&eligible)
+			if err != nil {
+				return err
+			}
+			if eligible != 1 {
+				return ErrAutomaticRetryDenied
+			}
 		}
 		now := s.source.Now().UTC().Format(time.RFC3339Nano)
 		// Explicit retry resolves only the checkout retry decision, never another permission Gate.
-		rows, err := tx.QueryContext(ctx, `SELECT id FROM gates WHERE goal_id=? AND work_item_id=? AND reason_code='checkout_retry_required' AND action='EXEC_COMMAND' AND state='OPEN'`, goalID, workID)
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM gates WHERE goal_id=? AND work_item_id=? AND reason_code='checkout_retry_required' AND action='EXEC_COMMAND' AND state='OPEN' AND julianday(expires_at)>julianday(?) AND ?=0`, goalID, workID, now, boolInteger(automatic != nil))
 		if err != nil {
 			return err
 		}
@@ -283,7 +321,13 @@ func (s *Store) RetryCheckoutWork(ctx context.Context, workID string, expectedVe
 			return err
 		}
 		for _, id := range gateIDs {
-			_, err = tx.ExecContext(ctx, `UPDATE gates SET state='APPROVED',decision='ALLOW',decided_by='local-user',decision_reason='explicit checkout work retry',decided_at=?,used=max_uses,version=version+1,updated_at=? WHERE id=? AND state='OPEN'`, now, now, id)
+			reason := "explicit checkout work retry"
+			if payload, ok := event.Payload.(map[string]any); ok {
+				if text, ok := payload["reason"].(string); ok && strings.TrimSpace(text) != "" {
+					reason = text
+				}
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE gates SET state='APPROVED',decision='ALLOW',decided_by='local-user',decision_reason=?,decided_at=?,used=max_uses,version=version+1,updated_at=? WHERE id=? AND state='OPEN'`, reason, now, now, id)
 			if err != nil {
 				return err
 			}
@@ -295,12 +339,24 @@ func (s *Store) RetryCheckoutWork(ctx context.Context, workID string, expectedVe
 				return err
 			}
 		}
-		var blocking int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM gates WHERE goal_id=? AND required=1 AND state='OPEN'`, goalID).Scan(&blocking); err != nil {
+		blocking, err := countBlockingRequiredGates(ctx, tx, goalID, "", s.source.Now())
+		if err != nil {
 			return err
 		}
 		if blocking != 0 {
 			return fmt.Errorf("other required gates must be resolved before retry: %w", basestore.ErrAuthorizationDenied)
+		}
+		if automatic == nil {
+			// Consume only continuation decisions for this failure. Permission
+			// Gates retain their own action/scope consumer and are never broadened.
+			if err := s.consumeRetryDecisions(ctx, tx, goalID, workID, prepared); err != nil {
+				return err
+			}
+		}
+		if automatic != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE work_items SET auto_retry_count=auto_retry_count+1 WHERE id=?`, workID); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE work_items SET state='READY',version=version+1,updated_at=? WHERE id=? AND version=?`, now, workID, expectedVersion); err != nil {
 			return err

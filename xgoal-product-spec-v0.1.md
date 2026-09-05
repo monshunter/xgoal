@@ -5,7 +5,7 @@
 > **版本**：v0.1
 > **日期**：2026-08-26  
 > **作者**：monshunter  
-> **状态**：v0.1 功能实现与发布验收完成；真实三组 Provider Benchmark 待显式运行
+> **状态**：v0.1 基线已验收；OBJ-004 运行时 Harness 增量正在实施，见第 20 节；真实三组 Provider Benchmark 待显式运行
 
 ---
 
@@ -212,7 +212,7 @@ Codex/Claude CLI 访问其模型供应商的控制面连接是 xgoal 核心执�
 
 ### P-012 奥卡姆剃刀
 
-MVP 只保留形成闭环所需的最小角色、状态和组件：Planner、Implementer、Reviewer 是逻辑角色；环境管理器和 Validator 是确定性服务，不包装成 Agent。
+默认只保留形成闭环所需的 Planner、Implementer、Reviewer 三个逻辑角色；环境管理器和 Validator 是确定性服务，不包装成 Agent。需要根据运行反馈交互操作时，可显式启用 Acceptance 会话；它只辅助执行场景、提出问题和采集事实，不能认证完成。具体边界见第 20 节。
 
 ---
 
@@ -367,6 +367,7 @@ goal_revision:
 | Planner | 把 Goal Contract 转换为 Work Graph；识别依赖、风险和验证需求 | 只读项目；输出结构化计划 | 不直接修改业务代码；不自行放宽目标；不把临时命令直接注册为受信验证器 |
 | Implementer | 在一个 Work Item 范围内修改代码并提供实现说明 | 当前项目目录在 Scope 内可写；受策略限制的命令 | 不写入范围外文件；不推送远端；不批准自己的最终 Review |
 | Reviewer | 从正确性、回归、范围和验收缺口角度审查补丁 | 只读代码、diff、证据；输出结构化 Finding | 不直接重写实现，除非系统创建独立 Fix Work Item；不把“看起来没问题”作为完成证据 |
+| Acceptance（可选） | 根据受信场景与实时反馈操作测试环境，报告观察、阻塞与制品引用 | 源码只读；仅使用显式配置的测试工具和环境 | 不修改实现或受信断言，不晋升代码，不以自身 Claim 生成通过 Evidence |
 
 说明：同一个底层 Agent Runtime 可以承担不同角色，但 Standard 模式下 Implementer 与 Reviewer 应使用独立会话；高风险项目可配置不同供应商以降低相关性错误。
 
@@ -445,9 +446,9 @@ goal_revision:
 
 #### FR-021：有界分派
 
-- 每次 Invocation 只对应一个 Attempt 和一个 Work Item。
-- 输入使用 Fresh Work Packet，不依赖不可审计的长期聊天历史。
-- Work Packet 包含 Goal Revision、任务边界、验收、环境事实、既有证据、失败摘要和输出 Schema。
+- 每次 Invocation 只有一个持久 owner：规划请求、Work Attempt 或最终验收。初始 Planner 绑定 Goal ID、不可变规划请求/配置哈希、输入 Tree 与 generation；生成合同并校验后才冻结 Goal Revision。其余调用绑定已存在的 Goal Revision，所有调用具有唯一 Invocation 身份。
+- 输入使用对应 owner 的不可变 Packet，不依赖不可审计的长期聊天历史。
+- Packet 包含 owner 输入身份、任务边界、验收、环境事实、既有证据、失败摘要和输出 Schema；Revision 尚未产生时使用规划请求身份。
 - 系统必须能够取消、超时和回收 Agent 子进程。
 
 #### FR-022：租约与去重
@@ -757,6 +758,7 @@ v0.1 发布硬门槛：
 - Codex CLI、Claude Code CLI 两个适配器。
 - Goal Contract、单节点/顺序 Work Graph。
 - Planner、Implementer、Reviewer 三种逻辑角色。
+- 可显式配置独立 Acceptance 辅助会话，默认关闭；确定性 Validator 仍拥有验收事实。
 - 当前目录独占、私有 index 快照、对象级 Patch 校验、原地复验和串行 Promotion。
 - 配置化 Validator、Evidence、Finding 和 Human Gate。
 - SQLite 状态、追加事件、Lease、幂等写回和崩溃恢复。
@@ -868,7 +870,7 @@ v0.1 发布硬门槛：
 - [x] **AC-FR-010**：自然语言、文件和 stdin 目标均能生成并校验 Goal Contract；原始输入、Config Hash 和创建者可追溯，关键缺口进入 Gate 而非被 Agent 猜测。
 - [x] **AC-FR-011**：Planner 输出能形成版本化 Work Graph；环路、缺失依赖、写 Scope 冲突、缺失 Validator 和无界 Work Item 会被确定性拒绝或转入 Finding/Gate。
 - [x] **AC-FR-020**：Codex 与 Claude Agent Profile 均能做版本与能力协商，分别展示 Provider Transport/认证来源、Project Network 和隔离限制；不兼容版本 Fail Closed。
-- [x] **AC-FR-021**：每个 Invocation 只绑定一个 Attempt、Work Item 和不可变 Work Packet，Kernel 能监督事件、限制输出、超时、取消和回收进程。
+- [x] **AC-FR-021**（历史 Work 执行基线）：Work Invocation 绑定一个 Attempt、Work Item 和不可变 Work Packet，Kernel 能监督事件、限制输出、超时、取消和回收进程。初始规划与最终验收的 owner 身份及增量续作改由 AC-HR-008/011 验收，本勾选不证明该增量已完成。
 - [x] **AC-FR-022**：同一 Work Item 同时最多一个 Active Lease；获取、心跳、Generation、过期读回和幂等写回在竞争与重启测试中成立。
 - [x] **AC-FR-030**：全部 Attempt 在当前目录串行执行且不创建 Git worktree；基础与结果 Tree 可归因，完整文件变化被捕获，用户 HEAD/index 不被系统快照改动，范围外或逃逸变化保留并进入 Quarantine。
 - [x] **AC-FR-031**：受信 bootstrap、build、test、service 与健康探针可在 Local Provider 中准备、监督和清理；失败产生 Environment Evidence。
@@ -945,4 +947,111 @@ Evidence Closure 负责“何时可以说完成”
 - OpenAI Codex CLI：非交互执行、JSONL 事件、结构化输出、会话恢复和 sandbox 能力。
 - Anthropic Claude Code CLI：Print Mode、JSON/Stream JSON、JSON Schema、会话恢复、工具白名单与权限模式。
 
+---
+
+## 20. 运行时 Harness 增量合同（OBJ-004）
+
+本节补充并细化第 9–11 节，服务于五项问题：验收角色、Agent 配置、运行框架稳定性、状态存储和用户观测。这里定义目标行为；下方未勾选验收项不代表已经实现。对应技术边界见技术 SPEC 第 35 节与 `docs/architecture/DESIGN-007-runtime-harness.md`。
+
+### 20.1 最小角色与验收链
+
+默认三角色足够承担计划、实现和独立审查。自动启动/回收环境、readiness、执行断言、绑定 Evidence、决定完成均由 Kernel 负责。新增可选 `acceptance` 逻辑角色只解决动态场景中需要阅读反馈并继续操作的任务，不新增管理 Agent 或第二套调度器。
+
+Acceptance 使用独立 Profile/会话，读取冻结场景、最终 Tree、环境端点和已有证据，源码前后必须保持相同身份。它可操作明确授权的测试服务；不能修改受信验收入口、扩大网络/工具权限或自行将 Criterion 标为通过。`completed` 只表示会话结束，系统仍执行同一最终 Tree 的受信业务断言；断言失败、缺失或过期都阻止完成。未配置 Acceptance 时，原有三角色流程保持可用。独立 Reviewer 与可选 Acceptance 职责不同，互不替代。
+
+受信 Validator 需说明验证能力、适用场景和局限；Planner 只能从这些能力选择覆盖 Criterion 的验证器，不能将 `git diff --check` 当作业务行为证明。无可证明覆盖的 Criterion 保持 Unknown 或进入 Gate。场景可以关联环境依赖、客户端断言及日志/截图/报告等制品。服务已启动、HTTP 200 和 Agent 自述均不能单独替代业务断言。
+
+### 20.2 五个配置维度与有效身份
+
+| 维度 | Owner 与行为 |
+| --- | --- |
+| xgoal 编排模式 | Goal 的 Fast/Standard 决定审查与交付流程。 |
+| 逻辑角色 | 定义职责、输出协议和权限上限；调度可显式绑定 Profile ID。 |
+| Provider 交互方式 | 有界非交互执行；原生 plan/auto/交互提问模式不能等同于 xgoal 模式。需要用户决定时形成持久 Gate。 |
+| 模型与思考深度 | Agent Profile 声明可选模型和 Provider 支持的 effort；未声明时如实记录继承原生配置，不捏造实际值。 |
+| 权限与工具 | Profile 请求与角色上限共同决定有效权限，不能因选了某个模型或模式扩大权限。 |
+
+Profile 是同一原生运行时的一组可复用执行参数，角色通过 Profile ID 选择配置，不为每个 Work 复制整套 Provider 配置。显式角色绑定优先；未绑定保留既有选择策略并显示实际选择及来源。未知模型能力、不支持的 effort、无人值守下需要交互的权限组合和冲突的 sandbox/tools 必须得到可操作诊断，不能静默忽略已填写字段。
+
+Planner、Implementer、Reviewer、Acceptance 的实际调用均使用相同配置解析规则。Invocation 保存请求模型/effort、权限、工具、配置来源、CLI 版本和可观测实际模型；不可观测的实际模型明确为 unknown。恢复会话必须匹配这组有效身份以及 FR-021 定义的 owner 输入身份、Tree、Packet 和 Schema；配置变化使用新会话。被动 doctor 不发起模型请求；实际支持程度通过显式主动探测和真实调用确认。
+
+### 20.3 项目知识与运行时 Harness
+
+xgoal 开发仓库自身的 Skills、docs 和 tests 属于开发治理；不会因此自动成为所有目标项目的内置资产。运行时 Harness 由冻结任务输入、受控执行、验证、Review、Gate/Reconcile、恢复和 Completion Predicate 构成。
+
+目标项目已有 AGENTS.md、Skills、Spec/Design、场景和测试继续拥有项目知识。xgoal 发现配置声明的 Harness 并检查必要文件、Provider 适配和受托执行兼容性。`required` 且缺失/不兼容时在启动 Agent 前拒绝；可选缺失时显示事实和准备步骤。检测到文件不等于 Agent 读过文件：记录规则路径/摘要作为输入事实，只有可观测读取或协议回执才能标识观察到加载，仍不能证明模型理解。
+
+xgoal 给原生 Agent 的委派合同明确：只完成当前有界职责，不自行管理上层 Goal、创建竞争 Objective/Plan、提交/切换分支或推送。目标项目业务规则仍有效；冲突不能靠伪造已加载或复制另一份可写状态绕过。初始化不覆盖用户规则，不安装或修改用户全局 Harness。
+
+### 20.4 验收入口的信任与环境生命周期
+
+Validator 的直接脚本、解释器脚本入口及操作者显式列出的依赖在受信配置基线冻结路径、文件模式和内容身份。执行前后核对这些身份，候选 Tree 修改它们时阻断，不能让实现顺便弱化验收。对于 Make/npm/内联 shell 等无法可靠推断依赖的入口，操作者必须显式声明受信文件；系统不承诺自动发现任意程序的全部传递依赖。业务源码和允许开发的测试不因“被读取”而全部冻结。
+
+更新受信入口需先审阅并提交新的配置/入口基线，再从该基线建立新 Goal；普通 replan 只改变当前冻结 Revision 的工作图，不能重新信任入口。旧 Evidence 不随 Gate 批准自动变为有效。提示必须给出该恢复路径。即使策略允许变更，也不能将旧定义下修改过的脚本认定为旧受信入口。
+
+项目配置声明有界 bootstrap、服务、依赖顺序、readiness 和 Validator 使用的服务集合。Kernel 先准备环境、按依赖启动、等待探针成功，再执行场景；失败/超时/取消按逆序停止自己启动的服务，保留脱敏日志。服务进程与 Goal/Attempt 归属持久化，崩溃后核对身份再回收。退出无法确认时保持等待及执行槽，不能并发启动下一个写入者。只清理本次拥有的资源，不删除用户数据库、共享卷或未知进程。Local Process 的端口、缓存及同 UID 访问仍可能共享，不声明容器级隔离。
+
+### 20.5 合法阻塞、执行失败与有限恢复
+
+合法结构化 `blocked` 表示需要决定或外部条件，`failed` 表示 Agent 未完成执行，缺失/不合法输出才是协议错误。保留摘要、具体 blockers、建议动作和 Invocation 引用，生成可回答、可定位的 Gate；不等待原生 CLI 的无限 stdin 交互。
+
+Gate 决定与继续执行分开持久化，以当前 Gate 及其 owner 的版本和范围做 CAS。用户可以一次提交决定并请求续作；只有全部必要 Gate 解决、进程已停止、现场身份仍匹配时才继续。初始规划从原规划请求创建下一 generation，绑定请求/配置哈希及输入 Tree，成功后原子冻结 Revision；Work 创建新 Attempt；最终验收重入同一 Goal Revision/最终 Tree 的验证生命周期并创建新 Invocation。对应 Packet 带上实际失败反馈和用户决定；拒绝、过期、取消或现场外部修改不会被批准动作覆盖。重启后仍可从同一等待点恢复，不伪造不存在的 Work 或提前冻结规划 Revision。
+
+有限自动修复默认关闭，可由项目配置显式授权正数上限。它只处理可恢复执行/验证失败：同一 Goal/Work、相同配置、已确认停止全部写入者、当前现场与记录一致、无未解决必要 Gate、无未完成 Promotion。第一次可根据新失败反馈修复；相同失败/策略且无实质变化时停止。总重试次数有上限，不因错误文本或 Fingerprint 改变而无限重试。`blocked`、权限/范围/信任变更、外部编辑和进程归属不明不能自动放行。每次自动决策与人工决策分别记录 actor，失败历史不可覆盖。
+
+### 20.6 实时观测与使用体验
+
+用户可从 Goal 找到各角色的 Invocation、有效配置、输入 Packet/上下文、公开可观测消息、工具事件和结果，按 role/invocation 跟随日志并用稳定游标断线续读。原生 Agent 的私有推理不可获得时不承诺展示。日志采集有单条/总体上限和明确截断记录，经过脱敏；慢读者与磁盘故障不能阻塞心跳、取消和进程回收。日志缺失如实报告，不伪装成会话无输出。
+
+CLI 保持现有默认 JSON、退出码和脚本契约；显式 human 输出提供任务摘要、当前位置、最近事件和可复制下一条操作。`run --wait` 能给出等待反馈，分别标识进程存活、最近输出和可证明的实质进展，避免把 heartbeat 解释为进展。状态观测不改变 Goal 生命周期。
+
+Goal/Work/Gate/Invocation 定位、补全和版本查询减少手工复制内部 ID；有歧义时列候选并拒绝变更，短 ID 不削弱 CAS。初始化根据可观察项目文件建议已有测试入口，未知项目清楚说明当前验证覆盖和准备步骤；不执行猜测出来的安装脚本，不把格式检查描述为完整验收。
+
+### 20.7 SQLite、Git 与可读制品
+
+SQLite 保留事务状态、CAS、Lease、Gate、事件、进程归属和恢复索引的唯一写入权威；Git 保存代码内容与 Tree 身份；文件保存不可变 Packet、日志、报告和运行制品。结构化目录替换数据库需要重建跨对象原子提交、并发控制、索引、迁移与崩溃恢复，当前无足够用户收益，因此不增加第二个 Store 后端。
+
+用户可导出指定 Goal 的结构化状态和关联文件，带版本、数据库快照时间/事件边界和内容校验清单。导出从一致数据库快照读取，逐一验证文件引用，失败时不产生“完整”标记；运行中不能直接复制存在 WAL 的数据库主文件冒充备份。导出只读，不作为另一份可写运行真相；修改导出不会改变 Goal。不承诺跨机器恢复当前进程或自动重放外部副作用。新增可选配置保持旧缺省/有效安全配置的行为与历史身份可读取；过去被忽略的冲突权限配置、缺少必要受信依赖声明的入口需明确诊断迁移后执行，不能静默放宽或裁剪。新状态迁移保持旧失败、Gate 和事件关系。旧注册键因新信任绑定产生身份冲突时，提供明确迁移诊断；操作者显式声明受信文件、审阅提交配置并创建新 Goal，不能原地改写历史验收权威。
+
+### 20.8 增量验收
+
+以下各项均须指向当前代码和运行 Evidence 后才能勾选；完整发布 Benchmark 与本次实际 Provider 功能验收分开记录。
+
+- [ ] **AC-HR-001**：默认三角色流程完成；可选 Acceptance 独立运行动态反馈场景，源码保持不变，错误 Claim 被真实业务断言拒绝。
+- [ ] **AC-HR-002**：场景/Validator 能力进入规划输入，缺失行为覆盖无法以格式检查代替通过；Evidence 绑定最终 Tree 与场景制品。
+- [ ] **AC-HR-003**：解释器入口、直接脚本及显式依赖在候选 Tree 被篡改时均拒绝；旧 Goal 的 Gate/普通 replan 不接受新入口，仅新 Goal 接纳审阅后的新基线，旧 Evidence 不复活。
+- [ ] **AC-HR-004**：服务依赖/readiness/场景从真实配置和 CLI/daemon 贯通；业务错误、探针超时、bootstrap 失败均阻止完成并保留诊断。
+- [ ] **AC-HR-005**：服务取消/失败/崩溃后仅回收有证明归属的资源；未知或未确认退出的进程阻止下一写入者。
+- [ ] **AC-HR-006**：四种角色共享 Profile 解析与显式绑定；旧缺省/有效安全配置继续可用，旧冲突权限或缺少必要信任声明的配置获得迁移诊断，冲突和不支持字段在执行前拒绝。
+- [ ] **AC-HR-007**：Codex/Claude 的模型、effort、权限实际进入调用；真实双 Provider Evidence 对照请求与可观测有效配置，未知实际值不伪造。
+- [ ] **AC-HR-008**：改变有效 Profile 配置不能复用旧绑定会话，原配置在安全前提下仍可恢复；初始 Planner 的请求/generation/输入 Tree 身份和其余角色的 Revision 身份均可查，不能要求初始调用具备尚不存在的 Revision。
+- [ ] **AC-HR-009**：必需 Harness 缺失/不兼容在调用前拒绝；可选缺失有准备说明；规则输入与加载观察区分，委派职责不创建竞争运行状态。
+- [ ] **AC-HR-010**：合法 blocked、failed、协议错误分别持久化；Gate 保存 blockers/建议及上下文，跨重启可见。
+- [ ] **AC-HR-011**：初始规划、Work 和最终验收的决定并续作从用户入口完成，分别由下一规划 generation、新 Attempt、同一最终 Tree 的新验收 Invocation 消费实际决定；拒绝/过期/陈旧版本/取消/外部编辑不能错误续作。
+- [ ] **AC-HR-012**：显式有界自动修复在安全现场成功恢复；默认关闭、重复无进展、总数耗尽和所有不安全边界均停止且保留现场。
+- [ ] **AC-HR-013**：各角色运行中可查询上下文并实时跟随公开事件，断线游标不遗漏已持久记录；输出限额、脱敏及慢客户端不破坏控制循环。
+- [ ] **AC-HR-014**：human 状态与 wait 反馈清楚区分存活/输出/进展；现有默认 JSON、退出码、help/version/completion 和取消语义保持。
+- [ ] **AC-HR-015**：目标/Work/Gate/Invocation 定位与补全可用，歧义和 CAS 冲突可诊断；初始化对已知/未知项目正确说明测试能力与准备步骤。
+- [ ] **AC-HR-016**：运行中一致导出包含结构化状态和全部关联文件校验，缺失/损坏被识别且无完成标记；导出编辑不影响运行状态。
+- [ ] **AC-HR-017**：新增数据库迁移保留历史失败/Gate/事件引用，旧配置/历史报告可读取；并发、崩溃和迟到写入不绕过现有完成谓词。
+- [ ] **AC-HR-018**：全仓发布门禁和当前双 Provider、CLI/daemon、服务真实验收通过；README/示例/操作记录与最终实现一致，未运行项明确保留。
+
+### 20.9 当前增量 Evidence
+
+2026-09-05，PLAN-012 入口保护实现的当前定向证据（尚未完成整个 OBJ-004，AC 保持待综合对账）：
+
+- `TestFrozenInterpreterRejectsTamperedCandidateAndAcceptsNewBaseline` 修复前真实失败：候选 Tree 已包含篡改脚本，旧 Registry 仍产生 PASSED Receipt，且新旧 Definition hash 相同。修复后直接入口、解释器、两类 CWD、显式依赖与包装器声明共六组均通过；旧定义拒绝执行，新审阅基线生成不同身份并可运行。
+- `TestRegistryRejectsUndeclaredControlAndUnsafeFiles` 通过：未声明内联/包/Make 控制入口、解释器选项、路径逃逸、缺失/链接/通配依赖均拒绝。
+- `go test ./internal/config ./internal/validator ./internal/app -count=1` 通过；`go test ./internal/config ./internal/validator ./internal/orchestrator -count=1` 通过。修改后的 `TestEngineRejectsValidatorAndReviewerSourceMutations/trust` 再次通过：fixture Agent 修改可写范围内的受信客户端，Goal Waiting、无晋升、现场保留，人工批准 Gate 仍不能重绑定现场并续作。
+- 上述引擎测试使用可注入故障的 CLI fixture；实际文件、Git、SQLite、进程监督和受信命令运行，但不作为真实 Codex/Claude 功能验收的替代。后续 Profile/环境/观测与综合验收仍未完成。
+- `TestEnginePreservesLegalBlockedAndFailedResults` 修复前两组均被错误写成 AGENT_PROTOCOL_INVALID/INVALID_OUTPUT，并丢失 blockers；修复后通过，分别保存 AGENT_BLOCKED/AGENT_FAILED、结构化上下文及 Invocation 引用，重新打开 SQLite 后仍可读。`go test ./internal/reconcile ./internal/store/sqlite -count=1` 通过，包含从 schema 10 升级后保留旧失败/决策/事件、历史已移除类别、新类型写入和外键完整性的验证。有限自动恢复及 Work 决定后续作的当前证据见下列补充。
+
+- `TestEngineAutomaticallyRepairsOnlyWithinConfiguredLimit` 通过：默认关闭路径要求人工重试，显式上限允许一次安全修复完成；每次改变错误文本的 fixture 仍在 Work 总数上限耗尽后 Waiting。Store 负例覆盖配置/版本/现场漂移、blocked、重复、上限、必要 Gate、取消和未确认进程；修复前未结束的 process INTENT 曾错误放行，修复后拒绝且不消耗次数。
+- `TestRequiredGateDecisionAndExpiryFenceSchedulingAndCompletion` 修复前 DENIED/REVOKED/自然到期的 APPROVED 被调度放行，修复后统一阻断。人工重试也拒绝这些状态；已消费批准不因自然到期追溯失效。`TestEngineContinuesBlockedResultWithConsumedAnswerAfterRestart` 通过（44.807s）：持久 blocked → 关闭/重开 SQLite → 人工回答与一次消费 → fixture CLI 解析提示中的真实 Packet 路径并读取回答 → 两 Work、独立 Review、Final Report/Completed；三次 Attempt，原 HEAD/index 保持。
+- `go test ./... -count=1` 通过，包含 CLI（159.364s）、Orchestrator（276.276s）和 SQLite（16.597s）。此后按独立 Review 修补的封闭命令、自然到期、历史规划 Gate 和旧注册迁移由定向回归覆盖：SQLite 5.444s、Validator 2.805s、Orchestrator 0.431s，均通过。历史规划 Gate 仅凭 Kernel 解决证明退休，人工规划/权限撤销保持屏障；原决定及事件不改写。
+- `TestLegacyValidatorBindingRequiresReviewedConfiguration` 的直接/解释器两组通过：v10 注册升级后旧定义可读，同键获得明确 `TRUST_BINDING_MIGRATION_REQUIRED` 且旧注册不变；按提示在配置声明受信文件并审阅提交后，新基线成功注册和执行，Receipt 不复用旧定义身份。Work/最终验收迁移诊断均能形成可操作的 Waiting Gate。
+- 示例 `config validate --file xgoal.example.yaml`、实际 CLI `approve/work retry --help` 与 `git diff --check` 已核对。真实双 Provider、完整 `make verify-m6`、其余三份 Plan 和整体 AC 审计留待本 Objective 后续阶段，未以本轮 fixture 回归代替。
+
 > 外部 CLI 的参数和输出协议可能演进；技术实现必须通过版本探测和契约测试确认，不把本文中的示例参数当作永久 ABI。
+
+- PLAN-012 最终并发检查：SQLite 与 Orchestrator 的迁移、规划发布、合法结果、重试、Gate、信任迁移及跨重启回答定向 `go test -race` 均通过（SQLite 39.947s、Orchestrator 154.242s）；独立 REVIEW-051 最终 PASS。
