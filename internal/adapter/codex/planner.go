@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,8 @@ func (runtime *Adapter) Plan(ctx context.Context, invocation planner.Invocation,
 	proposal, sessionID, resultErr := stream.FinalizePlanner(min64(invocation.MaxOutputBytes, maxResultBytes))
 	var finalErr error
 	switch {
+	case errors.Is(processErr, supervisor.ErrProcessUnconfirmed):
+		finalErr = processErr
 	case stream.failure() != nil:
 		finalErr = stream.failure()
 	case stderrErr != nil:

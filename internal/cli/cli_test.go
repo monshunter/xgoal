@@ -64,6 +64,7 @@ func TestRootHelpExposesCobraCommandTree(t *testing.T) {
 func TestNestedCommandHelpIsSideEffectFree(t *testing.T) {
 	for _, args := range [][]string{
 		{"goal", "replan", "--help"},
+		{"goal", "plan", "--help"},
 		{"work", "retry", "--help"},
 		{"benchmark", "run", "--help"},
 	} {

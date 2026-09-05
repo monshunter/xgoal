@@ -309,10 +309,48 @@ func newGoalCommand(runtime runtime) *cobra.Command {
 	parent := groupCommand("goal", "Inspect and revise Goals")
 	parent.AddCommand(
 		getCommand("get <goal-id>", "Get one Goal", func(id string) string { return "/v1/goals/" + id }, runtime),
+		newGoalPlanCommand(runtime),
 		newGoalFileCommand(runtime, "replan"),
 		newGoalFileCommand(runtime, "finalize"),
 	)
 	return parent
+}
+
+func newGoalPlanCommand(runtime runtime) *cobra.Command {
+	var options mutationOptions
+	var proposalFile string
+	cmd := &cobra.Command{
+		Use:   "plan <goal-id>",
+		Short: "Retry planning a draft Goal with a new planning generation",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.version <= 0 {
+				return errors.New("--expected-version must be a positive integer")
+			}
+			if strings.TrimSpace(options.reason) == "" {
+				return errors.New("--reason is required")
+			}
+			body := map[string]any{"expected_version": options.version, "reason": options.reason}
+			if proposalFile != "" {
+				raw, err := os.ReadFile(proposalFile)
+				if err != nil {
+					return err
+				}
+				var proposal any
+				if err := json.Unmarshal(raw, &proposal); err != nil {
+					return errors.New("proposal file is invalid JSON")
+				}
+				body["proposal"] = proposal
+			}
+			return runtime.executeAPI(cmd, requestSpec{method: http.MethodPost, path: "/v1/goals/" + args[0] + "/plan", body: body})
+		},
+	}
+	cmd.Flags().Int64Var(&options.version, "expected-version", 0, "expected Goal version")
+	cmd.Flags().Int64Var(&options.version, "version", 0, "alias for --expected-version")
+	cmd.MarkFlagsMutuallyExclusive("expected-version", "version")
+	cmd.Flags().StringVar(&options.reason, "reason", "", "planning retry reason")
+	cmd.Flags().StringVar(&proposalFile, "proposal-file", "", "optional reviewed planner proposal JSON")
+	return cmd
 }
 
 func newGoalFileCommand(runtime runtime, action string) *cobra.Command {

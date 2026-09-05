@@ -40,38 +40,7 @@ func (s *Store) CreateGoal(ctx context.Context, goal domain.Goal, event EventInp
 		return err
 	}
 	return s.withTransaction(ctx, func(tx *sql.Tx) error {
-		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM goals WHERE id = ?`, goal.ID).Scan(&exists); err != nil {
-			return fmt.Errorf("check goal existence: %w", err)
-		}
-		if exists != 0 {
-			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrAlreadyExists)
-		}
-		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO goals(
-    id, state, active_revision_id, final_tree, final_evidence_set_id,
-    final_report_hash, version, created_at, updated_at
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			goal.ID,
-			goal.State,
-			goal.ActiveRevisionID,
-			goal.FinalTree,
-			goal.FinalEvidenceSetID,
-			goal.FinalReportHash,
-			goal.Version,
-			now,
-			now,
-		); err != nil {
-			return fmt.Errorf("insert goal %q: %w", goal.ID, err)
-		}
-		if s.info.SchemaVersion >= 8 {
-			if _, err := tx.ExecContext(ctx, `UPDATE goals SET execution_model = 'current-directory' WHERE id = ?`, goal.ID); err != nil {
-				return err
-			}
-		}
-		return s.appendEvent(ctx, tx, "goal", goal.ID, prepared)
+		return s.createGoalTx(ctx, tx, goal, prepared)
 	})
 }
 
@@ -281,4 +250,40 @@ func (s *Store) withTransaction(ctx context.Context, operation func(*sql.Tx) err
 		return fmt.Errorf("commit sqlite transaction: %w", err)
 	}
 	return nil
+}
+
+// CreateGoal transaction body is shared by standalone operations and atomic planning publication.
+func (s *Store) createGoalTx(ctx context.Context, tx *sql.Tx, goal domain.Goal, prepared preparedEvent) error {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM goals WHERE id = ?`, goal.ID).Scan(&exists); err != nil {
+		return fmt.Errorf("check goal existence: %w", err)
+	}
+	if exists != 0 {
+		return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrAlreadyExists)
+	}
+	now := s.source.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO goals(
+    id, state, active_revision_id, final_tree, final_evidence_set_id,
+    final_report_hash, version, created_at, updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		goal.ID,
+		goal.State,
+		goal.ActiveRevisionID,
+		goal.FinalTree,
+		goal.FinalEvidenceSetID,
+		goal.FinalReportHash,
+		goal.Version,
+		now,
+		now,
+	); err != nil {
+		return fmt.Errorf("insert goal %q: %w", goal.ID, err)
+	}
+	if s.info.SchemaVersion >= 8 {
+		if _, err := tx.ExecContext(ctx, `UPDATE goals SET execution_model = 'current-directory' WHERE id = ?`, goal.ID); err != nil {
+			return err
+		}
+	}
+	return s.appendEvent(ctx, tx, "goal", goal.ID, prepared)
 }

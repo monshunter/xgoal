@@ -15,6 +15,7 @@ import (
 	"github.com/monshunter/xgoal/internal/environment"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/protocol"
+	"github.com/monshunter/xgoal/internal/supervisor"
 	"github.com/monshunter/xgoal/internal/validator"
 )
 
@@ -134,6 +135,14 @@ func TestRegistryIsFrozenToBaseAndCommandReceiptsCoverOutcomes(t *testing.T) {
 				t.Error("Run() overwrote immutable logs for a duplicate run id")
 			}
 		}
+	}
+	ownedContext := supervisor.WithOwner(ctx, failingProcessJournal{}, supervisor.Owner{Kind: "probe", ID: "validator_journal", Generation: 1})
+	unconfirmed, err := runner.Run(ownedContext, validator.CommandRequest{RunID: "run_unconfirmed", ValidatorID: "go-version", GoalRevisionHash: strings.Repeat("a", 64), ConfigHash: registry.ConfigHash(), TreeHash: base.Tree, EnvironmentHash: environmentHash, MaxOutputBytes: 1 << 20})
+	if !errors.Is(err, supervisor.ErrProcessUnconfirmed) || unconfirmed.ID != "" {
+		t.Fatalf("unconfirmed execution became receipt: %+v %v", unconfirmed, err)
+	}
+	if _, err := validator.ReadReceipt(runtimeRoot, "run_unconfirmed"); err == nil {
+		t.Fatal("unconfirmed execution published an immutable receipt")
 	}
 	if err := os.WriteFile(filepath.Join(repository.Root(), "xgoal.yaml"), []byte("agent changed config\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -378,4 +387,16 @@ func runValidatorGit(t *testing.T, directory string, arguments ...string) string
 		t.Fatalf("git %v error = %v\n%s", arguments, err, output)
 	}
 	return string(output)
+}
+
+type failingProcessJournal struct{}
+
+func (failingProcessJournal) BeginProcess(context.Context, supervisor.ProcessIntent) error {
+	return nil
+}
+func (failingProcessJournal) RegisterProcess(context.Context, string, supervisor.ProcessIdentity) error {
+	return nil
+}
+func (failingProcessJournal) FinishProcess(context.Context, string, supervisor.ProcessState, string) error {
+	return errors.New("process journal unavailable")
 }

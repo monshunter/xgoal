@@ -59,6 +59,7 @@ func TestAllSpecifiedEndpointsAreRouted(t *testing.T) {
 		{http.MethodPost, "/v1/goals/g1/resume", "goal.resume", true},
 		{http.MethodPost, "/v1/goals/g1/cancel", "goal.cancel", true},
 		{http.MethodPost, "/v1/goals/g1/replan", "goal.replan", true},
+		{http.MethodPost, "/v1/goals/g1/plan", "goal.plan", true},
 		{http.MethodGet, "/v1/goals/g1/work-items", "goal.work-items", false},
 		{http.MethodGet, "/v1/goals/g1/events", "goal.events", false},
 		{http.MethodGet, "/v1/goals/g1/gates", "goal.gates", false},

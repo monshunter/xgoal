@@ -170,7 +170,7 @@ func (runtime *Adapter) start(ctx context.Context, invocation adapter.Invocation
 	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
 	stream := newStream(eventsDir, filepath.ToSlash(filepath.Join("invocations", invocation.InvocationID)), sink, runtime.clock.Now, limiter, cancel)
 	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
-	running, err := supervisor.Start(supervisor.Command{Argv: runtime.arguments(invocation, validated.schema, resumeID), Dir: validated.workDir, Env: validated.environment, Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr, GracePeriod: gracePeriod})
+	running, err := supervisor.StartContext(runContext, supervisor.Command{Argv: runtime.arguments(invocation, validated.schema, resumeID), Dir: validated.workDir, Env: validated.environment, Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr, GracePeriod: gracePeriod})
 	if err != nil {
 		cancel()
 		runtime.mu.Unlock()
@@ -244,16 +244,7 @@ func (runtime *Adapter) execution(handle adapter.Handle) (*execution, error) {
 }
 
 func (runtime *Adapter) observe(ctx context.Context, executed *execution, stream *stream, stderr *boundedStderr, outputLimit int64) {
-	done := make(chan struct{})
-	var process supervisor.Execution
-	var processErr error
-	go func() { process, processErr = executed.running.Wait(context.Background()); close(done) }()
-	select {
-	case <-ctx.Done():
-		_ = executed.running.Terminate()
-		<-done
-	case <-done:
-	}
+	process, processErr := executed.running.WaitAndStop(ctx)
 	contextErr := ctx.Err()
 	executed.cancel()
 	stderrErr := stderr.persist(filepath.Join(runtime.root, "invocations", executed.metadata.InvocationID, "stderr.log"))
@@ -269,6 +260,8 @@ func (runtime *Adapter) observe(ctx context.Context, executed *execution, stream
 	}
 	var finalErr error
 	switch {
+	case errors.Is(processErr, supervisor.ErrProcessUnconfirmed):
+		finalErr = processErr
 	case stream.failure() != nil:
 		finalErr = stream.failure()
 	case stderrErr != nil:

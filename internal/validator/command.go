@@ -126,6 +126,9 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 		_, _ = fmt.Fprintf(&limitedLog{file: stderr, limiter: limiter}, "\nxgoal checkout verification failed: %v\n", checkoutErr)
 	}
 	closeErr := errors.Join(syncAndClose(stdout), syncAndClose(stderr))
+	if errors.Is(runErr, supervisor.ErrProcessUnconfirmed) {
+		return protocol.CommandReceipt{}, errors.Join(runErr, closeErr, checkoutErr)
+	}
 	finishedAt := time.Now().UTC()
 	if !execution.StartedAt.IsZero() {
 		startedAt = execution.StartedAt

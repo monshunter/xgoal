@@ -2,6 +2,8 @@ package supervisor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -39,30 +41,87 @@ type processOutcome struct {
 }
 
 type Running struct {
-	command *exec.Cmd
-	done    chan struct{}
-	grace   time.Duration
+	command      *exec.Cmd
+	done         chan struct{}
+	grace        time.Duration
+	identity     ProcessIdentity
+	journal      Journal
+	invocationID string
+	termMu       sync.Mutex
+	terminated   bool
 
 	mu      sync.RWMutex
 	outcome processOutcome
 }
 
 func Start(spec Command) (*Running, error) {
+	return StartContext(context.Background(), spec)
+}
+
+func StartContext(ctx context.Context, spec Command) (*Running, error) {
 	if err := validateCommand(spec); err != nil {
 		return nil, err
 	}
-	command := exec.Command(spec.Argv[0], spec.Argv[1:]...)
-	command.Dir = spec.Dir
-	command.Env = append([]string(nil), spec.Env...)
-	command.Stdin = spec.Stdin
-	command.Stdout = spec.Stdout
-	command.Stderr = spec.Stderr
-	configureProcessGroup(command)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	owned, hasOwner := ctx.Value(ownerKey{}).(ownerContext)
+	if hasOwner && (owned.journal == nil || owned.owner.Validate() != nil) {
+		return nil, errors.New("invalid durable process ownership")
+	}
+	invocationBytes := make([]byte, 16)
+	if _, err := rand.Read(invocationBytes); err != nil {
+		return nil, err
+	}
+	invocationID := "process_" + hex.EncodeToString(invocationBytes)
+	if hasOwner {
+		if err := owned.journal.BeginProcess(ctx, ProcessIntent{ID: invocationID, Owner: owned.owner}); err != nil {
+			return nil, err
+		}
+	}
+	finishStartFailure := func(reason string) error {
+		if !hasOwner {
+			return nil
+		}
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		return owned.journal.FinishProcess(cleanCtx, invocationID, ProcessTerminated, reason)
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, errors.Join(err, finishStartFailure("startup pipe failed"))
+	}
+	defer reader.Close()
+	defer writer.Close()
+	command, err := wrapperCommand(spec, reader)
+	if err != nil {
+		return nil, errors.Join(err, finishStartFailure("wrapper preparation failed"))
+	}
 	startedAt := time.Now().UTC()
 	if err := command.Start(); err != nil {
-		return nil, fmt.Errorf("start %q: %w", spec.Argv[0], err)
+		return nil, errors.Join(fmt.Errorf("start %q: %w", spec.Argv[0], err), finishStartFailure("wrapper start failed"))
 	}
-	running := &Running{command: command, done: make(chan struct{}), grace: spec.GracePeriod}
+	_ = reader.Close()
+	identity, identityErr := InspectProcess(command.Process.Pid)
+	registrationErr := identityErr
+	if registrationErr == nil && hasOwner {
+		registrationErr = owned.journal.RegisterProcess(ctx, invocationID, identity)
+	}
+	if registrationErr == nil {
+		registrationErr = ctx.Err()
+	}
+	if registrationErr != nil {
+		_ = writer.Close()
+		_ = command.Wait()
+		return nil, errors.Join(registrationErr, finishStartFailure("wrapper was not released"))
+	}
+	if _, err := writer.Write([]byte{1}); err != nil {
+		_ = writer.Close()
+		_ = command.Wait()
+		return nil, errors.Join(err, finishStartFailure("wrapper release failed"))
+	}
+	_ = writer.Close()
+	running := &Running{command: command, done: make(chan struct{}), grace: spec.GracePeriod, identity: identity, journal: owned.journal, invocationID: invocationID}
 	go func() {
 		err := command.Wait()
 		exitCode := 0
@@ -74,9 +133,29 @@ func Start(spec Command) (*Running, error) {
 				exitCode = -1
 			}
 		}
+		alive, groupErr := ProcessGroupAlive(identity.PGID)
+		state := ProcessExited
+		if groupErr != nil || alive {
+			err = errors.Join(err, ErrProcessUnconfirmed, groupErr)
+			state = ProcessUnknown
+		}
+		running.mu.Lock()
+		if running.terminated && state != ProcessUnknown {
+			state = ProcessTerminated
+		}
+		terminated := running.terminated
+		running.mu.Unlock()
+		if running.journal != nil {
+			cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			journalErr := running.journal.FinishProcess(cleanCtx, invocationID, state, "process group and output observation finished")
+			cancel()
+			if journalErr != nil {
+				err = errors.Join(err, ErrProcessUnconfirmed, journalErr)
+			}
+		}
 		running.mu.Lock()
 		running.outcome = processOutcome{execution: Execution{
-			PID: command.Process.Pid, ExitCode: exitCode, StartedAt: startedAt, FinishedAt: time.Now().UTC(),
+			PID: command.Process.Pid, ExitCode: exitCode, StartedAt: startedAt, FinishedAt: time.Now().UTC(), Terminated: terminated,
 		}, err: err}
 		running.mu.Unlock()
 		close(running.done)
@@ -85,10 +164,16 @@ func Start(spec Command) (*Running, error) {
 }
 
 func Run(ctx context.Context, spec Command) (Execution, error) {
-	running, err := Start(spec)
+	running, err := StartContext(ctx, spec)
 	if err != nil {
 		return Execution{}, err
 	}
+	return running.WaitAndStop(ctx)
+}
+
+// WaitAndStop owns cancellation as well as observation. A failed cleanup returns
+// its ownership error without waiting indefinitely for an unconfirmed process.
+func (running *Running) WaitAndStop(ctx context.Context) (Execution, error) {
 	execution, err := running.Wait(ctx)
 	if err == nil || !errors.Is(err, ctx.Err()) {
 		return execution, err
@@ -121,26 +206,37 @@ func (running *Running) Wait(ctx context.Context) (Execution, error) {
 }
 
 func (running *Running) Terminate() error {
+	running.termMu.Lock()
+	defer running.termMu.Unlock()
 	select {
 	case <-running.done:
+		running.mu.RLock()
+		defer running.mu.RUnlock()
+		if errors.Is(running.outcome.err, ErrProcessUnconfirmed) {
+			return running.outcome.err
+		}
 		return nil
 	default:
 	}
-	if err := terminateProcessGroup(running.PID()); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	running.mu.Lock()
+	running.terminated = true
+	running.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), running.grace+3*time.Second)
+	defer cancel()
+	if err := TerminateOwnedGroup(ctx, running.identity, running.grace); err != nil {
 		return err
 	}
-	timer := time.NewTimer(running.grace)
-	defer timer.Stop()
 	select {
 	case <-running.done:
+		running.mu.RLock()
+		defer running.mu.RUnlock()
+		if errors.Is(running.outcome.err, ErrProcessUnconfirmed) {
+			return running.outcome.err
+		}
 		return nil
-	case <-timer.C:
+	case <-ctx.Done():
+		return errors.Join(ErrProcessUnconfirmed, ctx.Err())
 	}
-	if err := killProcessGroup(running.PID()); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
-	}
-	<-running.done
-	return nil
 }
 
 type Probe func(context.Context) error
@@ -169,7 +265,7 @@ func (group *Group) Start(ctx context.Context, spec ServiceSpec) (int, error) {
 		group.mu.Unlock()
 		return 0, fmt.Errorf("service %q already exists", spec.ID)
 	}
-	process, err := Start(spec.Command)
+	process, err := StartContext(ctx, spec.Command)
 	if err != nil {
 		group.mu.Unlock()
 		return 0, err
@@ -191,15 +287,19 @@ func (group *Group) Start(ctx context.Context, spec ServiceSpec) (int, error) {
 		select {
 		case <-process.done:
 			execution, waitErr := process.Wait(context.Background())
-			group.remove(spec.ID, process)
+			if !errors.Is(waitErr, ErrProcessUnconfirmed) {
+				group.remove(spec.ID, process)
+			}
 			if waitErr != nil {
 				return 0, fmt.Errorf("service %q exited before becoming healthy: %w", spec.ID, waitErr)
 			}
 			return 0, fmt.Errorf("service %q exited %d before becoming healthy", spec.ID, execution.ExitCode)
 		case <-probeContext.Done():
-			_ = process.Terminate()
-			group.remove(spec.ID, process)
-			return 0, fmt.Errorf("service %q health probe failed: %w", spec.ID, errors.Join(probeContext.Err(), lastProbeError))
+			terminateErr := process.Terminate()
+			if terminateErr == nil {
+				group.remove(spec.ID, process)
+			}
+			return 0, fmt.Errorf("service %q health probe failed: %w", spec.ID, errors.Join(probeContext.Err(), lastProbeError, terminateErr))
 		case <-ticker.C:
 		}
 	}

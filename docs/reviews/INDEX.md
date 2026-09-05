@@ -48,4 +48,6 @@
 | REVIEW-043-design-current-directory | REVIEW-043：当前工作目录、持久后台与历史兼容 Design Review | [REVIEW-043-design-current-directory.md](REVIEW-043-design-current-directory.md) |
 | REVIEW-044-change-project-daemon-isolation | REVIEW-044：PLAN-009 项目隔离与 Daemon 生命周期 Change Review | [REVIEW-044-change-project-daemon-isolation.md](REVIEW-044-change-project-daemon-isolation.md) |
 | REVIEW-045-change-current-directory | REVIEW-045：PLAN-011 当前主目录执行 Change Review | [REVIEW-045-change-current-directory.md](REVIEW-045-change-current-directory.md) |
+| REVIEW-046-design-planning-lifecycle | REVIEW-046：后台规划配置与进程归属细化审查 | [REVIEW-046-design-planning-lifecycle.md](REVIEW-046-design-planning-lifecycle.md) |
+| REVIEW-047-change-durable-planning | REVIEW-047：持久规划、执行归属与恢复变更审查 | [REVIEW-047-change-durable-planning.md](REVIEW-047-change-durable-planning.md) |
 <!-- AGENT-HARNESS:END INDEX -->

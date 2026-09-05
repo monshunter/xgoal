@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -28,12 +27,12 @@ import (
 	"github.com/monshunter/xgoal/internal/finalize"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/goalcompile"
-	"github.com/monshunter/xgoal/internal/planner"
 	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/protocol"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/supervisor"
 	"github.com/monshunter/xgoal/internal/workspace"
 )
 
@@ -127,104 +126,44 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 		}
 		return http.StatusOK, map[string]any{"project_root": service.projectRoot, "state": service.store.Info()}, nil
 	case "goal.create":
-		var request createGoalRequest
-		if err := api.DecodeStrict(operation.Body, &request); err != nil {
-			return 0, nil, invalid("goal request must be valid", err)
-		}
-		if request.Mode == "" {
-			request.Mode = "standard"
-			if service.configuration != nil {
-				request.Mode = service.configuration.Orchestration.DefaultMode
-			}
-		}
-		if !validID(request.GoalID) || strings.TrimSpace(request.RawGoal) == "" || (request.Mode != "fast" && request.Mode != "standard") {
-			return 0, nil, invalid("goal_id, raw_goal and mode fast|standard are required", nil)
-		}
-		if request.CreatedBy == "" {
-			request.CreatedBy = "local-user"
-		}
-		if !validID(request.CreatedBy) {
-			return 0, nil, invalid("created_by must be a safe actor id", nil)
-		}
-		var compiled goalcompile.Compiled
-		compiledReady := false
-		if service.configHash != "" && service.configuration != nil && request.Proposal != nil {
-			var compileErr error
-			compiled, compileErr = goalcompile.Compile(request.GoalID, request.GoalID+"_revision_1", request.GoalID+"_plan_1", request.Proposal.Contract, request.Proposal.Plan, service.validators)
-			if compileErr != nil {
-				return 0, nil, invalid("Planner proposal failed deterministic validation", compileErr)
-			}
-			compiledReady = true
-		}
-		goal := domain.Goal{ID: request.GoalID, State: domain.GoalDraft, Version: 1}
-		if err := service.store.CreateGoal(ctx, goal, sqlite.EventInput{Type: "GoalCreated", ActorType: "human", Payload: map[string]any{"raw_goal": request.RawGoal, "mode": request.Mode}}); err != nil {
-			return 0, nil, mapStoreError(err)
-		}
-		if service.configHash == "" || service.configuration == nil {
-			response := goalView(goal)
-			response["planner_proposal_required"] = true
-			response["reason"] = "a valid xgoal.yaml is required"
-			return http.StatusCreated, response, nil
-		}
-		proposal := request.Proposal
-		plannerActor := request.CreatedBy
-		if request.Proposal == nil {
-			planned, profileID, planErr := service.planGoal(ctx, request)
-			plannerActor = profileID
-			if planErr != nil {
-				if gateErr := service.openPlannerGate(ctx, request.GoalID, profileID, planErr); gateErr != nil {
-					return 0, nil, mapStoreError(gateErr)
-				}
-				response := goalView(goal)
-				response["planner_gate_required"] = true
-				response["reason"] = planErr.Error()
-				return http.StatusCreated, response, nil
-			}
-			proposal = &goalProposal{Contract: planned.Contract, Plan: planned.Plan}
-		}
-		if !compiledReady {
-			var compileErr error
-			compiled, compileErr = goalcompile.Compile(request.GoalID, request.GoalID+"_revision_1", request.GoalID+"_plan_1", proposal.Contract, proposal.Plan, service.validators)
-			if compileErr != nil {
-				if gateErr := service.openPlannerGate(ctx, request.GoalID, plannerActor, compileErr); gateErr != nil {
-					return 0, nil, mapStoreError(gateErr)
-				}
-				response := goalView(goal)
-				response["planner_gate_required"] = true
-				response["reason"] = compileErr.Error()
-				return http.StatusCreated, response, nil
-			}
-		}
-		revision, err := service.store.FreezeGoalRevision(ctx, sqlite.GoalRevisionDraft{
-			ID: request.GoalID + "_revision_1", GoalID: request.GoalID, Revision: 1, RawGoal: request.RawGoal,
-			Contract: map[string]any{"protocol_version": goalcompile.ContractVersion, "contract": compiled.Contract, "config_hash": service.configHash, "created_by": request.CreatedBy, "mode": request.Mode},
-		}, 1, sqlite.EventInput{Type: "GoalRevisionFrozen", ActorType: "planner", ActorID: plannerActor, Payload: map[string]any{"proposal_hash": compiled.ContractHash}})
+		key, err := randomComponent("direct_create")
 		if err != nil {
-			return 0, nil, mapStoreError(err)
+			return 0, nil, err
 		}
-		plan, err := service.store.CreatePlanRevision(ctx, sqlite.PlanRevisionDraft{
-			ID: request.GoalID + "_plan_1", GoalRevisionID: revision.ID, Revision: 1,
-			WorkItems: compiled.WorkItems, Dependencies: compiled.Dependencies,
-		}, sqlite.EventInput{Type: "PlanRevisionCreated", ActorType: "planner", ActorID: plannerActor, Payload: map[string]any{"proposal_hash": compiled.PlanHash}})
+		var model any
+		decoder := json.NewDecoder(bytes.NewReader(operation.Body))
+		decoder.UseNumber()
+		if err := decoder.Decode(&model); err != nil {
+			return 0, nil, invalid("invalid goal request", err)
+		}
+		record, _, err := service.AcceptGoal(ctx, operation, "POST /v1/goals", key, model)
 		if err != nil {
-			return 0, nil, mapStoreError(err)
+			return 0, nil, err
 		}
-		if _, err := service.store.ActivatePlanRevision(ctx, plan.ID, plan.Version, 2, sqlite.EventInput{Type: "PlanActivated", ActorType: "kernel", Payload: map[string]any{"mode": request.Mode}}); err != nil {
-			return 0, nil, mapStoreError(err)
-		}
-		if _, err := service.store.RefreshReadyWork(ctx, request.GoalID, sqlite.EventInput{Type: "WorkReady", ActorType: "kernel", Payload: map[string]any{}}); err != nil {
-			return 0, nil, mapStoreError(err)
-		}
-		goal, err = service.store.Goal(ctx, request.GoalID)
-		if err != nil {
-			return 0, nil, mapStoreError(err)
-		}
-		service.wake(goal.ID)
-		return http.StatusCreated, goalView(goal), nil
+		return record.ResponseStatus, json.RawMessage(record.ResponseJSON), nil
+	case "goal.plan":
+		return service.retryPlanning(ctx, operation)
 	case "goal.pause", "goal.resume", "goal.cancel":
 		var request versionRequest
 		if err := api.DecodeStrict(operation.Body, &request); err != nil || request.ExpectedVersion <= 0 {
 			return 0, nil, invalid("expected_version is required", err)
+		}
+		goalBefore, readErr := service.store.Goal(ctx, operation.ResourceID)
+		if readErr != nil {
+			return 0, nil, mapStoreError(readErr)
+		}
+		if goalBefore.ActiveRevisionID == "" && operation.Name != "goal.cancel" {
+			paused := operation.Name == "goal.pause"
+			record, err := service.store.SetPlanningPaused(ctx, operation.ResourceID, request.ExpectedVersion, paused, request.Reason)
+			if err != nil {
+				return 0, nil, mapStoreError(err)
+			}
+			if paused {
+				service.cancel(record.Goal.ID)
+			} else {
+				service.wake(record.Goal.ID)
+			}
+			return http.StatusOK, planningView(record), nil
 		}
 		target := domain.GoalWaiting
 		if operation.Name == "goal.resume" {
@@ -362,6 +301,16 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 			"execution_model":    status.ExecutionModel,
 		}
 		blocker := service.executionBlocker()
+		processBlocker, err := service.store.ExecutionRecoveryBlocker(ctx)
+		if err != nil {
+			return 0, nil, mapStoreError(err)
+		}
+		if processBlocker != "" {
+			if blocker != "" {
+				blocker += "; "
+			}
+			blocker += processBlocker
+		}
 		if status.ExecutionBlocker != "" {
 			if blocker != "" {
 				blocker += "; "
@@ -370,6 +319,13 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 		}
 		response["execution_available"] = blocker == "" && status.ExecutionModel == workspace.ExecutionCurrentDirectory
 		response["execution_blocker"] = blocker
+		if planningRecord, planningErr := service.store.Planning(ctx, operation.ResourceID); planningErr == nil {
+			for key, value := range planningFields(planningRecord) {
+				response[key] = value
+			}
+		} else if !errors.Is(planningErr, basestore.ErrNotFound) {
+			return 0, nil, mapStoreError(planningErr)
+		}
 		return http.StatusOK, response, nil
 	case "goal.work-items":
 		items, err := service.store.GoalWorkItems(ctx, operation.ResourceID)
@@ -496,95 +452,6 @@ func (service *Service) replan(ctx context.Context, operation api.Operation) (in
 	}
 	service.wake(operation.ResourceID)
 	return http.StatusOK, plan, nil
-}
-
-func (service *Service) planGoal(ctx context.Context, request createGoalRequest) (planner.Proposal, string, error) {
-	var profile *config.Agent
-	for index := range service.configuration.Agents {
-		for _, role := range service.configuration.Agents[index].Roles {
-			if role == string(domain.RolePlanner) {
-				profile = &service.configuration.Agents[index]
-				break
-			}
-		}
-		if profile != nil {
-			break
-		}
-	}
-	if profile == nil {
-		return planner.Proposal{}, "kernel", errors.New("no trusted Agent Profile supports the Planner role")
-	}
-	environment := make(map[string]string)
-	for _, name := range profile.EnvironmentAllowlist {
-		if value, exists := os.LookupEnv(name); exists {
-			environment[name] = value
-		}
-	}
-	runtimeAdapter, err := service.profileAdapter(*profile, environment)
-	if err != nil {
-		return planner.Proposal{}, profile.ID, err
-	}
-	plannerAdapter, ok := runtimeAdapter.(planner.Adapter)
-	if !ok {
-		return planner.Proposal{}, profile.ID, errors.New("selected Agent adapter has no Planner contract")
-	}
-	probeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err = runtimeAdapter.Probe(probeContext, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
-	cancel()
-	if err != nil {
-		return planner.Proposal{}, profile.ID, err
-	}
-	validators := make([]string, 0, len(service.validators))
-	for id := range service.validators {
-		validators = append(validators, id)
-	}
-	sort.Strings(validators)
-	packetPath, packetHash, err := planner.Prepare(service.store.Info().ProjectDir, planner.Packet{
-		ProtocolVersion: planner.PacketVersion, GoalID: request.GoalID, RawGoal: request.RawGoal, Mode: request.Mode,
-		ConfigHash: service.configHash, TrustedValidators: validators, ProjectRoot: service.projectRoot,
-		ProjectNetwork: service.configuration.Runtime.ProjectNetwork, ProjectSecrets: service.configuration.Runtime.ProjectSecrets,
-	})
-	if err != nil {
-		return planner.Proposal{}, profile.ID, err
-	}
-	schema, err := planner.Schema()
-	if err != nil {
-		return planner.Proposal{}, profile.ID, err
-	}
-	invocationID, err := randomComponent("planner")
-	if err != nil {
-		return planner.Proposal{}, profile.ID, err
-	}
-	execution, err := plannerAdapter.Plan(ctx, planner.Invocation{
-		InvocationID: invocationID, ProfileID: profile.ID, WorkDir: service.projectRoot,
-		PacketPath: packetPath, PacketHash: packetHash,
-		Prompt:       "Act as the read-only xgoal Planner. Read the immutable Planner Packet at " + packetPath + " and inspect the repository only as needed. Return one bounded Goal Contract and acyclic Work Graph using only trusted validator IDs. Every Work Item must use recommended_role implementer and explicit read/write scopes. Do not modify files. If an important product meaning or authorization cannot be safely inferred, list it in ambiguities instead of guessing.",
-		OutputSchema: schema, Environment: environment, Timeout: profile.Timeout.Duration, MaxOutputBytes: 8 << 20,
-	}, nil)
-	if err != nil {
-		return planner.Proposal{}, profile.ID, err
-	}
-	if len(execution.Proposal.Ambiguities) != 0 {
-		return planner.Proposal{}, profile.ID, fmt.Errorf("Planner reported unresolved ambiguities: %s", strings.Join(execution.Proposal.Ambiguities, "; "))
-	}
-	return execution.Proposal, profile.ID, nil
-}
-
-func (service *Service) openPlannerGate(ctx context.Context, goalID, profileID string, cause error) error {
-	gateID, err := randomComponent("gate_planner")
-	if err != nil {
-		return err
-	}
-	_, err = service.store.CreateGate(ctx, sqlite.GateDraft{
-		ID: gateID, GoalID: goalID, ReasonCode: "planner_clarification",
-		Facts:          map[string]any{"profile_id": profileID, "error": cause.Error()},
-		Unknowns:       []string{"a bounded and deterministically valid Goal Contract and Work Graph"},
-		Options:        []string{"provide a corrected proposal", "clarify the raw goal", "cancel the goal"},
-		Recommendation: "clarify the goal or provide a proposal that passes deterministic compilation",
-		Action:         domain.ActionExpandScope, Scope: []string{"goal/" + goalID + "/contract"},
-		ExpiresAt: time.Now().UTC().Add(24 * time.Hour), MaxUses: 1, Revocable: true, Required: true,
-	}, sqlite.EventInput{Type: "GateOpened", ActorType: "kernel", Payload: map[string]any{"reason": "planner_clarification"}})
-	return err
 }
 
 func (service *Service) wake(goalID string) {
@@ -724,6 +591,28 @@ func (service *Service) passiveProfile(ctx context.Context, profile config.Agent
 }
 
 func (service *Service) activeProbe(ctx context.Context, operation api.Operation) (int, any, error) {
+	var status int
+	var response any
+	var executionErr error
+	if slot, ok := service.lifecycle.(interface {
+		TryProjectExecution(context.Context, func(context.Context) error) (bool, error)
+	}); ok {
+		entered, err := slot.TryProjectExecution(ctx, func(runContext context.Context) error {
+			status, response, executionErr = service.runActiveProbe(runContext, operation)
+			return executionErr
+		})
+		if err != nil {
+			return 0, nil, mapStoreError(err)
+		}
+		if !entered {
+			return 0, nil, &api.APIError{Status: http.StatusConflict, Code: "PROJECT_BUSY", Message: "another invocation owns this project's execution slot"}
+		}
+		return status, response, executionErr
+	}
+	return 0, nil, &api.APIError{Status: http.StatusServiceUnavailable, Code: "EXECUTION_UNAVAILABLE", Message: "active probes require the daemon execution lifecycle"}
+}
+
+func (service *Service) runActiveProbe(ctx context.Context, operation api.Operation) (int, any, error) {
 	var request activeProbeRequest
 	if err := api.DecodeStrict(operation.Body, &request); err != nil || !validID(request.ProfileID) || !request.AcknowledgeTransport || request.TimeoutMilliseconds <= 0 || request.TimeoutMilliseconds > int64((30*time.Minute)/time.Millisecond) {
 		return 0, nil, invalid("active probe requires profile, explicit Provider Transport acknowledgement, and a positive timeout", err)
@@ -752,6 +641,11 @@ func (service *Service) activeProbe(ctx context.Context, operation api.Operation
 		return 0, nil, &api.APIError{Status: http.StatusServiceUnavailable, Code: "AGENT_UNAVAILABLE", Message: err.Error()}
 	}
 	timeout := time.Duration(request.TimeoutMilliseconds) * time.Millisecond
+	probeID, err := randomComponent("probe")
+	if err != nil {
+		return 0, nil, err
+	}
+	ctx = supervisor.WithOwner(ctx, service.store, supervisor.Owner{Kind: "probe", ID: probeID, Generation: 1})
 	capabilities, err := runtimeAdapter.Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbeActiveContract, ProfileID: selected.ID, ProviderTransport: true, Timeout: timeout})
 	if err != nil {
 		return 0, nil, &api.APIError{Status: http.StatusServiceUnavailable, Code: "ACTIVE_PROBE_FAILED", Message: err.Error()}
@@ -845,6 +739,14 @@ func goalView(goal domain.Goal) map[string]any {
 
 func mapStoreError(err error) error {
 	switch {
+	case errors.Is(err, sqlite.ErrInvalidPlanningProposal):
+		return invalid("planning proposal failed deterministic validation", err)
+	case errors.Is(err, sqlite.ErrPlanningBlocked):
+		return &api.APIError{Status: http.StatusConflict, Code: "PLANNING_WAITING", Message: err.Error()}
+	case errors.Is(err, sqlite.ErrConfigurationChanged):
+		return &api.APIError{Status: http.StatusConflict, Code: "CONFIGURATION_CHANGED", Message: err.Error()}
+	case errors.Is(err, sqlite.ErrCheckoutBusy):
+		return &api.APIError{Status: http.StatusConflict, Code: "PROJECT_BUSY", Message: err.Error()}
 	case errors.Is(err, basestore.ErrNotFound):
 		return &api.APIError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: err.Error()}
 	case errors.Is(err, basestore.ErrIdempotencyConflict), errors.Is(err, basestore.ErrConflict), errors.Is(err, basestore.ErrAlreadyExists), errors.Is(err, basestore.ErrActiveLease), errors.Is(err, basestore.ErrStaleLease):

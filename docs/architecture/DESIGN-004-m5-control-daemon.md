@@ -123,27 +123,29 @@ Planner Effect 的 immutable request 包含 Goal ID、raw_goal、mode、created_
 
 Planner Effect 复用 REQUESTED/EXECUTING/OBSERVING/RECOVERING/SUCCEEDED/FAILED。先登记 invocation，再调用 Provider；完成后先保存可校验 Proposal/result observation。Compile 成功后一个事务冻结 GoalRevision、创建Plan/Work/Dependencies、激活、完成Effect与Event，任何失败不留下半激活图。
 
-恢复 OBSERVING 的结果只确定性编译/发布，不重复Provider。中断且没有结果时，先证明旧执行已结束，再创建新generation；重复失败无进展遵守原Reconcile策略。已取消/暂停Goal或过期generation的结果不发布。配置hash漂移进入等待，不能默默换Profile/Validator重跑。
+恢复 OBSERVING 的结果只确定性编译/发布，不重复Provider。中断且没有结果时，先证明旧执行已结束，再创建新generation；同 Goal/config 的中断次数达到 noProgressLimit 后等待。持久 pause 事件可以证明由操作员引发的中断，即使进程清理观察尚未落盘，也不消耗失败预算。已取消/暂停Goal或过期generation的结果不发布。配置hash漂移进入等待，不能默默换Profile/Validator重跑。
 
 ### 8.3 可操作等待与控制
 
 DRAFT 的 pause/resume 用持久规划控制意图表示，状态投影包含 planning_state=PAUSED，不能伪造无Revision的RUNNING。cancel终态保留历史，取消当前Provider并防止迟到提交；wait遇到规划暂停/等待以3结束。
 
-`goal plan <goal-id> --expected-version N --reason ... [--proposal-file ...]` / `POST /v1/goals/{id}/plan` 为未冻结目标提供受CAS保护的修正Proposal或新规划尝试。记录新规划generation和原失败，必要时明确解决对应planner Gate，不把批准普通Scope Gate等同于通过Proposal验证。显式 `goal plan` 重试可以绑定当前配置hash/profile以解决配置漂移等待，须记录旧/新配置身份和操作者理由；旧Effect不可变，创建新generation。已冻结目标继续使用既有replan合同。
+`goal plan <goal-id> --expected-version N --reason ... [--proposal-file ...]` / `POST /v1/goals/{id}/plan` 为未冻结目标提供受CAS保护的修正Proposal或新规划尝试。记录新规划generation和原失败，必要时明确解决对应planner Gate，不把批准普通Scope Gate等同于通过Proposal验证。显式 `goal plan` 重试可以绑定当前配置hash/profile以解决配置漂移等待，须记录旧/新配置身份和操作者理由；旧Effect不可变，创建新generation。daemon 保持启动时经校验的单一配置快照，不自动热加载。规划开始和发布时还须读取当前 xgoal.yaml hash；漂移后先重启 daemon 加载新配置，再显式 goal plan 绑定新 generation。启动快照与当前文件仍不一致时，goal plan 返回 CONFIGURATION_CHANGED，不接受注定无法执行的新 generation。已冻结目标继续使用既有replan合同。
 
 ### 8.4 旧记录恢复
 
-不盲目重放所有IN_PROGRESS。创建请求可证明与GoalCreated事实及完整请求对应时，重建接受响应并补规划意图；半冻结状态核对已持久Contract/Plan后完成确定性激活或建立明确Gate。无法证明归属、请求冲突或不安全副作用，保存REQUEST_INTERRUPTED等确定响应和诊断，保留旧请求/事实，不永久停在REQUEST_IN_PROGRESS。恢复必须幂等。
+不盲目重放所有 IN_PROGRESS。仅当 GoalCreated 的 scope/key/request hash 与现有持久规划 Effect 精确对应时，重建原接受响应；不从历史残缺 raw_goal 猜测并新增 Provider 作业。其他请求保存 REQUEST_INTERRUPTED 确定响应及诊断。
+
+半冻结 READY 仅在旧初始编译来源事件、Contract envelope/语义/哈希、配置 hash、完整 Draft Graph 哈希及 Required Work 对 Criteria 的覆盖均可证明时确定性激活。人工失败 replan 留下的 Draft 不属于初始编译来源，保持 Gate。配置恢复后只撤销已解决的规划图 Gate，普通授权 Gate 保留。恢复幂等，无法证明时保留原状态与事实。
 
 ## 9. 所有执行者的归属与进程回收
 
 扩展现有进程监督能力，使Planner、Implementer、Reviewer、active probe和由daemon启动的验证/服务命令具备可恢复的invocation身份。新增持久记录可引用不同owner kind/id，包含启动意图、PID/PGID、启动身份、generation、退出观察；不滥用只有Attempt外键的旧worker_processes表。旧表数据继续读回兼容。
 
-Provider真正执行前需要启动握手：先持久化启动意图，启动阻塞等待的受控wrapper，记录该PID/PGID/启动身份，随后通过私有pipe释放wrapper exec目标命令。父daemon在登记前后崩溃时，未释放wrapper因pipe EOF退出；已释放的执行者有可读回归属。仅仅在exec之后加OnStart回调不能关闭未登记窗口。
+Provider真正执行前需要启动握手：先持久化启动意图，启动阻塞等待的受控wrapper，记录该PID/PGID/启动身份，随后通过私有 pipe 释放 wrapper 启动目标命令。wrapper 保持为该组可验证的 leader，直到目标与同组子孙结束或完成受控回收；目标父进程提前退出不会让组归属凭证先消失。它是单次 invocation 内部的启动/回收机制，不是第二个 daemon 或调度器。父daemon在登记前后崩溃时，未释放wrapper因pipe EOF退出；已释放的执行者有可读回归属，wrapper 的启动身份供重启后的回收核对。仅仅在exec之后加OnStart回调不能关闭未登记窗口。
 
 进程回收对匹配身份的组发TERM，宽限后KILL，并确认组内执行者结束；父进程提前退出和子孙持有stdout pipe必须有测试。os/exec WaitDelay防止pipe无限阻塞，但不替代进程清理。未知PID或身份变化不发信号，持久记录lost/无法证明的事实，必要时阻止新执行。
 
-关闭与重启同时对账Attempt/Lease/Work：中断执行归档后回到可调度的新Attempt或可操作Gate；不要只撤Lease留下RECONCILING Work。Provider observer和日志文件收尾使用有效清理context并等待完成，之后才能关DB。
+关闭与重启同时对账 Attempt/Lease/Work，包括已撤销租约留下的孤立 Work。新 Attempt 以 process_journal_version=1 声明执行前必有持久启动意图；全部进程终止后可归档并进入 checkout_retry_required，保留文件等待用户审查现场。旧 Attempt 缺少此保证或进程身份未知时保留阻塞，不推断已经停止。后续恢复确认终止时更新原 Gate。Provider observer 和日志收尾使用有效清理 context；清理错误必须保留 ErrProcessUnconfirmed，不无限等待、丢弃服务 handle 或生成成功 Receipt。
 
 ## 10. CLI、隔离与观测
 

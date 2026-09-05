@@ -59,78 +59,7 @@ func (s *Store) FreezeGoalRevision(
 	}
 	var result domain.GoalRevision
 	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
-		goal, err := readGoal(ctx, tx, draft.GoalID)
-		if err != nil {
-			return err
-		}
-		if goal.Version != expectedGoalVersion {
-			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
-		}
-		if err := domain.ValidateGoalTransition(goal.State, domain.GoalReady); err != nil {
-			return err
-		}
-		if _, err := readGoalRevision(ctx, tx, draft.ID); err == nil {
-			return fmt.Errorf("goal revision %q: %w", draft.ID, basestore.ErrAlreadyExists)
-		} else if !errors.Is(err, basestore.ErrNotFound) {
-			return err
-		}
-		var nextRevision int64
-		if err := tx.QueryRowContext(ctx, `
-SELECT COALESCE(MAX(revision), 0) + 1
-FROM goal_revisions
-WHERE goal_id = ?`, draft.GoalID).Scan(&nextRevision); err != nil {
-			return fmt.Errorf("allocate goal revision: %w", err)
-		}
-		if draft.Revision != nextRevision {
-			return fmt.Errorf("goal revision %q number %d, want %d: %w", draft.ID, draft.Revision, nextRevision, basestore.ErrConflict)
-		}
-		frozenAt := s.source.Now().UTC()
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO goal_revisions(id, goal_id, revision, raw_goal, contract_json, contract_hash, frozen_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			draft.ID,
-			draft.GoalID,
-			draft.Revision,
-			draft.RawGoal,
-			contractJSON,
-			contractHash,
-			frozenAt.Format(time.RFC3339Nano),
-		); err != nil {
-			return fmt.Errorf("insert goal revision %q: %w", draft.ID, err)
-		}
-		updated, err := tx.ExecContext(ctx, `
-UPDATE goals
-SET state = ?, active_revision_id = ?, version = version + 1, updated_at = ?
-WHERE id = ? AND version = ?`,
-			domain.GoalReady,
-			draft.ID,
-			frozenAt.Format(time.RFC3339Nano),
-			draft.GoalID,
-			expectedGoalVersion,
-		)
-		if err != nil {
-			return fmt.Errorf("activate goal revision %q: %w", draft.ID, err)
-		}
-		affected, err := updated.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("read goal revision activation result: %w", err)
-		}
-		if affected != 1 {
-			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
-		}
-		if err := s.appendEvent(ctx, tx, "goal", goal.ID, prepared); err != nil {
-			return err
-		}
-		result = domain.GoalRevision{
-			ID:           draft.ID,
-			GoalID:       draft.GoalID,
-			Revision:     draft.Revision,
-			RawGoal:      draft.RawGoal,
-			ContractJSON: append([]byte(nil), contractJSON...),
-			Hash:         contractHash,
-			FrozenAt:     frozenAt,
-		}
-		return nil
+		return s.freezeGoalRevisionTx(ctx, tx, draft, expectedGoalVersion, contractJSON, contractHash, prepared, &result)
 	})
 	if err != nil {
 		return domain.GoalRevision{}, err
@@ -201,73 +130,7 @@ func (s *Store) CreatePlanRevision(ctx context.Context, draft PlanRevisionDraft,
 
 	var result domain.PlanRevision
 	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
-		goalRevision, err := readGoalRevision(ctx, tx, draft.GoalRevisionID)
-		if err != nil {
-			return err
-		}
-		goal, err := readGoal(ctx, tx, goalRevision.GoalID)
-		if err != nil {
-			return err
-		}
-		if goal.ActiveRevisionID != goalRevision.ID || goal.State == domain.GoalCompleted || goal.State == domain.GoalCancelled {
-			return fmt.Errorf("goal revision %q is not active: %w", goalRevision.ID, basestore.ErrConflict)
-		}
-		if _, err := readPlanRevision(ctx, tx, draft.ID); err == nil {
-			return fmt.Errorf("plan revision %q: %w", draft.ID, basestore.ErrAlreadyExists)
-		} else if !errors.Is(err, basestore.ErrNotFound) {
-			return err
-		}
-		var nextRevision int64
-		if err := tx.QueryRowContext(ctx, `
-SELECT COALESCE(MAX(revision), 0) + 1
-FROM plan_revisions
-WHERE goal_revision_id = ?`, draft.GoalRevisionID).Scan(&nextRevision); err != nil {
-			return fmt.Errorf("allocate plan revision: %w", err)
-		}
-		if draft.Revision != nextRevision {
-			return fmt.Errorf("plan revision %q number %d, want %d: %w", draft.ID, draft.Revision, nextRevision, basestore.ErrConflict)
-		}
-		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO plan_revisions(id, goal_revision_id, revision, graph_hash, status, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-			draft.ID,
-			draft.GoalRevisionID,
-			draft.Revision,
-			graphHash,
-			domain.PlanDraft,
-			now,
-			now,
-		); err != nil {
-			return fmt.Errorf("insert plan revision %q: %w", draft.ID, err)
-		}
-		if err := s.appendEvent(ctx, tx, "plan", draft.ID, preparedPlanEvent); err != nil {
-			return err
-		}
-		for _, work := range workItems {
-			if err := insertWorkItem(ctx, tx, work, now); err != nil {
-				return err
-			}
-			if err := s.appendEvent(ctx, tx, "work", work.ID, preparedWorkEvents[work.ID]); err != nil {
-				return err
-			}
-		}
-		for _, dependency := range dependencies {
-			if _, err := tx.ExecContext(ctx, `
-INSERT INTO work_dependencies(from_id, to_id, dependency_type)
-VALUES (?, ?, ?)`, dependency.FromID, dependency.ToID, dependency.Type); err != nil {
-				return fmt.Errorf("insert dependency %s -> %s: %w", dependency.FromID, dependency.ToID, err)
-			}
-		}
-		result = domain.PlanRevision{
-			ID:             draft.ID,
-			GoalRevisionID: draft.GoalRevisionID,
-			Revision:       draft.Revision,
-			GraphHash:      graphHash,
-			Status:         domain.PlanDraft,
-			Version:        1,
-		}
-		return nil
+		return s.createPlanRevisionTx(ctx, tx, draft, workItems, dependencies, graphHash, preparedPlanEvent, preparedWorkEvents, &result)
 	})
 	if err != nil {
 		return domain.PlanRevision{}, err
@@ -291,69 +154,7 @@ func (s *Store) ActivatePlanRevision(
 	}
 	var result domain.PlanRevision
 	err = s.withTransaction(ctx, func(tx *sql.Tx) error {
-		plan, err := readPlanRevision(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if plan.Version != expectedPlanVersion {
-			return fmt.Errorf("plan revision %q: %w", id, basestore.ErrConflict)
-		}
-		if err := domain.ValidatePlanRevisionTransition(plan.Status, domain.PlanActive); err != nil {
-			return err
-		}
-		goalRevision, err := readGoalRevision(ctx, tx, plan.GoalRevisionID)
-		if err != nil {
-			return err
-		}
-		goal, err := readGoal(ctx, tx, goalRevision.GoalID)
-		if err != nil {
-			return err
-		}
-		if goal.Version != expectedGoalVersion || goal.ActiveRevisionID != plan.GoalRevisionID {
-			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
-		}
-		if err := domain.ValidateGoalTransition(goal.State, domain.GoalRunning); err != nil {
-			return err
-		}
-		now := s.source.Now().UTC().Format(time.RFC3339Nano)
-		updated, err := tx.ExecContext(ctx, `
-UPDATE plan_revisions
-SET status = ?, version = version + 1, updated_at = ?
-WHERE id = ? AND version = ? AND status = ?`, domain.PlanActive, now, id, expectedPlanVersion, domain.PlanDraft)
-		if err != nil {
-			return fmt.Errorf("activate plan revision %q: %w", id, err)
-		}
-		affected, err := updated.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("read plan activation result: %w", err)
-		}
-		if affected != 1 {
-			return fmt.Errorf("plan revision %q: %w", id, basestore.ErrConflict)
-		}
-		updated, err = tx.ExecContext(ctx, `
-UPDATE goals
-SET state = ?, version = version + 1, updated_at = ?
-WHERE id = ? AND version = ?`, domain.GoalRunning, now, goal.ID, expectedGoalVersion)
-		if err != nil {
-			return fmt.Errorf("start goal %q: %w", goal.ID, err)
-		}
-		affected, err = updated.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("read goal start result: %w", err)
-		}
-		if affected != 1 {
-			return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
-		}
-		if err := s.appendEvent(ctx, tx, "plan", id, prepared); err != nil {
-			return err
-		}
-		if err := s.appendEvent(ctx, tx, "goal", goal.ID, prepared); err != nil {
-			return err
-		}
-		plan.Status = domain.PlanActive
-		plan.Version++
-		result = plan
-		return nil
+		return s.activatePlanRevisionTx(ctx, tx, id, expectedPlanVersion, expectedGoalVersion, prepared, &result)
 	})
 	if err != nil {
 		return domain.PlanRevision{}, err
@@ -808,4 +609,218 @@ func boolInteger(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// FreezeGoalRevision transaction body is shared by standalone operations and atomic planning publication.
+func (s *Store) freezeGoalRevisionTx(ctx context.Context, tx *sql.Tx, draft GoalRevisionDraft, expectedGoalVersion int64, contractJSON []byte, contractHash string, prepared preparedEvent, result *domain.GoalRevision) error {
+	goal, err := readGoal(ctx, tx, draft.GoalID)
+	if err != nil {
+		return err
+	}
+	if goal.Version != expectedGoalVersion {
+		return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
+	}
+	if err := domain.ValidateGoalTransition(goal.State, domain.GoalReady); err != nil {
+		return err
+	}
+	if _, err := readGoalRevision(ctx, tx, draft.ID); err == nil {
+		return fmt.Errorf("goal revision %q: %w", draft.ID, basestore.ErrAlreadyExists)
+	} else if !errors.Is(err, basestore.ErrNotFound) {
+		return err
+	}
+	var nextRevision int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(MAX(revision), 0) + 1
+FROM goal_revisions
+WHERE goal_id = ?`, draft.GoalID).Scan(&nextRevision); err != nil {
+		return fmt.Errorf("allocate goal revision: %w", err)
+	}
+	if draft.Revision != nextRevision {
+		return fmt.Errorf("goal revision %q number %d, want %d: %w", draft.ID, draft.Revision, nextRevision, basestore.ErrConflict)
+	}
+	frozenAt := s.source.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO goal_revisions(id, goal_id, revision, raw_goal, contract_json, contract_hash, frozen_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		draft.ID,
+		draft.GoalID,
+		draft.Revision,
+		draft.RawGoal,
+		contractJSON,
+		contractHash,
+		frozenAt.Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("insert goal revision %q: %w", draft.ID, err)
+	}
+	updated, err := tx.ExecContext(ctx, `
+UPDATE goals
+SET state = ?, active_revision_id = ?, version = version + 1, updated_at = ?
+WHERE id = ? AND version = ?`,
+		domain.GoalReady,
+		draft.ID,
+		frozenAt.Format(time.RFC3339Nano),
+		draft.GoalID,
+		expectedGoalVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("activate goal revision %q: %w", draft.ID, err)
+	}
+	affected, err := updated.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read goal revision activation result: %w", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
+	}
+	if err := s.appendEvent(ctx, tx, "goal", goal.ID, prepared); err != nil {
+		return err
+	}
+	*result = domain.GoalRevision{
+		ID:           draft.ID,
+		GoalID:       draft.GoalID,
+		Revision:     draft.Revision,
+		RawGoal:      draft.RawGoal,
+		ContractJSON: append([]byte(nil), contractJSON...),
+		Hash:         contractHash,
+		FrozenAt:     frozenAt,
+	}
+	return nil
+}
+
+// CreatePlanRevision transaction body is shared by standalone operations and atomic planning publication.
+func (s *Store) createPlanRevisionTx(ctx context.Context, tx *sql.Tx, draft PlanRevisionDraft, workItems []domain.WorkItem, dependencies []domain.WorkDependency, graphHash string, preparedPlanEvent preparedEvent, preparedWorkEvents map[string]preparedEvent, result *domain.PlanRevision) error {
+	goalRevision, err := readGoalRevision(ctx, tx, draft.GoalRevisionID)
+	if err != nil {
+		return err
+	}
+	goal, err := readGoal(ctx, tx, goalRevision.GoalID)
+	if err != nil {
+		return err
+	}
+	if goal.ActiveRevisionID != goalRevision.ID || goal.State == domain.GoalCompleted || goal.State == domain.GoalCancelled {
+		return fmt.Errorf("goal revision %q is not active: %w", goalRevision.ID, basestore.ErrConflict)
+	}
+	if _, err := readPlanRevision(ctx, tx, draft.ID); err == nil {
+		return fmt.Errorf("plan revision %q: %w", draft.ID, basestore.ErrAlreadyExists)
+	} else if !errors.Is(err, basestore.ErrNotFound) {
+		return err
+	}
+	var nextRevision int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(MAX(revision), 0) + 1
+FROM plan_revisions
+WHERE goal_revision_id = ?`, draft.GoalRevisionID).Scan(&nextRevision); err != nil {
+		return fmt.Errorf("allocate plan revision: %w", err)
+	}
+	if draft.Revision != nextRevision {
+		return fmt.Errorf("plan revision %q number %d, want %d: %w", draft.ID, draft.Revision, nextRevision, basestore.ErrConflict)
+	}
+	now := s.source.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO plan_revisions(id, goal_revision_id, revision, graph_hash, status, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+		draft.ID,
+		draft.GoalRevisionID,
+		draft.Revision,
+		graphHash,
+		domain.PlanDraft,
+		now,
+		now,
+	); err != nil {
+		return fmt.Errorf("insert plan revision %q: %w", draft.ID, err)
+	}
+	if err := s.appendEvent(ctx, tx, "plan", draft.ID, preparedPlanEvent); err != nil {
+		return err
+	}
+	for _, work := range workItems {
+		if err := insertWorkItem(ctx, tx, work, now); err != nil {
+			return err
+		}
+		if err := s.appendEvent(ctx, tx, "work", work.ID, preparedWorkEvents[work.ID]); err != nil {
+			return err
+		}
+	}
+	for _, dependency := range dependencies {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO work_dependencies(from_id, to_id, dependency_type)
+VALUES (?, ?, ?)`, dependency.FromID, dependency.ToID, dependency.Type); err != nil {
+			return fmt.Errorf("insert dependency %s -> %s: %w", dependency.FromID, dependency.ToID, err)
+		}
+	}
+	*result = domain.PlanRevision{
+		ID:             draft.ID,
+		GoalRevisionID: draft.GoalRevisionID,
+		Revision:       draft.Revision,
+		GraphHash:      graphHash,
+		Status:         domain.PlanDraft,
+		Version:        1,
+	}
+	return nil
+}
+
+// ActivatePlanRevision transaction body is shared by standalone operations and atomic planning publication.
+func (s *Store) activatePlanRevisionTx(ctx context.Context, tx *sql.Tx, id string, expectedPlanVersion, expectedGoalVersion int64, prepared preparedEvent, result *domain.PlanRevision) error {
+	plan, err := readPlanRevision(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if plan.Version != expectedPlanVersion {
+		return fmt.Errorf("plan revision %q: %w", id, basestore.ErrConflict)
+	}
+	if err := domain.ValidatePlanRevisionTransition(plan.Status, domain.PlanActive); err != nil {
+		return err
+	}
+	goalRevision, err := readGoalRevision(ctx, tx, plan.GoalRevisionID)
+	if err != nil {
+		return err
+	}
+	goal, err := readGoal(ctx, tx, goalRevision.GoalID)
+	if err != nil {
+		return err
+	}
+	if goal.Version != expectedGoalVersion || goal.ActiveRevisionID != plan.GoalRevisionID {
+		return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
+	}
+	if err := domain.ValidateGoalTransition(goal.State, domain.GoalRunning); err != nil {
+		return err
+	}
+	now := s.source.Now().UTC().Format(time.RFC3339Nano)
+	updated, err := tx.ExecContext(ctx, `
+UPDATE plan_revisions
+SET status = ?, version = version + 1, updated_at = ?
+WHERE id = ? AND version = ? AND status = ?`, domain.PlanActive, now, id, expectedPlanVersion, domain.PlanDraft)
+	if err != nil {
+		return fmt.Errorf("activate plan revision %q: %w", id, err)
+	}
+	affected, err := updated.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read plan activation result: %w", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("plan revision %q: %w", id, basestore.ErrConflict)
+	}
+	updated, err = tx.ExecContext(ctx, `
+UPDATE goals
+SET state = ?, version = version + 1, updated_at = ?
+WHERE id = ? AND version = ?`, domain.GoalRunning, now, goal.ID, expectedGoalVersion)
+	if err != nil {
+		return fmt.Errorf("start goal %q: %w", goal.ID, err)
+	}
+	affected, err = updated.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read goal start result: %w", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("goal %q: %w", goal.ID, basestore.ErrConflict)
+	}
+	if err := s.appendEvent(ctx, tx, "plan", id, prepared); err != nil {
+		return err
+	}
+	if err := s.appendEvent(ctx, tx, "goal", goal.ID, prepared); err != nil {
+		return err
+	}
+	plan.Status = domain.PlanActive
+	plan.Version++
+	*result = plan
+	return nil
 }

@@ -39,29 +39,31 @@ const (
 )
 
 type Engine struct {
-	store       *sqlite.Store
-	projectRoot string
-	runtimeRoot string
-	config      config.Config
-	configHash  string
-	repository  *gitrepo.Repository
-	workspaces  *workspace.Manager
-	packets     *workpacket.Store
-	patches     *patch.Store
-	environment *environment.Local
-	promotions  *promotion.Manager
-	reviews     *review.Coordinator
-	reviewStore *review.Store
-	finalizer   *finalize.Manager
-	adapters    map[string]adapter.Adapter
-	reviewers   map[string]review.Adapter
-	profiles    map[string]config.Agent
+	store          *sqlite.Store
+	runtimeContext context.Context
+	projectRoot    string
+	runtimeRoot    string
+	config         config.Config
+	configHash     string
+	repository     *gitrepo.Repository
+	workspaces     *workspace.Manager
+	packets        *workpacket.Store
+	patches        *patch.Store
+	environment    *environment.Local
+	promotions     *promotion.Manager
+	reviews        *review.Coordinator
+	reviewStore    *review.Store
+	finalizer      *finalize.Manager
+	adapters       map[string]adapter.Adapter
+	reviewers      map[string]review.Adapter
+	profiles       map[string]config.Agent
 
 	queue    chan string
 	mu       sync.Mutex
 	runs     map[string]context.CancelFunc
 	workRuns map[string]context.CancelCauseFunc
 	serial   sync.Mutex
+	stopping bool
 }
 
 func New(ctx context.Context, store *sqlite.Store, projectRoot string, configuration config.Config) (*Engine, error) {
@@ -120,7 +122,7 @@ func New(ctx context.Context, store *sqlite.Store, projectRoot string, configura
 		return nil, err
 	}
 	engine := &Engine{
-		store: store, projectRoot: projectRoot, runtimeRoot: runtimeRoot,
+		store: store, runtimeContext: ctx, projectRoot: projectRoot, runtimeRoot: runtimeRoot,
 		config: configuration, configHash: configHash, repository: repository,
 		workspaces: workspaces, packets: packets, patches: patches, environment: local,
 		promotions: promotions, reviews: reviews, reviewStore: reviewStore, finalizer: finalizer,
@@ -210,6 +212,7 @@ func (engine *Engine) unregisterWork(workID string) {
 
 // Run services the project-wide serial slot until ctx is cancelled.
 func (engine *Engine) Run(ctx context.Context) {
+	defer engine.drainExecutions()
 	engine.enqueueRunnable(ctx)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -234,6 +237,13 @@ func (engine *Engine) enqueueRunnable(ctx context.Context) {
 		return
 	}
 	for _, id := range ids {
+		engine.Wake(id)
+	}
+	planningIDs, err := engine.store.RunnablePlanningGoalIDs(ctx)
+	if err != nil {
+		return
+	}
+	for _, id := range planningIDs {
 		engine.Wake(id)
 	}
 }
@@ -274,7 +284,8 @@ func (engine *Engine) Recover(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	liveHash, _ := engine.currentPlanningConfiguration(engine.configHash)
+	return engine.store.RecoverPlanning(ctx, sqlite.PlanningRecoveryOptions{CurrentConfigHash: liveHash, NoProgressLimit: engine.config.Orchestration.NoProgressLimit})
 }
 
 func (engine *Engine) activeGoalRevision(ctx context.Context, goal domain.Goal) (domain.GoalRevision, error) {
@@ -337,6 +348,18 @@ func (engine *Engine) RunGoal(parent context.Context, goalID string) error {
 			return err
 		}
 		switch goal.State {
+		case domain.GoalDraft:
+			if err := engine.runPlanning(ctx, goalID); err != nil {
+				return err
+			}
+			updated, err := engine.store.Goal(ctx, goalID)
+			if err != nil {
+				return err
+			}
+			if updated.State != domain.GoalRunning {
+				return nil
+			}
+			continue
 		case domain.GoalRunning:
 			if _, err := engine.store.RefreshReadyWork(ctx, goalID, event("WorkReady", "kernel", map[string]any{"source": "orchestrator"})); err != nil {
 				return err

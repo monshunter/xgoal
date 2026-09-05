@@ -167,9 +167,7 @@ func (local *Local) Snapshot(ctx context.Context, handle Handle) (protocol.Envir
 	}
 	toolVersions := make(map[string]string, len(probes))
 	for _, probe := range probes {
-		probeContext, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		version, err := local.runVersion(probeContext, managed.handle.Worktree, probe.Argv, environment)
-		cancel()
+		version, err := local.runVersion(ctx, managed.handle.Worktree, probe.Argv, environment)
 		if err != nil {
 			if probe.Required {
 				return protocol.EnvironmentSnapshot{}, fmt.Errorf("probe required tool %q: %w", probe.Name, err)
@@ -348,8 +346,9 @@ func (local *Local) runVersion(ctx context.Context, directory string, argv, envi
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	output := &boundedBuffer{limit: maxVersionBytes}
+	diagnostics := &boundedBuffer{limit: maxVersionBytes}
 	execution, err := supervisor.Run(ctx, supervisor.Command{
-		Argv: argv, Dir: directory, Env: environment, Stdout: output, Stderr: output, GracePeriod: time.Second,
+		Argv: argv, Dir: directory, Env: environment, Stdout: output, Stderr: diagnostics, GracePeriod: time.Second,
 	})
 	if err != nil {
 		return "", err
@@ -357,11 +356,14 @@ func (local *Local) runVersion(ctx context.Context, directory string, argv, envi
 	if execution.ExitCode != 0 {
 		return "", fmt.Errorf("%q exited %d", argv[0], execution.ExitCode)
 	}
-	if output.exceeded {
+	if output.exceeded || diagnostics.exceeded || output.buffer.Len()+diagnostics.buffer.Len() > maxVersionBytes {
 		return "", fmt.Errorf("%q version output exceeds %d bytes", argv[0], maxVersionBytes)
 	}
 	version := strings.TrimSpace(output.buffer.String())
-	if version == "" || !utf8.ValidString(version) || strings.ContainsRune(version, '\x00') {
+	if version == "" {
+		version = strings.TrimSpace(diagnostics.buffer.String())
+	}
+	if version == "" || !utf8.ValidString(version) || strings.ContainsAny(version, "\r\n\x00") {
 		return "", fmt.Errorf("%q returned an invalid version", argv[0])
 	}
 	return version, nil

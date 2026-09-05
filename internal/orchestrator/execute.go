@@ -21,11 +21,11 @@ import (
 	"github.com/monshunter/xgoal/internal/promotion"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/reconcile"
-	"github.com/monshunter/xgoal/internal/recovery"
 	"github.com/monshunter/xgoal/internal/review"
 	"github.com/monshunter/xgoal/internal/scope"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/supervisor"
 	"github.com/monshunter/xgoal/internal/validator"
 	"github.com/monshunter/xgoal/internal/workspace"
 )
@@ -178,7 +178,8 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		}
 		return engine.failAttempt(ctx, goal, work, revision, lease, class, cause, strategy, patchHash)
 	}
-	attemptContext, cancelAttempt := context.WithCancelCause(ctx)
+	ownedContext := supervisor.WithOwner(ctx, engine.store, supervisor.Owner{Kind: "attempt", ID: attempt.ID, GoalID: goal.ID, Generation: lease.Generation})
+	attemptContext, cancelAttempt := context.WithCancelCause(ownedContext)
 	engine.registerWork(work.ID, cancelAttempt)
 	defer engine.unregisterWork(work.ID)
 	heartbeatContext, stopHeartbeat := context.WithCancel(attemptContext)
@@ -248,19 +249,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	if err != nil {
 		return fail(classifyAgentError(err), err, profile.ID, "")
 	}
-	workerVersion, err := engine.recordWorkerIfAlive(ctx, attemptID, handle)
-	if err != nil {
-		shutdownContext, requestShutdown := context.WithCancelCause(context.WithoutCancel(ctx))
-		requestShutdown(err)
-		_, shutdownErr := engine.waitAgent(shutdownContext, runtimeAdapter, handle)
-		return fail(reconcile.InternalInvariantViolation, errors.Join(err, shutdownErr), profile.ID, "")
-	}
 	claim, waitErr := engine.waitAgent(ctx, runtimeAdapter, handle)
-	if workerVersion > 0 && !errors.Is(waitErr, errExecutionStillRunning) {
-		if _, err := engine.store.MarkWorkerExited(context.Background(), attemptID, workerVersion, event("WorkerExited", "daemon", map[string]any{"pid": handle.PID})); err != nil {
-			return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
-		}
-	}
 	if waitErr != nil {
 		return fail(classifyAgentError(waitErr), waitErr, profile.ID, "")
 	}
@@ -673,6 +662,9 @@ func (engine *Engine) waitAgent(ctx context.Context, runtimeAdapter adapter.Adap
 	for {
 		select {
 		case result := <-done:
+			if errors.Is(result.err, supervisor.ErrProcessUnconfirmed) {
+				result.err = errors.Join(result.err, errExecutionStillRunning)
+			}
 			return result.result, result.err
 		case <-ctx.Done():
 			cleanupContext, stopCleanup := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -686,9 +678,12 @@ func (engine *Engine) waitAgent(ctx context.Context, runtimeAdapter adapter.Adap
 				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), errExecutionStillRunning)
 			}
 			select {
-			case <-done:
+			case outcome := <-done:
 				stopCleanup()
-				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), cancelErr)
+				if errors.Is(outcome.err, supervisor.ErrProcessUnconfirmed) || errors.Is(cancelErr, supervisor.ErrProcessUnconfirmed) {
+					cancelErr = errors.Join(cancelErr, errExecutionStillRunning)
+				}
+				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), cancelErr, outcome.err)
 			case <-cleanupContext.Done():
 				stopCleanup()
 				return protocol.AgentResult{}, errors.Join(context.Cause(ctx), cancelErr, errExecutionStillRunning)
@@ -725,26 +720,6 @@ func (engine *Engine) keepLeaseAlive(ctx context.Context, lease domain.Lease, ca
 			return
 		}
 	}
-}
-
-func (engine *Engine) recordWorkerIfAlive(ctx context.Context, attemptID string, handle adapter.Handle) (int64, error) {
-	if handle.PID <= 0 {
-		return 0, nil
-	}
-	identity, pgid, err := (recovery.OSInspector{}).Identity(handle.PID)
-	if err != nil {
-		// A child that has already exited is immediately observed through Wait;
-		// there is no live process to recover.
-		return 0, nil
-	}
-	worker, err := engine.store.RecordWorker(ctx, sqlite.WorkerProcess{
-		AttemptID: attemptID, PID: handle.PID, PGID: pgid, StartIdentity: identity,
-		State: sqlite.WorkerRunning, Version: 1,
-	}, event("WorkerStarted", "daemon", map[string]any{"pid": handle.PID, "pgid": pgid}))
-	if err != nil {
-		return 0, err
-	}
-	return worker.Version, nil
 }
 
 func (engine *Engine) advanceAttempt(ctx context.Context, lease domain.Lease, target domain.AttemptState) error {

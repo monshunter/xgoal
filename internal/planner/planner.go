@@ -124,6 +124,61 @@ func Prepare(runtimeRoot string, packet Packet) (string, string, error) {
 	return path, hash, err
 }
 
+// PrepareInvocation keeps each planning generation's immutable packet separate.
+// A crash after writing a packet is recoverable only with identical bytes.
+func PrepareInvocation(runtimeRoot, invocationID string, generation int64, packet Packet) (string, string, error) {
+	if !filepath.IsAbs(runtimeRoot) || filepath.Clean(runtimeRoot) != runtimeRoot || !validComponent(invocationID) || generation <= 0 || validatePacket(packet) != nil {
+		return "", "", errors.New("invalid Planner generation packet")
+	}
+	directory := runtimeRoot
+	for _, component := range []string{"planner", packet.GoalID, fmt.Sprintf("%d-%s", generation, invocationID)} {
+		directory = filepath.Join(directory, component)
+		if err := os.Mkdir(directory, 0700); err != nil && !os.IsExist(err) {
+			return "", "", err
+		}
+		info, err := os.Lstat(directory)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
+			return "", "", errors.New("Planner packet directory is linked or unsafe")
+		}
+	}
+	content, err := canonical.Marshal(packet)
+	if err != nil {
+		return "", "", err
+	}
+	hash, err := canonical.Hash("planner-packet", PacketVersion, packet)
+	if err != nil {
+		return "", "", err
+	}
+	path := filepath.Join(directory, "packet.json")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0400)
+	if os.IsExist(err) {
+		info, inspectErr := os.Lstat(path)
+		if inspectErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0400 || info.Size() > maxPacketBytes {
+			return "", "", errors.New("existing Planner packet is unsafe")
+		}
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil || !bytes.Equal(existing, content) {
+			return "", "", errors.New("existing Planner packet differs from this generation")
+		}
+		return path, hash, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if _, err = file.Write(content); err == nil {
+		err = file.Sync()
+	}
+	err = errors.Join(err, file.Close())
+	if err == nil {
+		dir, openErr := os.Open(directory)
+		if openErr != nil {
+			return "", "", openErr
+		}
+		err = errors.Join(dir.Sync(), dir.Close())
+	}
+	return path, hash, err
+}
+
 func ValidateInvocation(invocation Invocation) (Packet, error) {
 	if invocation.InvocationID == "" || invocation.ProfileID == "" || !filepath.IsAbs(invocation.WorkDir) || filepath.Clean(invocation.WorkDir) != invocation.WorkDir || !filepath.IsAbs(invocation.PacketPath) || filepath.Clean(invocation.PacketPath) != invocation.PacketPath || len(invocation.PacketHash) != 64 || strings.TrimSpace(invocation.Prompt) == "" || invocation.Timeout <= 0 || invocation.MaxOutputBytes <= 0 || invocation.MaxOutputBytes > 128<<20 {
 		return Packet{}, errors.New("invalid Planner invocation")

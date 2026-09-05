@@ -79,7 +79,7 @@ func TestRealCLIConcurrentStartIdentityIsolationAndStop(t *testing.T) {
 		t.Fatalf("independent projects share ownership: %#v", values)
 	}
 	code, output, err := invokeLifecycleCLI(environment, "--project", a, "run", "--id", "goal_a", "--goal", "hold a bounded draft")
-	if err != nil || code != 0 || !strings.Contains(output, "goal_a") {
+	if err != nil || code != 3 || !strings.Contains(output, "goal_a") || !strings.Contains(output, "WAITING") {
 		t.Fatalf("create A: %d %v %s", code, err, output)
 	}
 	code, output, err = invokeLifecycleCLI(environment, "--project", b, "status", "goal_a")

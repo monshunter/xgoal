@@ -61,23 +61,7 @@ func TestRealCLICurrentDirectoryTwoGoalsPreserveGitAndBindFinalEvidence(t *testi
 		return output
 	}
 	invoke("init")
-	configuration := fmt.Sprintf(`apiVersion: xgoal.dev/v1alpha1
-kind: Project
-metadata: {name: current-directory-cli}
-project: {baseBranch: main, trustedRepository: true}
-orchestration: {defaultMode: standard, maxParallel: 1, leaseTTL: 10s, heartbeatInterval: 1s, noProgressLimit: 2, integrationBranchPrefix: xgoal/}
-agents:
-  - {id: codex-implementer, adapter: codex-cli, command: %q, roles: [planner, implementer], timeout: 20s, sandbox: workspace-write, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
-  - {id: claude-reviewer, adapter: claude-cli, command: %q, roles: [reviewer], timeout: 20s, permissionMode: dontAsk, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
-workspace: {provider: current-directory, keepFailed: true, cleanupCompletedAfter: 1h}
-runtime: {provider: local-process, isolationLevelRequired: L0, projectNetwork: deny, projectSecrets: deny}
-scopePolicy: {deny: ["/.git/**", "/.env"], validatorChanges: human-gate}
-validators:
-  - {id: output-check, type: command, phases: [change, final], argv: [sh, -c, %q], timeout: 5s, required: true}
-review: {requiredInStandard: true, blockSeverities: [blocker, high], requireIndependentSession: true, preferDifferentProvider: true}
-policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
-report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}
-`, filepath.Join(bin, "codex"), filepath.Join(bin, "claude"), "printf 'validator\\t%s\\n' \"$(pwd -P)\" >> "+currentDirectoryShellQuote(rolesPath)+"; test -s output.txt")
+	configuration := currentDirectoryConfiguration(bin, rolesPath)
 	writeCurrentDirectoryFixture(t, filepath.Join(projectRoot, "xgoal.yaml"), configuration, 0600)
 	invoke("config", "validate", "--file", filepath.Join(projectRoot, "xgoal.yaml"))
 	currentDirectoryGit(t, projectRoot, "add", "xgoal.yaml", ".xgoalignore", ".gitignore")
@@ -315,6 +299,10 @@ func assertCurrentDirectoryEvidence(t *testing.T, stateDir string, reports []rep
 		t.Fatal(err)
 	}
 	defer db.Close()
+	var unfinished int
+	if err := db.QueryRow(`SELECT count(*) FROM process_invocations WHERE state NOT IN ('EXITED','TERMINATED')`).Scan(&unfinished); err != nil || unfinished != 0 {
+		t.Fatalf("daemon stopped with unconfirmed process ownership: count=%d %v", unfinished, err)
+	}
 	for _, value := range reports {
 		var setTree, phase string
 		if err := db.QueryRow(`SELECT tree_hash,phase FROM evidence_sets WHERE id=?`, value.Final.EvidenceSetID).Scan(&setTree, &phase); err != nil {
@@ -338,4 +326,24 @@ func assertCurrentDirectoryEvidence(t *testing.T, stateDir string, reports []rep
 			}
 		}
 	}
+}
+
+func currentDirectoryConfiguration(bin, rolesPath string) string {
+	return fmt.Sprintf(`apiVersion: xgoal.dev/v1alpha1
+kind: Project
+metadata: {name: current-directory-cli}
+project: {baseBranch: main, trustedRepository: true}
+orchestration: {defaultMode: standard, maxParallel: 1, leaseTTL: 10s, heartbeatInterval: 1s, noProgressLimit: 2, integrationBranchPrefix: xgoal/}
+agents:
+  - {id: codex-implementer, adapter: codex-cli, command: %q, roles: [planner, implementer], timeout: 20s, sandbox: workspace-write, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
+  - {id: claude-reviewer, adapter: claude-cli, command: %q, roles: [reviewer], timeout: 20s, permissionMode: dontAsk, providerTransport: allow, credentialSource: cli-session, activeProbe: disabled}
+workspace: {provider: current-directory, keepFailed: true, cleanupCompletedAfter: 1h}
+runtime: {provider: local-process, isolationLevelRequired: L0, projectNetwork: deny, projectSecrets: deny}
+scopePolicy: {deny: ["/.git/**", "/.env"], validatorChanges: human-gate}
+validators:
+  - {id: output-check, type: command, phases: [change, final], argv: [sh, -c, %q], timeout: 5s, required: true}
+review: {requiredInStandard: true, blockSeverities: [blocker, high], requireIndependentSession: true, preferDifferentProvider: true}
+policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
+report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}
+`, filepath.Join(bin, "codex"), filepath.Join(bin, "claude"), "printf 'validator\\t%s\\n' \"$(pwd -P)\" >> "+currentDirectoryShellQuote(rolesPath)+"; test -s output.txt")
 }

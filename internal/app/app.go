@@ -79,9 +79,11 @@ func Serve(ctx context.Context, paths Paths) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	recoveryManager := recoveryChain{workerRecovery, storeRecovery{store: store}, reportRecovery}
+	recoveryManager := recoveryChain{recovery.ProcessManager{Store: store, GracePeriod: 2 * time.Second}, workerRecovery, storeRecovery{store: store}, reportRecovery}
 	if executionEngine != nil {
 		recoveryManager = append(recoveryManager, engineRecovery{engine: executionEngine})
+	} else {
+		recoveryManager = append(recoveryManager, planningRecovery{store: store})
 	}
 	instanceBytes := make([]byte, 16)
 	if _, err := rand.Read(instanceBytes); err != nil {
@@ -110,8 +112,17 @@ type engineRecovery struct{ engine *orchestrator.Engine }
 
 type storeRecovery struct{ store *sqlite.Store }
 
+type planningRecovery struct{ store *sqlite.Store }
+
+func (recovery planningRecovery) Recover(ctx context.Context) error {
+	return recovery.store.RecoverPlanning(ctx, sqlite.PlanningRecoveryOptions{})
+}
+
 func (recovery storeRecovery) Recover(ctx context.Context) error {
-	return recovery.store.ReconcileLegacyExecution(ctx)
+	if err := recovery.store.ReconcileLegacyExecution(ctx); err != nil {
+		return err
+	}
+	return recovery.store.ReconcileProcessAttempts(ctx)
 }
 
 func (recovery engineRecovery) Recover(ctx context.Context) error {

@@ -7,6 +7,7 @@
 ## v0.1 能力
 
 - 单一 Go CLI/Daemon，Unix Socket HTTP/JSON API，每项目私有 SQLite/WAL 状态；
+- Goal 与规划请求事务性接受，后台规划、结果原子发布、进程归属登记与重启恢复；
 - 自然语言、文件或 stdin Goal，严格 Planner Schema、冻结 Revision、DAG 与 Scope/Validator 校验；
 - Codex 与 Claude 的 Probe、Plan、Start、Wait、Cancel、Resume 和结构化输出适配；
 - 同项目串行使用当前工作目录，以私有 index 捕获完整 tracked/untracked/binary/rename/mode/symlink/delete Patch；
@@ -21,7 +22,7 @@
 - macOS 或 Linux；
 - Git；
 - Go 1.25（`go.mod` 固定 `go1.25.13`，可使用标准 `GOTOOLCHAIN=auto`）；
-- 至少一个已安装并登录的 `codex` 或 `claude` CLI。
+- 至少一个已安装、登录且与所选模型兼容的 `codex` 或 `claude` CLI。
 
 ```bash
 go build -o ./bin/xgoal ./cmd/xgoal
@@ -57,7 +58,7 @@ xgoal run --goal-file ./GOAL.md
 printf '%s\n' '修复并验收当前回归' | xgoal run --goal-file -
 ```
 
-未指定 `--mode` 时使用 `xgoal.yaml` 的 `orchestration.defaultMode`。`standard` 要求独立 Reviewer；`fast` 仍必须经过 Scope、Patch、Validator、Promotion 与 Final Validation，不信任 Agent 自述。Planner 发现不能安全推断的关键语义时，Goal 进入 `WAITING` 并创建 Gate。
+未指定 `--mode` 时使用 `xgoal.yaml` 的 `orchestration.defaultMode`。`standard` 要求独立 Reviewer；`fast` 仍必须经过 Scope、Patch、Validator、Promotion 与 Final Validation，不信任 Agent 自述。创建请求返回 `DRAFT` 和 `planning_state=QUEUED` 后，daemon 在后台规划。Planner 发现不能安全推断的关键语义时，未冻结 Goal 保持 `DRAFT`，以 `planning_state=WAITING` 和 Gate 说明原因。
 
 常用控制命令：
 
@@ -68,6 +69,7 @@ xgoal gates <goal-id>
 xgoal approve <gate-id> --version <n> --reason <text>
 xgoal pause|resume|cancel <goal-id> --version <n>
 xgoal work retry|cancel <work-id> --version <n> [--reason <text>]
+xgoal goal plan <goal-id> --expected-version <n> --reason <text> [--proposal-file <proposal.json>]
 xgoal goal replan <goal-id> --file <request.json>
 xgoal report <goal-id>
 xgoal clean [project-id] --dry-run
@@ -91,6 +93,8 @@ source <(xgoal completion zsh)
 `run --wait` 持续读取 SQLite 权威状态，并在 Goal `Completed`、`Waiting`、`Cancelled` 时分别退出 0、3、4；不带 `--wait` 只表示 Goal 已被持久接收。
 
 `daemon start` 在后台启动，等待身份握手与真实 readiness；重复启动复用当前实例。`daemon serve` 仍可前台运行。`daemon stop` 请求当前实例退出，等请求、执行和数据库关闭后才释放项目所有权。CLI 退出不会等同于 daemon 停止。
+
+未冻结 Goal 可暂停、恢复或取消规划；`goal plan` 为规划失败创建新的 generation，可提交修正 Proposal。旧请求、失败和结果保留。`status` 给出的 `version` 用于控制命令的并发校验。修改 `xgoal.yaml` 后需重启 daemon 加载配置，再显式重试规划；运行中的 daemon 不自动热加载配置。主动 Probe 与所有 Agent 角色共享项目执行槽，忙时返回 `PROJECT_BUSY`。
 
 项目入口统一使用 `--project`、`--state-dir`、`--socket`，优先级为显式参数、对应 `XGOAL_PROJECT`/`XGOAL_STATE_DIR`/`XGOAL_SOCKET` 环境变量、已绑定项目位置、默认值。例如 `xgoal --project /path/to/A daemon status`。项目绑定后不能通过另一个 state-dir 启动第二个实例；linked worktree 入口明确拒绝。`doctor` 默认可离线运行，不打开、创建或迁移 SQLite；主动 Probe 需要运行中的 daemon。
 
@@ -125,7 +129,10 @@ make verify-m6
 ```bash
 make m3-real-smoke
 make m4-real-smoke
+XGOAL_RUN_REAL_GOAL_SMOKE=1 go test ./internal/cli -run '^TestRealCodexCLIBackgroundGoalToFinalReport$' -count=1 -timeout=15m -v
 ```
+
+最后一项使用临时固定仓库验证真实 Codex 的后台完整 Goal，Standard Review 使用同 Provider 的独立会话；它与 Codex/Claude 双向审查 smoke 分开记录。
 
 固定 Benchmark Suite 校验：
 

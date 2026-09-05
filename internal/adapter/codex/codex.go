@@ -284,7 +284,7 @@ func (runtime *Adapter) start(ctx context.Context, invocation adapter.Invocation
 	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("invocations", invocation.InvocationID)), sink, runtime.clock, limiter, cancel)
 	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
 	arguments := runtime.arguments(invocation, schemaPath, resumeSessionID)
-	running, err := supervisor.Start(supervisor.Command{
+	running, err := supervisor.StartContext(runContext, supervisor.Command{
 		Argv: arguments, Dir: validated.workDir, Env: validated.environment,
 		Stdin: strings.NewReader(invocation.Prompt), Stdout: stream, Stderr: stderr,
 		GracePeriod: defaultGracePeriod,
@@ -365,19 +365,7 @@ func (runtime *Adapter) arguments(invocation adapter.Invocation, schemaPath, res
 }
 
 func (runtime *Adapter) observeExecution(runContext context.Context, executed *execution, stream *jsonlStream, stderr *boundedStderr, maxOutputBytes int64) {
-	processDone := make(chan struct{})
-	var process supervisor.Execution
-	var processErr error
-	go func() {
-		process, processErr = executed.running.Wait(context.Background())
-		close(processDone)
-	}()
-	select {
-	case <-runContext.Done():
-		_ = executed.running.Terminate()
-		<-processDone
-	case <-processDone:
-	}
+	process, processErr := executed.running.WaitAndStop(runContext)
 	contextErr := runContext.Err()
 	executed.cancel()
 	stderrErr := stderr.persist(filepath.Join(runtime.root, "invocations", executed.metadata.InvocationID, "stderr.log"))
@@ -394,6 +382,8 @@ func (runtime *Adapter) observeExecution(runContext context.Context, executed *e
 	}
 	var finalErr error
 	switch {
+	case errors.Is(processErr, supervisor.ErrProcessUnconfirmed):
+		finalErr = processErr
 	case streamErr != nil:
 		finalErr = streamErr
 	case stderrErr != nil:

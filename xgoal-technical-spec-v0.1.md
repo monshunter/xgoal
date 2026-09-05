@@ -419,7 +419,7 @@ stateDiagram-v2
 - Goal 不使用 `FAILED` 作为一般终态。已冻结目标不可自动恢复的问题进入 `WAITING`，由用户修正或取消。
 - `COMPLETED` 和 `CANCELLED` 是终态；已完成 Goal 的后续需求创建新 Goal 或新 Revision/Continuation，不原地篡改历史。
 
-未冻结目标保持 DRAFT，并由持久规划控制与 Effect 投影 `planning_state=QUEUED/RUNNING/PAUSED/WAITING`。规划暂停/缺口时 wait 返回 3，resume 仅恢复规划意图，不把没有 Revision 的目标改成 RUNNING；cancel 可以将 DRAFT 终止。已冻结目标才使用 Goal WAITING→RUNNING 的既有恢复路径。初始 Revision/Graph 的发布在一个事务内完成，外部不会观察到无有效图的 READY 中间态。
+未冻结目标保持 DRAFT，并由持久规划控制与 Effect 投影 `planning_state=QUEUED/EXECUTING/OBSERVING/RECOVERING/PAUSED/WAITING`；成功或取消后分别投影 SUCCEEDED/CANCELLED。规划暂停/缺口时 wait 返回 3，resume 仅恢复规划意图，不把没有 Revision 的目标改成 RUNNING；cancel 可以将 DRAFT 终止。已冻结目标才使用 Goal WAITING→RUNNING 的既有恢复路径。初始 Revision/Graph 的发布在一个事务内完成，外部不会观察到无有效图的 READY 中间态。
 
 ### 9.2 Work Item 状态
 

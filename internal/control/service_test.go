@@ -16,6 +16,7 @@ import (
 	"github.com/monshunter/xgoal/internal/clock"
 	"github.com/monshunter/xgoal/internal/control"
 	"github.com/monshunter/xgoal/internal/domain"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/goalcompile"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
@@ -46,12 +47,12 @@ func TestGoalLifecycleThroughControlService(t *testing.T) {
 		t.Fatalf("draft Goal unexpectedly has a frozen revision: %+v", view["goal_revision"])
 	}
 	events, err := service.Events(ctx, "goal_api", "", 10)
-	if err != nil || len(events) != 1 || events[0].EventType != "GoalCreated" {
+	if err != nil || len(events) != 2 || events[0].EventType != "GoalCreated" || events[1].EventType != "PlanningWaiting" {
 		t.Fatalf("events=%+v err=%v", events, err)
 	}
 }
 
-func TestGoalCreateCompilesTrustedPlannerProposalIntoRunningGraph(t *testing.T) {
+func TestGoalCreateQueuesTrustedProposalWithoutPublishingAGraph(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	configuration, err := os.ReadFile("../../xgoal.example.yaml")
@@ -81,11 +82,11 @@ func TestGoalCreateCompilesTrustedPlannerProposalIntoRunningGraph(t *testing.T) 
 		t.Fatalf("create compiled status=%d response=%+v err=%v", status, response, err)
 	}
 	persisted, err := store.Goal(ctx, "goal_compiled")
-	if err != nil || persisted.State != "RUNNING" || persisted.ActiveRevisionID == "" {
+	if err != nil || persisted.State != "DRAFT" || persisted.ActiveRevisionID != "" {
 		t.Fatalf("compiled goal = %+v, %v", persisted, err)
 	}
 	items, err := store.GoalWorkItems(ctx, persisted.ID)
-	if err != nil || len(items) != 1 || items[0].State != "READY" {
+	if err != nil || len(items) != 0 {
 		t.Fatalf("compiled work = %+v, %v", items, err)
 	}
 }
@@ -118,6 +119,7 @@ func TestControlServicePauseResumeReplanAndCancelPreserveHistory(t *testing.T) {
 	if err != nil || status != http.StatusCreated {
 		t.Fatalf("create status=%d err=%v", status, err)
 	}
+	publishControlProposal(t, store, "goal_lifecycle")
 	goal, err := store.Goal(ctx, "goal_lifecycle")
 	if err != nil || goal.State != domain.GoalRunning || goal.Version != 3 {
 		t.Fatalf("created goal = %+v, %v", goal, err)
@@ -241,6 +243,7 @@ func TestControlServiceRetryKeepsPriorAttemptAndCreatesANewGeneration(t *testing
 	})}); err != nil || status != http.StatusCreated {
 		t.Fatalf("create status=%d err=%v", status, err)
 	}
+	publishControlProposal(t, store, "goal_retry")
 	goalWork, err := store.GoalWorkItems(ctx, "goal_retry")
 	if err != nil || len(goalWork) != 1 {
 		t.Fatalf("goal work = %+v, %v", goalWork, err)
@@ -395,6 +398,7 @@ func TestGoalCreateUsesConfiguredDefaultModeWhenOmitted(t *testing.T) {
 	if err != nil || status != http.StatusCreated {
 		t.Fatalf("create status=%d err=%v", status, err)
 	}
+	publishControlProposal(t, store, "goal_default_mode")
 	goal, err := store.Goal(ctx, "goal_default_mode")
 	if err != nil {
 		t.Fatal(err)
@@ -468,4 +472,31 @@ func eventsInclude(events []domain.Event, eventTypes ...string) bool {
 		}
 	}
 	return true
+}
+
+// Existing control tests seed the daemon's deterministic publication through
+// Store; goal.create itself must remain a queue-only operation.
+func publishControlProposal(t *testing.T, state *sqlite.Store, goalID string) {
+	t.Helper()
+	ctx := context.Background()
+	p, err := state.Planning(ctx, goalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Request.Proposal == nil {
+		t.Fatal("fixture requires a supplied proposal")
+	}
+	root := t.TempDir()
+	identity := gitrepo.CheckoutIdentity{Root: root, CommonDir: filepath.Join(root, ".git"), HeadCommit: strings.Repeat("a", 40), HeadTree: strings.Repeat("b", 40), SymbolicHEAD: "refs/heads/main", IndexHash: strings.Repeat("c", 64), IndexTree: strings.Repeat("b", 40), GitConfigHash: strings.Repeat("d", 64), IndexPresent: true}
+	p, err = state.BeginPlanning(ctx, sqlite.PlanningClaim{GoalID: goalID, EffectID: p.Effect.ID, Generation: p.Generation, ExpectedGoalVersion: p.Goal.Version, ExpectedEffectVersion: p.Effect.Version, CurrentConfigHash: p.Request.ConfigHash, InvocationID: "control_fixture", InputTree: identity.HeadTree, CheckoutIdentity: identity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = state.PersistPlanningProposal(ctx, sqlite.PlanningResult{GoalID: goalID, EffectID: p.Effect.ID, Generation: p.Generation, ExpectedEffectVersion: p.Effect.Version, InvocationID: "control_fixture", Proposal: *p.Request.Proposal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.PublishPlanning(ctx, sqlite.PlanningPublish{GoalID: goalID, EffectID: p.Effect.ID, Generation: p.Generation, ExpectedGoalVersion: p.Goal.Version, ExpectedEffectVersion: p.Effect.Version, CurrentConfigHash: p.Request.ConfigHash, ObservationHash: p.Effect.ObservationHash}); err != nil {
+		t.Fatal(err)
+	}
 }

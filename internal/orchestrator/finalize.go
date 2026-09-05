@@ -16,6 +16,7 @@ import (
 	"github.com/monshunter/xgoal/internal/protocol"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/supervisor"
 	"github.com/monshunter/xgoal/internal/validator"
 	"github.com/monshunter/xgoal/internal/workspace"
 )
@@ -83,6 +84,17 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) error 
 	if err != nil {
 		return err
 	}
+	var generation int64
+	for _, lease := range status.Leases {
+		if lease.AttemptID == attempt.ID {
+			generation = lease.Generation
+			break
+		}
+	}
+	if generation <= 0 {
+		return errors.New("final validation has no attributable Attempt generation")
+	}
+	ctx = supervisor.WithOwner(ctx, engine.store, supervisor.Owner{Kind: "attempt", ID: attempt.ID, GoalID: goal.ID, Generation: generation})
 	workspaceID, err := randomID("workspace_final")
 	if err != nil {
 		return err

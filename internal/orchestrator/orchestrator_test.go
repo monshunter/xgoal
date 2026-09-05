@@ -39,7 +39,9 @@ func TestEngineRejectsValidatorAndReviewerSourceMutations(t *testing.T) {
 
 func runCurrentDirectoryFixture(t *testing.T, behavior string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Two Work Items plus independent review and final validation include
+	// multiple supervised process exits; race instrumentation adds exit delay.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -197,7 +199,7 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		t.Fatal(err)
 	}
 	if checkout.ObservedTree == checkout.AcceptedTree {
-		t.Fatal("scope-safe partial source was not captured as failed scene")
+		t.Fatalf("scope-safe partial source was not captured as failed scene: failures=%+v", failed.Failures)
 	}
 	if content, err := os.ReadFile(filepath.Join(project, "one.txt")); err != nil || string(content) != "partial\n" {
 		t.Fatalf("failure scene was not preserved: %q %v", content, err)

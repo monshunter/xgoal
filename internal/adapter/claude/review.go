@@ -69,6 +69,8 @@ func (runtime *Adapter) Review(ctx context.Context, invocation reviewcontract.In
 	result, sessionID, resultErr := stream.finalizeReview(min64(invocation.MaxOutputBytes, maxResultBytes))
 	var finalErr error
 	switch {
+	case errors.Is(processErr, supervisor.ErrProcessUnconfirmed):
+		finalErr = processErr
 	case stream.failure() != nil:
 		finalErr = stream.failure()
 	case stderrErr != nil:

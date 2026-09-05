@@ -30,6 +30,12 @@ type Backend interface {
 	Events(context.Context, string, string, int) ([]domain.Event, error)
 }
 
+// AtomicGoalBackend commits the Goal, planning intent and acceptance response
+// together. Other write operations retain the existing idempotency contract.
+type AtomicGoalBackend interface {
+	AcceptGoal(context.Context, Operation, string, string, any) (domain.IdempotencyRecord, bool, error)
+}
+
 type Idempotency interface {
 	BeginIdempotentRequest(context.Context, string, string, any) (domain.IdempotencyRecord, bool, error)
 	CompleteIdempotentRequest(context.Context, string, string, string, int, any) (domain.IdempotencyRecord, error)
@@ -83,6 +89,24 @@ func (handler *Handler) serveWrite(writer http.ResponseWriter, request *http.Req
 	}
 	operation.Body = body
 	scope := request.Method + " " + request.URL.Path
+	if backend, ok := handler.backend.(AtomicGoalBackend); ok && operation.Name == "goal.create" {
+		record, created, err := backend.AcceptGoal(request.Context(), operation, scope, key, model)
+		if err != nil {
+			writeBackendError(writer, err)
+			return
+		}
+		if record.State != domain.IdempotencyCompleted || record.ResponseStatus < 100 || record.ResponseStatus > 599 || !json.Valid(record.ResponseJSON) {
+			writeError(writer, http.StatusInternalServerError, "INVALID_ACCEPTANCE", "atomic Goal acceptance did not return a committed response")
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if !created {
+			writer.Header().Set("Idempotent-Replay", "true")
+		}
+		writer.WriteHeader(record.ResponseStatus)
+		_, _ = writer.Write(record.ResponseJSON)
+		return
+	}
 	record, created, err := handler.idempotency.BeginIdempotentRequest(request.Context(), scope, key, model)
 	if err != nil {
 		writeBackendError(writer, err)
@@ -103,7 +127,9 @@ func (handler *Handler) serveWrite(writer http.ResponseWriter, request *http.Req
 	if backendErr != nil {
 		status, response = ErrorResponse(backendErr)
 	}
-	completed, err := handler.idempotency.CompleteIdempotentRequest(request.Context(), scope, key, record.RequestHash, status, response)
+	completionContext, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), 10*time.Second)
+	defer cancel()
+	completed, err := handler.idempotency.CompleteIdempotentRequest(completionContext, scope, key, record.RequestHash, status, response)
 	if err != nil {
 		writeBackendError(writer, err)
 		return
@@ -189,7 +215,7 @@ func route(request *http.Request) (Operation, bool, bool) {
 	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "goals" {
 		operation.ResourceID = parts[2]
 		switch parts[3] {
-		case "pause", "resume", "cancel", "replan", "finalize":
+		case "pause", "resume", "cancel", "plan", "replan", "finalize":
 			if request.Method == http.MethodPost {
 				operation.Name = "goal." + parts[3]
 				return operation, true, true

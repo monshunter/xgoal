@@ -268,17 +268,39 @@ func (runtime runtime) waitForGoal(ctx context.Context, cmd *cobra.Command, clie
 	}
 }
 
-func createdGoalState(response []byte) (goalID, state string, waiting bool, err error) {
-	var value struct {
-		GoalID              string            `json:"goal_id"`
-		State               string            `json:"state"`
-		PlannerGateRequired bool              `json:"planner_gate_required"`
-		Gates               []json.RawMessage `json:"gates"`
+type goalProjection struct {
+	GoalID              string `json:"goal_id"`
+	State               string `json:"state"`
+	PlanningState       string `json:"planning_state"`
+	PlannerGateRequired bool   `json:"planner_gate_required"`
+	ExecutionBlocker    string `json:"execution_blocker"`
+	Gates               []struct {
+		State    string `json:"state"`
+		Required bool   `json:"required"`
+	} `json:"gates"`
+}
+
+func (goal goalProjection) waiting() bool {
+	if goal.State == "COMPLETED" || goal.State == "CANCELLED" || goal.State == "" {
+		return false
 	}
+	if goal.State == "WAITING" || goal.PlanningState == "WAITING" || goal.PlanningState == "PAUSED" || goal.PlannerGateRequired || goal.ExecutionBlocker != "" {
+		return true
+	}
+	for _, gate := range goal.Gates {
+		if gate.Required && gate.State == "OPEN" {
+			return true
+		}
+	}
+	return false
+}
+
+func createdGoalState(response []byte) (goalID, state string, waiting bool, err error) {
+	var value goalProjection
 	if err := json.Unmarshal(response, &value); err != nil || value.GoalID == "" {
 		return "", "", false, errors.New("goal_id is missing")
 	}
-	return value.GoalID, value.State, value.PlannerGateRequired || len(value.Gates) > 0, nil
+	return value.GoalID, value.State, value.waiting(), nil
 }
 
 func generatedID(prefix string) (string, error) {
@@ -303,15 +325,13 @@ func prettyJSON(writer io.Writer, raw []byte) {
 
 func exitCode(status int, response []byte) int {
 	if status >= 200 && status < 300 {
-		var goal struct {
-			State string `json:"state"`
-		}
+		var goal goalProjection
 		if json.Unmarshal(response, &goal) == nil {
-			switch goal.State {
-			case "WAITING":
-				return 3
-			case "CANCELLED":
+			if goal.State == "CANCELLED" {
 				return 4
+			}
+			if goal.waiting() {
+				return 3
 			}
 		}
 		return 0

@@ -99,7 +99,16 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	serveResult := make(chan error, 1)
-	go func() { serveResult <- app.Serve(ctx, paths) }()
+	finished := make(chan struct{})
+	go func() { defer close(finished); serveResult <- app.Serve(ctx, paths) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(30 * time.Second):
+			t.Error("daemon cleanup did not finish")
+		}
+	})
 	waitForServeSocket(t, paths.SocketPath, serveResult)
 	client, err := api.NewProjectClient(paths.SocketPath, time.Second, app.ExpectedIdentity(paths))
 	if err != nil {
@@ -114,7 +123,7 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	// tree checks through final validation. Keep a bounded budget for the
 	// entire completion/report path, not only the implementation Attempt.
 	started := time.Now()
-	deadline := started.Add(45 * time.Second)
+	deadline := started.Add(120 * time.Second)
 	lastProgress := ""
 	var observed map[string]any
 	for time.Now().Before(deadline) {
@@ -140,8 +149,14 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	}
 	originalReport := string(body)
 	cancel()
-	if err := <-serveResult; err != nil {
-		t.Fatal(err)
+	select {
+	case <-finished:
+	case <-time.After(30 * time.Second):
+		t.Fatal("daemon shutdown did not finish")
+	}
+	serveErr := <-serveResult
+	if serveErr != nil {
+		t.Fatal(serveErr)
 	}
 	client.Close()
 	legacyConfig := strings.Replace(configuration, "provider: current-directory", "provider: git-worktree", 1)

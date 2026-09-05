@@ -15,6 +15,24 @@ import (
 
 const idempotencySchema = "xgoal.idempotency/v1"
 
+// LookupIdempotentRequest is a read-only replay check before configuration or
+// input defaults are evaluated. AcceptPlanningGoal repeats the check in its
+// write transaction to resolve concurrent creators.
+func (s *Store) LookupIdempotentRequest(ctx context.Context, scope, key string, request any) (domain.IdempotencyRecord, error) {
+	_, hash, err := canonicalValue("idempotency-request", idempotencySchema, request)
+	if err != nil {
+		return domain.IdempotencyRecord{}, err
+	}
+	record, err := readIdempotencyRecord(ctx, s.db, scope, key)
+	if err != nil {
+		return domain.IdempotencyRecord{}, err
+	}
+	if record.RequestHash != hash {
+		return domain.IdempotencyRecord{}, basestore.ErrIdempotencyConflict
+	}
+	return record, nil
+}
+
 // BeginIdempotentRequest creates a request record or returns the matching prior record.
 func (s *Store) BeginIdempotentRequest(ctx context.Context, scope, key string, request any) (domain.IdempotencyRecord, bool, error) {
 	if !validIdempotencyLabel(scope) || !validIdempotencyLabel(key) {

@@ -12,18 +12,18 @@
 
 关联：[产品 SPEC](../../xgoal-product-spec-v0.1.md)、[技术 SPEC](../../xgoal-technical-spec-v0.1.md)、[控制面设计](../architecture/DESIGN-004-m5-control-daemon.md)
 
-- [ ] 1.1 实现 Goal、规划意图和接受响应的事务性登记及重复请求回放
-- [ ] 1.2 将 Planner 接入 daemon 串行执行并原子发布冻结 Goal Contract 与 Work Graph
-- [ ] 1.3 恢复中断规划、旧 IN_PROGRESS 请求和半完成 Goal，保留可追溯失败事实
+- [x] 1.1 实现 Goal、规划意图和接受响应的事务性登记及重复请求回放
+- [x] 1.2 将 Planner 接入 daemon 串行执行并原子发布冻结 Goal Contract 与 Work Graph
+- [x] 1.3 恢复中断规划、旧 IN_PROGRESS 请求和半完成 Goal，保留可追溯失败事实
 
 ## Phase 2：统一执行与资源回收
 
-- [ ] 2.1 统一 Planner、Implementer、Reviewer 的进程归属、取消、崩溃恢复和防重叠执行
-- [ ] 2.2 保持 wait/watch 只观察后台目标，并验证断连、暂停、取消、停止和重启语义
+- [x] 2.1 统一 Planner、Implementer、Reviewer 的进程归属、取消、崩溃恢复和防重叠执行
+- [x] 2.2 保持 wait/watch 只观察后台目标，并验证断连、暂停、取消、停止和重启语义
 
 ## Phase 3：闭环验收与交付
 
-- [ ] 3.1 验收双项目完整 Goal、主工作目录单实例、linked worktree 入口拒绝、错误身份拒绝与状态迁移
-- [ ] 3.2 验收客户端退出、daemon 中断、规划结果提交窗口、进程回收与最终 Evidence/Report
-- [ ] 3.3 通过全量门禁、平台构建和独立 Change Review，并完成逐项目标审计
-- [ ] 3.4 对账设计、规范、操作 Evidence、Progress 与 Git 并创建原子提交
+- [x] 3.1 验收双项目完整 Goal、主工作目录单实例、linked worktree 入口拒绝、错误身份拒绝与状态迁移
+- [x] 3.2 验收客户端退出、daemon 中断、规划结果提交窗口、进程回收与最终 Evidence/Report
+- [x] 3.3 通过全量门禁、平台构建和独立 Change Review，并完成逐项目标审计
+- [x] 3.4 对账设计、规范、操作 Evidence、Progress 与 Git 并创建原子提交

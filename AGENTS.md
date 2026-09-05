@@ -25,7 +25,7 @@
 └── AGENTS.md                     # 项目事实与工程运行合同
 ```
 
-当前 CLI 实现 `init`、`doctor`、`run`、`status`、`logs`、`gates`、`approve`、`pause/resume/cancel`、`work retry`、`goal replan/finalize`、`report`、`clean`、`benchmark`、`config validate` 与 `daemon start/status/stop/serve`。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
+当前 CLI 实现 `init`、`doctor`、`run`、`status`、`logs`、`gates`、`approve`、`pause/resume/cancel`、`work retry`、`goal plan/replan/finalize`、`report`、`clean`、`benchmark`、`config validate` 与 `daemon start/status/stop/serve`。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
 
 ---
 

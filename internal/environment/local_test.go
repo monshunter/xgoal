@@ -212,3 +212,49 @@ func runEnvironmentGit(t *testing.T, directory string, arguments ...string) stri
 	}
 	return string(output)
 }
+
+func TestVersionProbesSeparateDiagnosticsAndRejectMalformedRequiredOutput(t *testing.T) {
+	ctx := context.Background()
+	projectPath := filepath.Join(t.TempDir(), "repo")
+	initializeEnvironmentRepository(t, projectPath)
+	repository, err := gitrepo.Open(ctx, projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := repository.ReadCheckoutIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := environment.NewLocal(filepath.Join(t.TempDir(), "runtime"), repository, clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare := func(id string, probes []environment.ToolProbe) environment.Handle {
+		t.Helper()
+		handle, err := provider.Prepare(ctx, environment.Spec{
+			ID: id, WorktreePath: repository.Root(), BaseCommit: identity.HeadCommit, BaseTree: identity.HeadTree, Identity: identity,
+			ConfigHash: strings.Repeat("b", 64), GoalRevisionHash: strings.Repeat("c", 64), ToolProbes: probes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handle
+	}
+	malformed := []string{"sh", "-c", "printf 'first\\nsecond\\n'"}
+	handle := prepare("version_diagnostics", []environment.ToolProbe{
+		{Name: "warning", Argv: []string{"sh", "-c", "printf 'tool 1.0\\n'; printf 'PATH aliases unavailable\\n' >&2"}, Required: true},
+		{Name: "stderr", Argv: []string{"sh", "-c", "printf 'tool 2.0\\n' >&2"}, Required: true},
+		{Name: "optional", Argv: malformed},
+	})
+	snapshot, err := provider.Snapshot(ctx, handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ToolVersions["warning"] != "tool 1.0" || snapshot.ToolVersions["stderr"] != "tool 2.0" || snapshot.ToolVersions["optional"] != "unavailable" {
+		t.Fatalf("version attribution = %+v", snapshot.ToolVersions)
+	}
+	required := prepare("version_required", []environment.ToolProbe{{Name: "malformed", Argv: malformed, Required: true}})
+	if _, err := provider.Snapshot(ctx, required); err == nil || !strings.Contains(err.Error(), `probe required tool "malformed"`) {
+		t.Fatalf("malformed required version did not fail at the probe: %v", err)
+	}
+}

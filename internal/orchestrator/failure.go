@@ -15,6 +15,7 @@ import (
 	"github.com/monshunter/xgoal/internal/scope"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/supervisor"
 )
 
 func (engine *Engine) failUnclaimed(ctx context.Context, goal domain.Goal, work domain.WorkItem, revision domain.GoalRevision, class reconcile.FailureClass, cause error, strategy string) error {
@@ -26,6 +27,9 @@ func (engine *Engine) failAttempt(ctx context.Context, goal domain.Goal, work do
 	defer cancel()
 	if cause == nil {
 		cause = errors.New("unspecified orchestration failure")
+	}
+	if errors.Is(cause, supervisor.ErrProcessUnconfirmed) {
+		cause = errors.Join(cause, errExecutionStillRunning)
 	}
 	currentAttempt, attemptErr := engine.store.Attempt(ctx, lease.AttemptID)
 	if attemptErr == nil && errors.Is(cause, errExecutionStillRunning) {

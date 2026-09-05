@@ -151,6 +151,7 @@ func TestCobraCommandTreeContainsEverySupportedCommand(t *testing.T) {
 	root.InitDefaultHelpCmd()
 	root.InitDefaultCompletionCmd()
 	paths := [][]string{
+		{"goal", "plan"},
 		{"init"}, {"doctor"}, {"run"}, {"status"}, {"logs"}, {"gates"}, {"approve"},
 		{"pause"}, {"resume"}, {"cancel"}, {"report"}, {"clean"}, {"version"},
 		{"config", "validate"}, {"benchmark", "validate"}, {"benchmark", "run"},

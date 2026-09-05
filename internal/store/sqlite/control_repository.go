@@ -118,6 +118,9 @@ WHERE state = ?`, domain.LeaseActive).Scan(&activeLeases); err != nil {
 		if activeLeases != 0 {
 			return fmt.Errorf("project execution slot for work item %q: %w", workID, basestore.ErrActiveLease)
 		}
+		if err := executionIdle(ctx, tx); err != nil {
+			return err
+		}
 		if _, err := readAttempt(ctx, tx, attempt.ID); err == nil {
 			return fmt.Errorf("attempt %q: %w", attempt.ID, basestore.ErrAlreadyExists)
 		} else if !errors.Is(err, basestore.ErrNotFound) {
@@ -138,6 +141,11 @@ WHERE work_item_id = ?`, workID).Scan(&generation); err != nil {
 		now := s.source.Now().UTC()
 		if err := insertAttempt(ctx, tx, attempt, now); err != nil {
 			return err
+		}
+		if s.info.SchemaVersion >= 10 {
+			if _, err := tx.ExecContext(ctx, `UPDATE attempts SET process_journal_version=1 WHERE id=?`, attempt.ID); err != nil {
+				return err
+			}
 		}
 		lease = domain.Lease{
 			ID:          leaseDraft.ID,

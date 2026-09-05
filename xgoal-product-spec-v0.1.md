@@ -863,14 +863,14 @@ v0.1 发布硬门槛：
 
 ### 17.1 Feature Requirement 验收
 
-- [ ] **AC-FR-001**：在干净的可信 Git 主工作目录或其子目录执行 init，生成严格配置、本地 Project ID 和受控运行目录；linked worktree 拒绝，Git worktree 列表、用户 HEAD/index 与远端不变。
+- [x] **AC-FR-001**：在干净的可信 Git 主工作目录或其子目录执行 init，生成严格配置、本地 Project ID 和受控运行目录；linked worktree 拒绝，Git worktree 列表、用户 HEAD/index 与远端不变。
 - [x] **AC-FR-002**：`xgoal doctor` 能报告 Git/OS/Arch/Agent/Validator/隔离与策略事实；默认被动探测不发起模型回合，显式 Active Probe 才使用 Provider Transport 与认证，并在受控超时内保存 Evidence。
 - [x] **AC-FR-010**：自然语言、文件和 stdin 目标均能生成并校验 Goal Contract；原始输入、Config Hash 和创建者可追溯，关键缺口进入 Gate 而非被 Agent 猜测。
 - [x] **AC-FR-011**：Planner 输出能形成版本化 Work Graph；环路、缺失依赖、写 Scope 冲突、缺失 Validator 和无界 Work Item 会被确定性拒绝或转入 Finding/Gate。
 - [x] **AC-FR-020**：Codex 与 Claude Agent Profile 均能做版本与能力协商，分别展示 Provider Transport/认证来源、Project Network 和隔离限制；不兼容版本 Fail Closed。
 - [x] **AC-FR-021**：每个 Invocation 只绑定一个 Attempt、Work Item 和不可变 Work Packet，Kernel 能监督事件、限制输出、超时、取消和回收进程。
 - [x] **AC-FR-022**：同一 Work Item 同时最多一个 Active Lease；获取、心跳、Generation、过期读回和幂等写回在竞争与重启测试中成立。
-- [ ] **AC-FR-030**：全部 Attempt 在当前目录串行执行且不创建 Git worktree；基础与结果 Tree 可归因，完整文件变化被捕获，用户 HEAD/index 不被系统快照改动，范围外或逃逸变化保留并进入 Quarantine。
+- [x] **AC-FR-030**：全部 Attempt 在当前目录串行执行且不创建 Git worktree；基础与结果 Tree 可归因，完整文件变化被捕获，用户 HEAD/index 不被系统快照改动，范围外或逃逸变化保留并进入 Quarantine。
 - [x] **AC-FR-031**：受信 bootstrap、build、test、service 与健康探针可在 Local Provider 中准备、监督和清理；失败产生 Environment Evidence。
 - [x] **AC-FR-040**：Validator 只从受版本管理的配置或受信脚本注册；Agent 输出不能注入或弱化 Required Validator，未知或缺失定义阻止完成。
 - [x] **AC-FR-041**：Scope、Build、Test、Lint、Integration/E2E 和 Runtime Probe 按配置独立执行并生成 Command Receipt；最终 Required Validator 在最终 Integration Tree 上重跑。
@@ -901,23 +901,23 @@ v0.1 发布硬门槛：
 
 ### 项目隔离与后台执行增量验收（OBJ-003）
 
-- [ ] **AC-ISO-001**：双独立仓库同时运行完整 Goal；数据库、目标、工作区和 daemon 独立，停 A 后 B 继续。
+- [x] **AC-ISO-001**：双独立仓库同时运行完整 Goal；数据库、目标、工作区和 daemon 独立，停 A 后 B 继续。
 - [x] **AC-ISO-002**：主工作目录、子目录和 symlink 定位同一身份；linked worktree 入口明确拒绝；独立 clone 身份不同；不同 state-dir 不产生第二 owner。
 - [x] **AC-ISO-003**：错误 socket/状态绑定、旧库归属冲突、协议不兼容在业务副作用前拒绝；默认旧状态可保留历史并迁移，重复启动/迁移幂等。
-- [ ] **AC-ISO-004**：持锁期间第二实例不能建库/迁移；长仓库路径可运行；存活异项目 socket 不被删除；启动失败不残留执行者。
-- [ ] **AC-ISO-005**：start 并发调用只有一个实例；status 无副作用；stop 等待所属进程、请求与数据库关闭；旧 instance stop 不影响新实例。
+- [x] **AC-ISO-004**：持锁期间第二实例不能建库/迁移；长仓库路径可运行；存活异项目 socket 不被删除；启动失败不残留执行者。
+- [x] **AC-ISO-005**：start 并发调用只有一个实例；status 无副作用；stop 等待所属进程、请求与数据库关闭；旧 instance stop 不影响新实例。
 - [x] **AC-ISO-006**：flags/env 在所有入口一致；被动 doctor 在无 daemon/无库/损坏库时可用且不写项目；help/version/completion 无副作用。
-- [ ] **AC-BG-001**：慢 Planner 的 Goal 接受立即返回；客户端断开不取消已接受目标；接受前失败无部分状态，同 key 回放无重复。
-- [ ] **AC-BG-002**：规划 queued/executing/result-persisted/commit 窗口中断后恢复；Revision/Plan/Work 原子一致，已落盘结果不重复模型执行。
-- [ ] **AC-BG-003**：规划 pause/resume/cancel、失败等待、修正 Proposal/重试可操作；配置漂移拒绝默默执行；迟到结果不能冻结取消目标。
-- [ ] **AC-BG-004**：所有 Provider 角色/主动 Probe 共享项目槽；停止/崩溃后旧进程和不响应 TERM 的子孙被回收或明确阻止新执行；未知 PID 不被误杀。
-- [ ] **AC-BG-005**：历史 IN_PROGRESS、半冻结 Goal、未决 Attempt/Lease/Work 经保守恢复得到确定结果/等待，不无限停留，重复恢复不重复副作用。
-- [ ] **AC-BG-006**：真实 CLI→daemon→Provider→Git→Validator→Report 通过；固定 Provider fixture 的确定性故障测试与真实 Provider smoke 分别标注；全量门禁及 macOS/Linux 平台证据可复核。
+- [x] **AC-BG-001**：慢 Planner 的 Goal 接受立即返回；客户端断开不取消已接受目标；接受前失败无部分状态，同 key 回放无重复。
+- [x] **AC-BG-002**：规划 queued/executing/result-persisted/commit 窗口中断后恢复；Revision/Plan/Work 原子一致，已落盘结果不重复模型执行。
+- [x] **AC-BG-003**：规划 pause/resume/cancel、失败等待、修正 Proposal/重试可操作；配置漂移拒绝默默执行；迟到结果不能冻结取消目标。
+- [x] **AC-BG-004**：所有 Provider 角色/主动 Probe 共享项目槽；停止/崩溃后旧进程和不响应 TERM 的子孙被回收或明确阻止新执行；未知 PID 不被误杀。
+- [x] **AC-BG-005**：历史 IN_PROGRESS、半冻结 Goal、未决 Attempt/Lease/Work 经保守恢复得到确定结果/等待，不无限停留，重复恢复不重复副作用。
+- [x] **AC-BG-006**：真实 CLI→daemon→Provider→Git→Validator→Report 通过；固定 Provider fixture 的确定性故障测试与真实 Provider smoke 分别标注；全量门禁及 macOS/Linux 平台证据可复核。
 - [x] **AC-CWD-001**：实际 Planner/Implementer/Reviewer CWD 为当前主目录，Validator 与 bootstrap CWD 为其内部受信的相对目录，完整 Goal 前后 Git worktree 列表不变；代码结果直接可见。
 - [x] **AC-CWD-002**：未归属的 staged/unstaged/untracked 修改拒绝接管且字节不变；系统操作保留用户 HEAD、符号分支和 index；两个连续 Goal 可采纳完全匹配的已验收结果。
 - [x] **AC-CWD-003**：私有 index/Object Tree 正确覆盖 tracked/非忽略 untracked/binary/rename/mode/symlink/delete，忽略构建产物，拒绝元数据、Scope 越界和路径逃逸；不执行 Agent 的 Git filters/hooks。
 - [x] **AC-CWD-004**：Validator/Reviewer 期间源 Tree 或 HEAD/index 漂移使 Evidence 无效；最终当前目录、私有集成 Tree、Evidence 和 Report 必须一致。
-- [ ] **AC-CWD-005**：失败/暂停/取消/daemon 中断保留文件，已观察现场可显式 retry；未知漂移得到可操作等待而非覆盖、删除或无限自动重试。
+- [x] **AC-CWD-005**：失败/暂停/取消/daemon 中断保留文件，已观察现场可显式 retry；未知漂移得到可操作等待而非覆盖、删除或无限自动重试。
 - [x] **AC-CWD-006**：旧配置给出迁移诊断；旧完成 Report/Evidence 保留可读，旧未完成目标不继续 worktree 执行；clean 不删除当前目录或历史 worktree。
 
 Evidence 由当前 Operation/Change Review 保存；未取得当前 Evidence 前保持未勾选。
