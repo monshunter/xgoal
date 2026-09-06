@@ -7,6 +7,8 @@
   "properties": {
     "harness": {"type":"object","additionalProperties":false,"required":["type","provider","required","found","compatible","files","delegation","delivery","load_observation"],"properties":{"type":{"type":"string"},"provider":{"type":"string","minLength":1},"required":{"type":"boolean"},"found":{"type":"boolean"},"compatible":{"type":"boolean"},"files":{"type":"array","maxItems":256,"items":{"type":"object","additionalProperties":false,"required":["path","kind","sha256"],"properties":{"path":{"type":"string","minLength":1},"kind":{"type":"string","minLength":1},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}},"diagnostics":{"type":"array","items":{"type":"string"}},"delegation":{"type":"string","minLength":1,"maxLength":8192},"delivery":{"const":"packet-path-references"},"load_observation":{"const":"unknown"}}},
     "protocol_version": {"type": "string", "const": "xgoal.review-packet/v1alpha1"},
+    "raw_goal": {"type": "string"},
+    "goal_contract": {"type": "object", "description": "Frozen Goal Revision envelope; Kernel verifies its canonical hash and 8 MiB byte bound."},
     "id": {"type": "string", "minLength": 1},
     "goal_revision_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "plan_revision_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

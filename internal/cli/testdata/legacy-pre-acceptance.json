@@ -1,0 +1,404 @@
+[
+  {
+    "name": "config",
+    "kind": "project-config",
+    "schema": "xgoal.dev/v1alpha1",
+    "hash": "b119965f7c724a148878f1166afc79d040d003410048c1cdeccc29aff03fb269",
+    "bytes_sha256": "4f1d035f8875850724320c96ea35ba327e8f8e45f141fc40cac9369023e3ccd8",
+    "bytes": {
+      "agents": [
+        {
+          "activeProbe": "explicit",
+          "adapter": "codex-cli",
+          "command": "codex",
+          "credentialSource": "cli-session",
+          "environmentAllowlist": [
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "GOCACHE",
+            "GOMODCACHE"
+          ],
+          "id": "codex-implementer",
+          "providerTransport": "allow",
+          "roles": [
+            "implementer"
+          ],
+          "sandbox": "workspace-write",
+          "timeout": "45m0s"
+        },
+        {
+          "activeProbe": "explicit",
+          "adapter": "claude-cli",
+          "allowedTools": [
+            "Read",
+            "Glob",
+            "Grep"
+          ],
+          "command": "claude",
+          "credentialSource": "cli-session",
+          "environmentAllowlist": [
+            "PATH",
+            "HOME",
+            "TMPDIR"
+          ],
+          "id": "claude-reviewer",
+          "permissionMode": "dontAsk",
+          "providerTransport": "allow",
+          "roles": [
+            "planner",
+            "reviewer"
+          ],
+          "timeout": "30m0s"
+        }
+      ],
+      "apiVersion": "xgoal.dev/v1alpha1",
+      "bootstrap": {
+        "commands": [
+          {
+            "argv": [
+              "go",
+              "mod",
+              "download"
+            ],
+            "id": "go-download",
+            "network": "require-gate",
+            "timeout": "15m0s",
+            "trustedFiles": [
+              "xgoal.yaml"
+            ]
+          }
+        ]
+      },
+      "kind": "Project",
+      "metadata": {
+        "name": "xgoal"
+      },
+      "orchestration": {
+        "defaultMode": "standard",
+        "heartbeatInterval": "20s",
+        "integrationBranchPrefix": "xgoal/",
+        "leaseTTL": "1m30s",
+        "maxParallel": 1,
+        "noProgressLimit": 2
+      },
+      "policy": {
+        "destructiveCommands": "human-gate",
+        "expandScope": "human-gate",
+        "gitPush": "deny",
+        "production": "deny",
+        "publishArtifact": "deny"
+      },
+      "project": {
+        "baseBranch": "main",
+        "harness": {
+          "type": "autogo"
+        },
+        "trustedRepository": true
+      },
+      "report": {
+        "formats": [
+          "markdown",
+          "json"
+        ],
+        "includeReproductionCommands": true
+      },
+      "review": {
+        "blockSeverities": [
+          "blocker",
+          "high"
+        ],
+        "preferDifferentProvider": true,
+        "requireIndependentSession": true,
+        "requiredInStandard": true
+      },
+      "runtime": {
+        "isolationLevelRequired": "L0",
+        "projectNetwork": "deny",
+        "projectSecrets": "deny",
+        "provider": "local-process"
+      },
+      "scopePolicy": {
+        "deny": [
+          "/.git/**",
+          "/.env",
+          "/**/credentials*"
+        ],
+        "validatorChanges": "human-gate"
+      },
+      "validators": [
+        {
+          "argv": [
+            "sh",
+            "scripts/xgoal/gofmt-check.sh"
+          ],
+          "description": "Check Go formatting only; this does not prove application behavior.",
+          "env": {},
+          "flaky": {},
+          "id": "gofmt-check",
+          "phases": [
+            "change",
+            "final"
+          ],
+          "required": true,
+          "timeout": "2m0s",
+          "trustedFiles": [
+            "scripts/xgoal/gofmt-check.sh"
+          ],
+          "type": "command"
+        },
+        {
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "description": "Run the repository Go test suite; inspect its assertions for business coverage.",
+          "env": {},
+          "flaky": {},
+          "id": "go-test-all",
+          "phases": [
+            "change",
+            "final"
+          ],
+          "required": true,
+          "timeout": "20m0s",
+          "type": "command"
+        },
+        {
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./..."
+          ],
+          "description": "Run the Go test suite with the race detector.",
+          "env": {},
+          "flaky": {},
+          "id": "go-race",
+          "phases": [
+            "final"
+          ],
+          "required": true,
+          "timeout": "40m0s",
+          "type": "command"
+        }
+      ],
+      "workspace": {
+        "cleanupCompletedAfter": "168h0m0s",
+        "keepFailed": true,
+        "provider": "current-directory"
+      }
+    }
+  },
+  {
+    "name": "planning_request",
+    "kind": "effect-request",
+    "schema": "xgoal.effect/v1",
+    "hash": "a5e7c7291356f00991470f9c5b5e8e3a4de6addbc53ada1ecca63b91938e1521",
+    "bytes_sha256": "c1236c1be2c144519b7d8e0c6dd61f0ff0db98ebdcb4c07bf3fd85d874f421e9",
+    "bytes": {
+      "config_hash": "b119965f7c724a148878f1166afc79d040d003410048c1cdeccc29aff03fb269",
+      "created_by": "user",
+      "generation": 1,
+      "goal_id": "goal_legacy",
+      "mode": "standard",
+      "profile_id": "codex",
+      "protocol_version": "xgoal.planning-request/v1",
+      "raw_goal": "implement one change",
+      "trusted_validator_ids": [
+        "check"
+      ]
+    }
+  },
+  {
+    "name": "goal_contract",
+    "kind": "goal-contract",
+    "schema": "xgoal.goal-contract/v1",
+    "hash": "59713e3e2868e7a1e6a3ab08e752c8fa1cd668747755188f38c4564b847ecbd7",
+    "bytes_sha256": "4fa657b496baf35ae8d4f11b96f469f008b06371135659f1f8d826117554161b",
+    "bytes": {
+      "acceptance_criteria": [
+        {
+          "human_acceptance": false,
+          "id": "AC-1",
+          "statement": "tests pass",
+          "validators": [
+            "check"
+          ]
+        }
+      ],
+      "completion_policy": {
+        "require_all_required_items": true,
+        "require_final_validation": true,
+        "require_no_blocking_findings": true
+      },
+      "constraints": [
+        "no remote push"
+      ],
+      "human_gates": [
+        "expand scope"
+      ],
+      "in_scope": [
+        "local repository"
+      ],
+      "out_of_scope": [
+        "production"
+      ],
+      "quality_attributes": [
+        "correctness"
+      ],
+      "rationale": "user value",
+      "summary": "implement safely"
+    }
+  },
+  {
+    "name": "goal_envelope",
+    "kind": "goal-revision",
+    "schema": "xgoal.goal-revision/v1",
+    "hash": "9c1cfcdc896bf7f6782cac10431050ecca456132221de229139f8bd9e151f792",
+    "bytes_sha256": "fbd3c331454587fa2507b9eae32b2abaab5753451a7075060a09e4a43483b2bf",
+    "bytes": {
+      "config_hash": "b119965f7c724a148878f1166afc79d040d003410048c1cdeccc29aff03fb269",
+      "contract": {
+        "acceptance_criteria": [
+          {
+            "human_acceptance": false,
+            "id": "AC-1",
+            "statement": "tests pass",
+            "validators": [
+              "check"
+            ]
+          }
+        ],
+        "completion_policy": {
+          "require_all_required_items": true,
+          "require_final_validation": true,
+          "require_no_blocking_findings": true
+        },
+        "constraints": [
+          "no remote push"
+        ],
+        "human_gates": [
+          "expand scope"
+        ],
+        "in_scope": [
+          "local repository"
+        ],
+        "out_of_scope": [
+          "production"
+        ],
+        "quality_attributes": [
+          "correctness"
+        ],
+        "rationale": "user value",
+        "summary": "implement safely"
+      },
+      "created_by": "user",
+      "mode": "standard",
+      "protocol_version": "xgoal.goal-contract/v1"
+    }
+  },
+  {
+    "name": "planner_packet",
+    "kind": "planner-packet",
+    "schema": "xgoal.planner-packet/v1alpha1",
+    "hash": "f2ded93874bd37df39f7b091b0851d5d2548789efda2f41bdae247a5f126bc24",
+    "bytes_sha256": "069ef43ecbf220a6973e04e53d7667fae9640e804ab8cec88a20b192acb1ee0f",
+    "bytes": {
+      "config_hash": "b119965f7c724a148878f1166afc79d040d003410048c1cdeccc29aff03fb269",
+      "goal_id": "goal_legacy",
+      "mode": "standard",
+      "project_network": "deny",
+      "project_root": "/tmp/xgoal-legacy",
+      "project_secrets": "deny",
+      "protocol_version": "xgoal.planner-packet/v1alpha1",
+      "raw_goal": "implement one change",
+      "trusted_validators": [
+        "check"
+      ]
+    }
+  },
+  {
+    "name": "work_packet",
+    "kind": "work-packet",
+    "schema": "xgoal.work-packet/v1alpha1",
+    "hash": "d243d14fed7018e0abb1ed5de5f42eff224761f5ce23d0cb28a150411dc1e9df",
+    "bytes_sha256": "99cc4be7a7ee028c0fdd37324a2267c110b05354ebe0b5a83032402df979bb58",
+    "bytes": {
+      "constraints": {
+        "git_push": false,
+        "production": false,
+        "project_network": "deny",
+        "project_secrets": "deny"
+      },
+      "environment": {},
+      "goal": {
+        "contract_hash": "9c1cfcdc896bf7f6782cac10431050ecca456132221de229139f8bd9e151f792",
+        "id": "goal_legacy",
+        "revision": 1,
+        "summary": "implement safely"
+      },
+      "project": {
+        "base_tree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "legacy",
+        "workspace": "/tmp/xgoal-legacy/workspace"
+      },
+      "protocol_version": "xgoal.work-packet/v1alpha1",
+      "required_output_schema": "xgoal.agent-result/v1alpha1",
+      "role": "implementer",
+      "work_item": {
+        "acceptance_criteria": [
+          "AC-1"
+        ],
+        "id": "work_1",
+        "objective": "make change",
+        "read_scope": [
+          "/**"
+        ],
+        "title": "implement",
+        "validator_ids": [
+          "check"
+        ],
+        "write_scope": [
+          "/internal/**"
+        ]
+      }
+    }
+  },
+  {
+    "name": "review_packet",
+    "kind": "review-packet",
+    "schema": "xgoal.review-packet/v1alpha1",
+    "hash": "e8c985557754a7b1f7a56adb6b79aa021890f8a17a6e934b0aeccda14062b2ed",
+    "bytes_sha256": "846b6999b81e24035c148baad17c0b6fb8a508dd5a5aeffef6a3b286585d520d",
+    "bytes": {
+      "base_tree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "candidate_tree": "cccccccccccccccccccccccccccccccccccccccc",
+      "config_hash": "b119965f7c724a148878f1166afc79d040d003410048c1cdeccc29aff03fb269",
+      "goal_revision_hash": "9c1cfcdc896bf7f6782cac10431050ecca456132221de229139f8bd9e151f792",
+      "id": "review_1",
+      "implementation_attempt_id": "attempt_1",
+      "implementation_profile_id": "codex",
+      "implementation_session_id": "session_1",
+      "patch_bundle_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "patch_bundle_path": "/tmp/xgoal-legacy/patch",
+      "plan_revision_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "protocol_version": "xgoal.review-packet/v1alpha1",
+      "required_checks": [
+        "correctness",
+        "scope"
+      ],
+      "reviewer_profile_id": "claude",
+      "validator_receipts": [
+        {
+          "hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "id": "receipt_1",
+          "path": "/tmp/xgoal-legacy/receipt.json"
+        }
+      ],
+      "work_item_id": "work_1",
+      "workspace": "/tmp/xgoal-legacy/workspace"
+    }
+  }
+]

@@ -539,16 +539,19 @@ func (runtime *Adapter) passiveProbe(ctx context.Context, spec adapter.ProbeSpec
 	probeContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	version, err := runtime.runProbeCommand(probeContext, []string{runtime.binary, "--version"})
-	if err != nil || !strings.Contains(version, "codex-cli ") {
-		return adapter.Capabilities{}, fmt.Errorf("%w: invalid Codex version output: %v", adapter.ErrUnavailable, err)
+	if err != nil {
+		return adapter.Capabilities{}, fmt.Errorf("%w: Codex version: %w", adapter.ErrUnavailable, err)
+	}
+	if !strings.Contains(version, "codex-cli ") {
+		return adapter.Capabilities{}, fmt.Errorf("%w: invalid Codex version output", adapter.ErrUnavailable)
 	}
 	help, err := runtime.runProbeCommand(probeContext, []string{runtime.binary, "exec", "--help"})
 	if err != nil {
-		return adapter.Capabilities{}, fmt.Errorf("%w: Codex exec help: %v", adapter.ErrUnavailable, err)
+		return adapter.Capabilities{}, fmt.Errorf("%w: Codex exec help: %w", adapter.ErrUnavailable, err)
 	}
 	resumeHelp, err := runtime.runProbeCommand(probeContext, []string{runtime.binary, "exec", "resume", "--help"})
 	if err != nil {
-		return adapter.Capabilities{}, fmt.Errorf("%w: Codex resume help: %v", adapter.ErrUnavailable, err)
+		return adapter.Capabilities{}, fmt.Errorf("%w: Codex resume help: %w", adapter.ErrUnavailable, err)
 	}
 	for _, required := range []string{"--json", "--output-schema", "--sandbox"} {
 		if required == "--sandbox" {
@@ -563,6 +566,9 @@ func (runtime *Adapter) passiveProbe(ctx context.Context, spec adapter.ProbeSpec
 	}
 	credentialStatus := "unknown"
 	login, loginErr := runtime.runProbeCommand(probeContext, []string{runtime.binary, "login", "status"})
+	if errors.Is(loginErr, supervisor.ErrProcessUnconfirmed) || probeContext.Err() != nil {
+		return adapter.Capabilities{}, fmt.Errorf("%w: Codex login status: %w", adapter.ErrUnavailable, errors.Join(loginErr, probeContext.Err()))
+	}
 	if loginErr == nil && strings.Contains(strings.ToLower(login), "logged in") {
 		credentialStatus = "available"
 	} else if loginErr != nil {

@@ -1147,3 +1147,38 @@ SQLite 保留事务状态、CAS、Lease、Gate、事件、进程归属和恢复�
 - [x] **AC-INIT-003**：真实 CLI/daemon 从无首次提交仓库初始化后进入 Planner 调用，验证不再因 HEAD 缺失而等待；Provider fixture 与真实 Provider Evidence 分开报告。
 
 Evidence（2026-09-06）：projectinit 定向测试 PASS 5.562s，覆盖首次提交、幂等、Git 身份/锁失败重试、损坏引用、已有仓库、dirty 与运行数据保护。真实 CLI/daemon 用例 TestRealCLIUnbornInitRunsGoalWithoutManualCommit PASS 25.77s：无手工 commit，初始 Commit 9414a06cb6b14a70f1ce0d04bc3709688d07351b，只含三个初始化文件；Planner、Implementer、独立 Reviewer 与受信验证均运行，Goal Completed，最终 output.txt 为 accepted 换行，初始化 HEAD/index 未变化。Provider 为确定性可执行夹具，未调用真实模型或验收贪吃蛇游戏。已知/未知项目初始化 CLI 回归 PASS 2.85s。详情见 PLAN-016 Change Review。
+
+## 22. 目标驱动的验收准备（OBJ-006 / PLAN-017）
+
+用户默认只提供目标、硬约束和必要环境授权；无需先写验收标准、业务测试、项目骨架或 Harness。Planner 在范围内决定实现方案、可检验标准和缺失的验收脚本，实施 Agent 交付代码、项目测试及启动说明，Kernel 执行已冻结的验收并决定完成。缺少现有测试本身不构成澄清理由。
+
+显式目标和硬约束、用户通过 `run --acceptance-file` 或 `planning.acceptanceFiles` 提供的仓库材料、既有 required Validators/Scenarios 是不可弱化的输入。材料可以是 Markdown 或脚本；Markdown 只是需求，不自动获得执行权限。Planner 优先复用已有断言，仅补足不足的覆盖；矛盾、不可推断的产品选择或额外权限才进入澄清。自动生成不把人工验收作为缺少测试时的默认替代。
+
+生成的验收脚本限定当前 Goal，在规划发布前随 Contract 冻结；实施者不能改写这些标准或脚本，也不能覆盖用户 Validator。默认 `planning.generatedValidators: allow` 允许授权范围内的本地验收，`human-gate` 要求一次针对确切方案的确认，`deny` 禁止生成可执行验收。此策略不允许修改项目既有受信配置，不扩大网络、Secret、发布、生产或破坏性权限。生成验证器的执行遵循既有 L0 与进程归属、时限、输出和文件不变约束。 默认独立 Reviewer 在调用前使用被动预检排除明确缺少凭证或不可用的 Profile，按既有偏好从其余可信候选选择；同一 Provider 的新会话可以独立审查。显式 roleProfiles 绑定不自动替换，未知凭证状态不当作未登录；不在审查失败或拒绝后改换 Reviewer。
+
+生成断言的确定性检查只证明结构和来源绑定；独立 Reviewer 必须结合原始目标、用户材料、冻结标准/脚本、实现与运行结果审查真实覆盖。空检查、只看文件存在、打印成功或跳过关键行为不能构成业务验收。报告区分用户提供和 Agent 生成的验收来源，不能把模型判断写成独立确定性证明。
+
+存在生成验收脚本的 Goal 必须经过独立 Review，`fast` 或 `review.requiredInStandard: false` 不绕过该要求；没有合适 Reviewer 时给出明确等待原因。无生成脚本的旧模式行为保持。
+
+复用现有规划 generation、Gate、Work 重试与最终 Evidence。新 init 配置启用有界自动修复，显式配置的旧重试限制保持；重复无进展、外部编辑、信任变更或进程退出不明仍停止。未冻结的 Goal 可补充材料/配置后原 ID 重试；已冻结的验收不因重启、普通 replan 或其他 Goal 改变。生成脚本错误不得通过悄悄放宽验收消除。
+
+若冻结脚本本身错误，保留旧失败和源码，审查修正的提案后创建新 Goal；恢复提示必须说明如何查看脚本/日志、取消并保留现场、提交正常基线及用 `run --proposal-file` 重建，不能无限重试业务实现。此版本不自动改写已冻结的错误验收标准。
+
+- [x] **AC-GA-001**：空仓库仅输入目标，真实 Planner 生成明确标准和业务断言，进入实施并产出可运行源码；无需用户编写标准或测试。
+- [x] **AC-GA-002**：CLI 和配置验收材料进入冻结输入，缺失、越界、符号链接和不允许读取的材料给出明确失败；已有 required 断言和场景保持有效。
+- [x] **AC-GA-003**：生成脚本在发布前受边界检查并冻结；未知运行时、超限、重复/覆盖 ID、未覆盖标准拒绝；不同 Goal 不互相污染验收定义。
+- [x] **AC-GA-004**：allow 默认自主继续，human-gate 只批准确切方案一次，deny 不运行生成脚本；拒绝、过期、旧版本、内容/现场变化不能绕过 Gate。
+- [x] **AC-GA-005**：Work、Review 和最终验证使用相同冻结标准/脚本及用户材料，生成脚本篡改、材料变化、失败或缺失 Evidence 不能完成；独立 Review 能阻止空洞断言。
+- [x] **AC-GA-006**：重启与重试保留验收身份和历史；状态/doctor/报告说明验收来源、当前阶段与真实阻塞，新 init 有界修复不会无休止等待或重试。交互终端 `run --wait` 默认在 stderr 显示阶段进度，stdout 与显式 `--format json` 保持 JSON 契约。
+- [x] **AC-GA-007**：真实新项目贪吃蛇完成移动、进食增长、碰撞、计分和重开交互验收，最终报告绑定当前 Tree；fixture 与真实 Provider 证据分开。
+
+Evidence（2026-09-06）：[REVIEW-062](docs/reviews/REVIEW-062-goal-acceptance-change.md) 记录实现审查及回归；[真实交付记录](docs/operations/GOAL-DRIVEN-ACCEPTANCE.md) 记录 Provider、浏览器与最终 Tree。单项行为已获得以下证据；完整工程门禁及 Plan 收口状态以 REVIEW-062 为准。
+
+| AC | 当前 Evidence |
+| --- | --- |
+| AC-GA-001、007 | 无业务代码/测试的新仓库真实 Goal `goal_df66a76ea52a642ec2222e86` 完成；自动产生 3 条标准、2 个业务脚本和 5 份游戏源码；实际浏览器验证移动、进食增长/计分、碰撞和重开。记录如实包含 Reviewer 可用性修复后的一次 Work retry。另原 demo5 Goal `goal_63dd18ee20824620553a2503` 重新规划后，单 Attempt 自主完成实施、独立 Review 和最终验收，5 份源码与最终 Tree 一致，另经真实浏览器验收。 |
+| AC-GA-002 | Planner 材料冻结与 missing/symlink/deny 负例；真实 CLI 配置 Markdown 加命令行脚本贯穿 Work、Review 和 Final；既有 required Validators/Scenarios 沿原流程保留。 |
+| AC-GA-003 | Generated 边界/碰撞/覆盖编译负例；同项目两个 Goal 的命名空间、真实执行和当前 Tree Evidence 集成验收。 |
+| AC-GA-004 | allow/human-gate/deny、确切提案 hash、内容/计划/输入变化拒绝；真实 daemon 重启后一次批准续作且 Planner 不重调，重复消费拒绝；共享 Gate 的拒绝/过期/CAS/现场变化负向。 |
+| AC-GA-005 | 材料篡改触发明确 `trusted_validator_change` 且无最终 Evidence；生成脚本强制独立 Review、空洞 `true` 被 Reviewer 拒绝后保持 WAITING；持久完成事务拒绝无 Review。 |
+| AC-GA-006 | 跨重启审批、旧 Config/Request/Contract/Packet 的 7 份固定 hash 兼容样本、初始故障后同 Goal 重试；终端默认/显式 JSON/非终端/显式 human 四种反馈组合，旧自动重试与无进展边界回归。 |

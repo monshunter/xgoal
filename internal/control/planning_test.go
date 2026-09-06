@@ -67,3 +67,52 @@ func TestAcceptGoalIsDurableReplayableAndSupportsDraftPause(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanningRetryRefreshesConfiguredAcceptanceButPreservesCLIInputs(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	base, err := os.ReadFile("../../xgoal.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeConfig := func(file string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, "xgoal.yaml"), append(append([]byte{}, base...), []byte("\nplanning:\n  acceptanceFiles: ["+file+"]\n")...), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig("missing.md")
+	state, err := sqlite.Open(ctx, filepath.Join(root, ".xgoal"), clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	service, err := control.New(state, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := map[string]any{"goal_id": "goal_inputs", "raw_goal": "implement game", "acceptance_files": []string{"explicit.md"}}
+	if _, _, err := service.AcceptGoal(ctx, api.Operation{Name: "goal.create", Body: raw(model)}, "POST /v1/goals", "inputs-once", model); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig("acceptance.md")
+	restarted, err := control.New(state, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, err := state.Goal(ctx, "goal_inputs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := restarted.Execute(ctx, api.Operation{Name: "goal.plan", ResourceID: goal.ID, Body: raw(map[string]any{"expected_version": goal.Version, "reason": "correct missing configured path"})}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Planning(ctx, goal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := record.Request.AcceptanceFiles
+	if len(got) != 2 || got[0] != "acceptance.md" || got[1] != "explicit.md" {
+		t.Fatalf("stale configuration retained or CLI input lost: %v", got)
+	}
+}

@@ -19,7 +19,6 @@ import (
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 	"github.com/monshunter/xgoal/internal/supervisor"
-	"github.com/monshunter/xgoal/internal/validator"
 )
 
 type agentOutcomeError struct {
@@ -138,7 +137,11 @@ func (engine *Engine) observeFailureScene(ctx context.Context, goal domain.Goal,
 		if err != nil {
 			return false, err
 		}
-		registry, err := validator.LoadRegistry(ctx, engine.repository, checkout.AcceptedCommit, "xgoal.yaml")
+		revision, err := engine.store.GoalRevision(ctx, goal.ActiveRevisionID)
+		if err != nil {
+			return false, err
+		}
+		registry, err := engine.validationRegistry(ctx, revision, checkout.AcceptedCommit)
 		if err != nil {
 			return false, err
 		}

@@ -87,7 +87,7 @@ func TestRealCLIGateContinuationPlannerAndWork(t *testing.T) {
 		var gateID, workID string
 		var gateVersion, ownerVersion int64
 		awaitBackgroundCondition(t, 30*time.Second, owner+" asks for input", func() bool {
-			reason := "planner_failed"
+			reason := "planner_clarification_required"
 			if owner == "work" {
 				reason = "agent_blocked"
 			}

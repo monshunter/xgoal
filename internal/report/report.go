@@ -87,6 +87,7 @@ type CriterionTrace struct {
 }
 
 type ValidatorTrace struct {
+	Source       string           `json:"source,omitempty"`
 	ID           string           `json:"id"`
 	Command      []string         `json:"command"`
 	ReceiptHash  string           `json:"receipt_hash"`
@@ -353,6 +354,9 @@ func renderMarkdown(value Report) []byte {
 	out.WriteString("\n## Validators\n\n")
 	for _, validator := range value.Validators {
 		fmt.Fprintf(&out, "- `%s`: `%s` → `%s`; flaky=%t; receipt `%s`; reproduce: `%s` (%s)\n", md(validator.ID), md(strings.Join(validator.Command, " ")), md(validator.Result), validator.Flaky, validator.ReceiptHash, md(strings.Join(validator.Reproduction, " ")), validator.Authority)
+		if validator.Source != "" {
+			fmt.Fprintf(&out, "  Source: `%s`.\n", md(validator.Source))
+		}
 	}
 	if len(value.Scenarios) > 0 {
 		out.WriteString("\n## Scenario Artifacts\n\n")

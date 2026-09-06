@@ -14,6 +14,7 @@ import (
 	"github.com/monshunter/xgoal/internal/planner"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/validationplan"
 )
 
 // AcceptGoal atomically records the request and its replayable acceptance.
@@ -60,6 +61,8 @@ func (service *Service) planningRequest(input createGoalRequest) (planner.Reques
 		return planner.Request{}, invalid("goal_id, raw_goal, mode fast|standard and a safe created_by are required", nil)
 	}
 	request := planner.Request{ProtocolVersion: planner.RequestVersion, GoalID: input.GoalID, RawGoal: input.RawGoal, Mode: input.Mode, CreatedBy: input.CreatedBy, ConfigHash: service.configHash, Generation: 1}
+	explicitFiles := append([]string{}, input.AcceptanceFiles...)
+	request.ExplicitAcceptanceFiles = &explicitFiles
 	if input.Proposal != nil {
 		request.Proposal = &planner.Proposal{ProtocolVersion: planner.ProposalVersion, Contract: input.Proposal.Contract, Plan: input.Proposal.Plan, Ambiguities: []string{}}
 	}
@@ -75,6 +78,16 @@ func (service *Service) planningRequest(input createGoalRequest) (planner.Reques
 		request.ProfileID = profile.ID
 	}
 	request.ValidationCapabilities = service.configuration.ValidationCapabilities()
+	files := append([]string(nil), input.AcceptanceFiles...)
+	if service.configuration.Planning != nil {
+		files = append(files, service.configuration.Planning.AcceptanceFiles...)
+	}
+	var err error
+	request.AcceptanceFiles, err = validationplan.Paths(files)
+	if err != nil {
+		return planner.Request{}, invalid("invalid acceptance files", err)
+	}
+	request.GeneratedValidationPolicy = service.configuration.GeneratedValidationPolicy()
 
 	if request.ProfileID == "" {
 		if request.Proposal != nil {
@@ -117,7 +130,11 @@ func (service *Service) retryPlanning(ctx context.Context, operation api.Operati
 	if err != nil {
 		return 0, nil, mapStoreError(err)
 	}
-	request, err := service.planningRequest(createGoalRequest{GoalID: operation.ResourceID, RawGoal: previous.Request.RawGoal, Mode: previous.Request.Mode, CreatedBy: previous.Request.CreatedBy, Proposal: input.Proposal})
+	explicitFiles := previous.Request.AcceptanceFiles
+	if previous.Request.ExplicitAcceptanceFiles != nil {
+		explicitFiles = *previous.Request.ExplicitAcceptanceFiles
+	}
+	request, err := service.planningRequest(createGoalRequest{AcceptanceFiles: explicitFiles, GoalID: operation.ResourceID, RawGoal: previous.Request.RawGoal, Mode: previous.Request.Mode, CreatedBy: previous.Request.CreatedBy, Proposal: input.Proposal})
 	if err != nil {
 		return 0, nil, err
 	}
@@ -134,7 +151,21 @@ func (service *Service) retryPlanning(ctx context.Context, operation api.Operati
 }
 
 func planningFields(record sqlite.PlanningRecord) map[string]any {
-	return map[string]any{"planning_state": record.State, "planning_generation": record.Generation, "planning_effect_id": record.Effect.ID, "planning_blocker": record.Blocker}
+	policy := record.Request.GeneratedValidationPolicy
+	if policy == "" {
+		policy = "allow"
+	}
+	acceptance := map[string]any{"policy": policy, "input_files": record.Request.AcceptanceFiles, "state": "preparing"}
+	if record.Observation != nil && record.Observation.Proposal != nil {
+		proposal := record.Observation.Proposal
+		acceptance["criteria"] = len(proposal.Contract.AcceptanceCriteria)
+		acceptance["generated_validators"] = len(proposal.Contract.GeneratedValidators)
+		acceptance["state"] = "prepared"
+	}
+	if record.Goal.ActiveRevisionID != "" {
+		acceptance["state"] = "frozen"
+	}
+	return map[string]any{"planning_state": record.State, "planning_generation": record.Generation, "planning_effect_id": record.Effect.ID, "planning_blocker": record.Blocker, "acceptance_preparation": acceptance}
 }
 func planningView(record sqlite.PlanningRecord) map[string]any {
 	response := goalView(record.Goal)

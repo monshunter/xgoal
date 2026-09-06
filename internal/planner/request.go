@@ -11,19 +11,24 @@ const RequestVersion = "xgoal.planning-request/v1"
 
 // Request is the immutable input of one durable planning generation.
 type Request struct {
-	Prior                  *PriorContext                  `json:"prior,omitempty"`
-	ValidationCapabilities *config.ValidationCapabilities `json:"validation_capabilities,omitempty"`
-	ProtocolVersion        string                         `json:"protocol_version"`
-	GoalID                 string                         `json:"goal_id"`
-	RawGoal                string                         `json:"raw_goal"`
-	Mode                   string                         `json:"mode"`
-	CreatedBy              string                         `json:"created_by"`
-	ConfigHash             string                         `json:"config_hash"`
-	ProfileID              string                         `json:"profile_id"`
-	Generation             int64                          `json:"generation"`
-	TrustedValidatorIDs    []string                       `json:"trusted_validator_ids"`
-	Proposal               *Proposal                      `json:"proposal,omitempty"`
-	BlockedReason          string                         `json:"blocked_reason,omitempty"`
+	// Nil marks legacy requests; a non-nil empty list preserves an explicit absence of CLI inputs.
+	ExplicitAcceptanceFiles   *[]string                      `json:"explicit_acceptance_files,omitempty"`
+	ApprovedValidationHash    string                         `json:"approved_validation_hash,omitempty"`
+	AcceptanceFiles           []string                       `json:"acceptance_files,omitempty"`
+	GeneratedValidationPolicy string                         `json:"generated_validation_policy,omitempty"`
+	Prior                     *PriorContext                  `json:"prior,omitempty"`
+	ValidationCapabilities    *config.ValidationCapabilities `json:"validation_capabilities,omitempty"`
+	ProtocolVersion           string                         `json:"protocol_version"`
+	GoalID                    string                         `json:"goal_id"`
+	RawGoal                   string                         `json:"raw_goal"`
+	Mode                      string                         `json:"mode"`
+	CreatedBy                 string                         `json:"created_by"`
+	ConfigHash                string                         `json:"config_hash"`
+	ProfileID                 string                         `json:"profile_id"`
+	Generation                int64                          `json:"generation"`
+	TrustedValidatorIDs       []string                       `json:"trusted_validator_ids"`
+	Proposal                  *Proposal                      `json:"proposal,omitempty"`
+	BlockedReason             string                         `json:"blocked_reason,omitempty"`
 }
 
 // PriorContext carries one failed generation and its scoped answer. It is input,

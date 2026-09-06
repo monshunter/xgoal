@@ -29,6 +29,16 @@ func TestDoctorRequestSeparatesPassiveAndExplicitActiveProbe(t *testing.T) {
 	}
 }
 
+func TestRunRequestIncludesOptionalAcceptanceFiles(t *testing.T) {
+	request, err := runRequest(strings.NewReader(""), runOptions{goal: "game", goalID: "goal_game", acceptanceFiles: []string{"docs/acceptance.md", "tests/accept.sh"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.body.(map[string]any)["acceptance_files"]; !reflect.DeepEqual(got, []string{"docs/acceptance.md", "tests/accept.sh"}) {
+		t.Fatalf("acceptance files lost: %#v", got)
+	}
+}
+
 func TestDoctorRequestRejectsIncompleteOrInvalidActiveProbe(t *testing.T) {
 	for _, options := range []doctorOptions{
 		{active: true, profile: "codex", timeout: 500 * time.Microsecond},

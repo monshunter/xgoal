@@ -22,6 +22,8 @@ const (
 )
 
 type ReviewPacket struct {
+	RawGoal                 string             `json:"raw_goal,omitempty"`
+	GoalContract            json.RawMessage    `json:"goal_contract,omitempty"`
 	Harness                 *HarnessInput      `json:"harness,omitempty"`
 	ProtocolVersion         string             `json:"protocol_version"`
 	ID                      string             `json:"id"`
@@ -49,6 +51,9 @@ type ReviewReceiptRef struct {
 }
 
 func (packet ReviewPacket) Validate() error {
+	if err := validateEmbeddedGoalContract(packet.GoalContract, packet.GoalRevisionHash); err != nil {
+		return err
+	}
 	if packet.Harness != nil {
 		if err := packet.Harness.Validate(); err != nil {
 			return err

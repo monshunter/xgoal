@@ -268,3 +268,40 @@ func claimAndCompleteWork(t *testing.T, store *Store, work domain.WorkItem, atte
 	}
 	return lease
 }
+
+func TestGeneratedAcceptanceCompletionCannotBypassIndependentReview(t *testing.T) {
+	ctx := context.Background()
+	state, err := Open(ctx, filepath.Join(t.TempDir(), "project"), clock.Real{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	goal, work := seedReadyWork(t, state, "work_generated")
+	lease := claimAndCompleteWork(t, state, work, "attempt_generated", "lease_generated")
+	e := EventInput{Type: "CompletionChecked", ActorType: "kernel", Payload: map[string]any{}}
+	if _, err := state.ReleaseLease(ctx, lease.ID, lease.Generation, lease.Version, e); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.UpdateGoalState(ctx, goal.ID, 3, domain.GoalVerifying, e); err != nil {
+		t.Fatal(err)
+	}
+	current, err := state.Goal(ctx, goal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inject only the frozen discriminator to exercise the durable completion gate.
+	if _, err := state.db.ExecContext(ctx, `UPDATE goal_revisions SET contract_json=CAST(json_set(contract_json,'$.contract.generated_validators',json('[{"id":"behavior"}]')) AS BLOB) WHERE id=?`, current.ActiveRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	facts := CompletionFacts{IntegrationTree: "tree-final", ExpectedTree: "tree-final", Criteria: []completion.CriterionStatus{{ID: "AC-1", Satisfied: true, Current: true, TreeHash: "tree-final"}}, ScopePolicyPassed: true, FinalValidationSetCurrent: true, FinalEvidenceSetID: "set", FinalReportHash: "report", HumanAcceptanceSatisfied: true}
+	if _, err := state.SetCompletionFacts(ctx, goal.ID, facts, e); err != nil {
+		t.Fatal(err)
+	}
+	result, err := state.CompleteGoal(ctx, goal.ID, current.Version, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Complete || len(result.Reasons) != 1 || result.Reasons[0] != "generated acceptance requires an independent approved review for every required Work" {
+		t.Fatalf("completion bypassed reviewer: %+v", result)
+	}
+}

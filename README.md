@@ -8,7 +8,7 @@
 
 - 单一 Go CLI/Daemon，Unix Socket HTTP/JSON API，每项目私有 SQLite/WAL 状态；
 - Goal 与规划请求事务性接受，后台规划、结果原子发布、进程归属登记与重启恢复；
-- 自然语言、文件或 stdin Goal，严格 Planner Schema、冻结 Revision、DAG 与 Scope/Validator 校验；
+- 自然语言、文件或 stdin Goal，可选验收脚本/Markdown 输入，缺省自动生成并冻结业务验收，严格 Planner Schema、冻结 Revision、DAG 与 Scope/Validator 校验；
 - Codex 与 Claude 的 Probe、Plan、Start、Wait、Cancel、Resume、可选 Accept 和结构化输出适配；
 - 同项目串行使用当前工作目录，以私有 index 捕获完整 tracked/untracked/binary/rename/mode/symlink/delete Patch；
 - `scope`、`command`、`file_assertion`、`runtime_probe`、`git_assertion` 五类受信 Validator、Command Receipt 与 Evidence；
@@ -61,7 +61,9 @@ xgoal run --goal-file ./GOAL.md
 printf '%s\n' '修复并验收当前回归' | xgoal run --goal-file -
 ```
 
-未指定 `--mode` 时使用 `xgoal.yaml` 的 `orchestration.defaultMode`。`standard` 要求独立 Reviewer；`fast` 仍必须经过 Scope、Patch、Validator、Promotion 与 Final Validation，不信任 Agent 自述。创建请求返回 `DRAFT` 和 `planning_state=QUEUED` 后，daemon 在后台规划。Planner 发现不能安全推断的关键语义时，未冻结 Goal 保持 `DRAFT`，以 `planning_state=WAITING` 和 Gate 说明原因。
+未指定 `--mode` 时使用 `xgoal.yaml` 的 `orchestration.defaultMode`。`standard` 要求独立 Reviewer；使用自动生成验收时 `fast` 也要求独立 Reviewer。`fast` 仍必须经过 Scope、Patch、Validator、Promotion 与 Final Validation，不信任 Agent 自述。创建请求返回 `DRAFT` 和 `planning_state=QUEUED` 后，daemon 在后台规划。Planner 发现不能安全推断的关键语义时，未冻结 Goal 保持 `DRAFT`，以 `planning_state=WAITING` 和 Gate 说明原因。
+
+未显式绑定 Reviewer 时，运行前检查会跳过已确认缺少登录凭证或 Probe 失败的候选，按既有偏好选择可用 Profile；同一 Provider 使用新的独立审查会话。显式角色绑定保持不变，审查失败或拒绝不会触发更换 Reviewer。配置中无效的 CLI 路径仍须先修正，才能启动 daemon。
 
 常用控制命令：
 
@@ -119,7 +121,7 @@ source <(xgoal completion zsh)
 
 项目入口统一使用 `--project`、`--state-dir`、`--socket`，优先级为显式参数、对应 `XGOAL_PROJECT`/`XGOAL_STATE_DIR`/`XGOAL_SOCKET` 环境变量、已绑定项目位置、默认值。例如 `xgoal --project /path/to/A daemon status`。项目绑定后不能通过另一个 state-dir 启动第二个实例；linked worktree 入口明确拒绝。`doctor` 默认可离线运行，不打开、创建或迁移 SQLite；主动 Probe 需要运行中的 daemon。
 
-`init` 和离线/在线 `doctor` 的 `validation_preparation` 会检查 Go、Node package test、Cargo、pytest 和 Make test 入口，展示命令是否可用、是否已配置为 Validator，以及准备步骤。检测不会执行项目代码或安装依赖；`coverage: not_verified` 明确表示尚未证明行为覆盖。没有发现入口时返回 `status: unknown`；默认 `git-diff-check` 只检查空白格式，不能替代业务断言。Node、Cargo、pytest 和 Make 的发现结果仅作建议，需审阅测试、声明可信入口并提交配置后才能用于 Goal。
+`init` 和离线/在线 `doctor` 的 `validation_preparation` 会检查 Go、Node package test、Cargo、pytest 和 Make test 入口，展示命令是否可用、是否已配置为 Validator，以及准备步骤。检测不会执行项目代码或安装依赖；`coverage: not_verified` 明确表示尚未证明行为覆盖。没有发现入口时返回 `status: unknown`；默认 `git-diff-check` 只检查空白格式，不能替代业务断言。检测到的入口作为规划建议；已有 `validators` 保留项目配置的信任边界。没有测试入口不会阻止默认规划，Planner 会根据目标补齐标准和可执行断言。
 
 运行中的 daemon 可导出本地审计快照：
 
@@ -132,6 +134,38 @@ xgoal export <goal-id-or-unique-prefix> --output /absolute/path/outside-project/
 导出包含工作 Packet、Patch 对象、Receipt/日志、Review、场景证据、报告和登记的迁移备份；Provider 日志只保留冻结游标内的公开脱敏内容。正在改名的报告从快照内已校验的 blob 生成，并保留 `PENDING_RENAME` 标记；已发布文件损坏不能用 blob 掩盖。预检尚未创建的 Planner Packet、用户提供 Proposal 的无调用路径、已清理 marker 和旧未索引日志各自明确标注。缺失必需文件、校验失败或取消会保留私有 `.incomplete-*` 目录供检查，并返回失败；只有成功发布的目标目录可视为完整导出。总时限 5 分钟、总文件数据 2 GiB、最多 100,000 个文件/引用；超限明确失败。
 
 这是审计数据包：不包含源码仓库、Git 对象、可写环境数据或宿主原生会话库，也不支持导入后继续执行。导出副本的编辑不会改变正在运行的 SQLite 权威状态。
+
+
+新项目只需提供目标、硬约束和必要的环境授权，例如：
+
+```sh
+git init
+xgoal init
+xgoal daemon start
+xgoal run --goal "编写一个贪吃蛇游戏" --wait --format human
+```
+
+Planner 自行决定合理的实现方式、验收标准和测试骨架，把可执行断言连同计划冻结到 Goal；Implementer 依据同一份合同开发，Kernel 运行断言、独立 Review 和最终复验。默认新配置允许最多 3 次安全的实现重试。生成测试不会自动扩大网络、Secret、依赖安装或发布权限，也不会写入项目 `xgoal.yaml` 或用户 HEAD/index。
+
+已有材料可按需指定，路径相对仓库根；在创建 Goal 前提交材料与配置并保持工作目录干净：
+
+```sh
+xgoal run --goal "实现游戏" --acceptance-file docs/acceptance.md --acceptance-file tests/acceptance.sh --wait
+```
+
+也可以在 `xgoal.yaml` 配置：
+
+```yaml
+planning:
+  acceptanceFiles: [docs/acceptance.md]
+  generatedValidators: allow # allow（默认）、human-gate、deny
+```
+
+用户明确给出的标准和项目验证器优先，Agent 补足缺失部分；Markdown/脚本作为输入被绑定路径、内容和模式，不会因为传入文件就授予额外执行权限。脚本可由生成的断言调用；已有正式受信入口继续在 `validators` 中声明。生成断言只使用 `sh`、`node` 或 `python3`，应自包含且验证真实业务行为。需要其他运行时、服务或依赖时，Planner 应在项目现有授权内选择可执行方案，真实缺口通过 Gate 说明。
+
+`human-gate` 会展示 `generated_validation_approval`，用 `gate get` 直接展示完整 `prepared_proposal` 与 `prepared_plan_hash`，检查后执行 `approve --resume`；批准绑定那一份完整计划和断言，恢复不会再生成一份测试。`deny` 禁止新生成断言，需要已有业务验证器。交互终端的 `run --wait` 默认在 stderr 显示进度，stdout 继续输出 JSON；显式 `--format json` 或重定向 stderr 时保留静默等待。`status --format human` 的 `Acceptance` 行显示准备/冻结阶段、输入文件数、验收标准数和生成检查数；最终报告标明 `agent_generated` 或 `project_configuration` 来源。
+
+实现失败可按既有重试流程修复代码，但不能同步放宽冻结断言。若断言本身错误，先通过 `context`、`logs` 和 Receipt 保留与检查现场，再取消旧 Goal，审阅纠正后的 Proposal，正常提交干净基线，并用 `run --proposal-file` 创建新 Goal；尚未冻结时可用 `goal plan --proposal-file`。启用 `human-gate` 时新方案需重新确认。通过测试证明对应断言成立，独立 Review 负责检查原始目标、用户材料和断言是否遗漏重要行为；这两种证据都不代表穷尽所有业务情况。
 
 ## Agent Profile 与项目规则
 

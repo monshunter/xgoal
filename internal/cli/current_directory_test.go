@@ -259,6 +259,10 @@ func writeCurrentDirectoryFixture(t *testing.T, path, content string, mode os.Fi
 }
 
 func currentDirectoryProviders(t *testing.T, bin, rolesPath string, scenarioIDs ...string) string {
+	return currentDirectoryProviderProposal(t, bin, rolesPath, nil, scenarioIDs...)
+}
+
+func currentDirectoryProviderProposal(t *testing.T, bin, rolesPath string, customize func(map[string]any), scenarioIDs ...string) string {
 	t.Helper()
 	proposal := `{"contract":{"summary":"append output","rationale":"exercise current directory execution","in_scope":["output.txt"],"out_of_scope":["remote publication"],"constraints":["no network"],"acceptance_criteria":[{"id":"AC-CURRENT","statement":"output contains an accepted line","validators":["output-check"],"human_acceptance":false}],"quality_attributes":["deterministic validation"],"human_gates":["scope expansion"],"completion_policy":{"require_all_required_items":true,"require_no_blocking_findings":true,"require_final_validation":true}},"plan":{"summary":"one bounded change","work_items":[{"client_key":"output","title":"append output","objective":"append one accepted line to output.txt","depends_on":[],"read_scope":["/**"],"write_scope":["/output.txt"],"acceptance_criteria":["AC-CURRENT"],"validators":["output-check"],"recommended_role":"implementer","required":true}]}}`
 	var plannerProposal map[string]any
@@ -275,6 +279,9 @@ func currentDirectoryProviders(t *testing.T, bin, rolesPath string, scenarioIDs 
 		proposal = string(updated)
 	}
 	plannerProposal["protocol_version"], plannerProposal["ambiguities"] = "xgoal.planner-proposal/v1alpha1", []any{}
+	if customize != nil {
+		customize(plannerProposal)
+	}
 	plannerJSON, err := json.Marshal(plannerProposal)
 	if err != nil {
 		t.Fatal(err)

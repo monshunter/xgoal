@@ -19,6 +19,7 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/goalcompile"
 	"github.com/monshunter/xgoal/internal/protocol"
+	"github.com/monshunter/xgoal/internal/validationplan"
 )
 
 const (
@@ -35,18 +36,20 @@ type Proposal struct {
 }
 
 type Packet struct {
-	Prior                  *PriorContext                  `json:"prior,omitempty"`
-	ValidationCapabilities *config.ValidationCapabilities `json:"validation_capabilities,omitempty"`
-	Harness                *protocol.HarnessInput         `json:"harness,omitempty"`
-	ProtocolVersion        string                         `json:"protocol_version"`
-	GoalID                 string                         `json:"goal_id"`
-	RawGoal                string                         `json:"raw_goal"`
-	Mode                   string                         `json:"mode"`
-	ConfigHash             string                         `json:"config_hash"`
-	TrustedValidators      []string                       `json:"trusted_validators"`
-	ProjectRoot            string                         `json:"project_root"`
-	ProjectNetwork         string                         `json:"project_network"`
-	ProjectSecrets         string                         `json:"project_secrets"`
+	AcceptanceInputs          []validationplan.Input         `json:"acceptance_inputs,omitempty"`
+	GeneratedValidationPolicy string                         `json:"generated_validation_policy,omitempty"`
+	Prior                     *PriorContext                  `json:"prior,omitempty"`
+	ValidationCapabilities    *config.ValidationCapabilities `json:"validation_capabilities,omitempty"`
+	Harness                   *protocol.HarnessInput         `json:"harness,omitempty"`
+	ProtocolVersion           string                         `json:"protocol_version"`
+	GoalID                    string                         `json:"goal_id"`
+	RawGoal                   string                         `json:"raw_goal"`
+	Mode                      string                         `json:"mode"`
+	ConfigHash                string                         `json:"config_hash"`
+	TrustedValidators         []string                       `json:"trusted_validators"`
+	ProjectRoot               string                         `json:"project_root"`
+	ProjectNetwork            string                         `json:"project_network"`
+	ProjectSecrets            string                         `json:"project_secrets"`
 }
 
 // Validate checks an immutable Packet independently of a live Provider call.
@@ -109,8 +112,11 @@ func Decode(reader io.Reader, limit int64) (Proposal, error) {
 }
 
 func Prepare(runtimeRoot string, packet Packet) (string, string, error) {
-	if !filepath.IsAbs(runtimeRoot) || filepath.Clean(runtimeRoot) != runtimeRoot || validatePacket(packet) != nil {
+	if !filepath.IsAbs(runtimeRoot) || filepath.Clean(runtimeRoot) != runtimeRoot {
 		return "", "", errors.New("invalid Planner packet")
+	}
+	if err := validatePacket(packet); err != nil {
+		return "", "", err
 	}
 	directory := filepath.Join(runtimeRoot, "planner", packet.GoalID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -139,8 +145,11 @@ func Prepare(runtimeRoot string, packet Packet) (string, string, error) {
 // PrepareInvocation keeps each planning generation's immutable packet separate.
 // A crash after writing a packet is recoverable only with identical bytes.
 func PrepareInvocation(runtimeRoot, invocationID string, generation int64, packet Packet) (string, string, error) {
-	if !filepath.IsAbs(runtimeRoot) || filepath.Clean(runtimeRoot) != runtimeRoot || !validComponent(invocationID) || generation <= 0 || validatePacket(packet) != nil {
+	if !filepath.IsAbs(runtimeRoot) || filepath.Clean(runtimeRoot) != runtimeRoot || !validComponent(invocationID) || generation <= 0 {
 		return "", "", errors.New("invalid Planner generation packet")
+	}
+	if err := validatePacket(packet); err != nil {
+		return "", "", err
 	}
 	directory := runtimeRoot
 	for _, component := range []string{"planner", packet.GoalID, fmt.Sprintf("%d-%s", generation, invocationID)} {
@@ -244,6 +253,9 @@ func ValidateInvocation(invocation Invocation) (Packet, error) {
 }
 
 func validatePacket(packet Packet) error {
+	if err := validationplan.ValidateInputs(packet.AcceptanceInputs); err != nil {
+		return err
+	}
 	if packet.Prior != nil {
 		if err := packet.Prior.Validate(); err != nil {
 			return err
@@ -254,8 +266,17 @@ func validatePacket(packet Packet) error {
 			return err
 		}
 	}
-	if packet.ProtocolVersion != PacketVersion || !validComponent(packet.GoalID) || strings.TrimSpace(packet.RawGoal) == "" || (packet.Mode != "fast" && packet.Mode != "standard") || !validHex(packet.ConfigHash, 64) || len(packet.TrustedValidators) == 0 || !filepath.IsAbs(packet.ProjectRoot) || filepath.Clean(packet.ProjectRoot) != packet.ProjectRoot {
+	if packet.ProtocolVersion != PacketVersion || !validComponent(packet.GoalID) || strings.TrimSpace(packet.RawGoal) == "" || (packet.Mode != "fast" && packet.Mode != "standard") || !validHex(packet.ConfigHash, 64) || !filepath.IsAbs(packet.ProjectRoot) || filepath.Clean(packet.ProjectRoot) != packet.ProjectRoot {
 		return errors.New("invalid Planner packet")
+	}
+	switch packet.GeneratedValidationPolicy {
+	case "", "allow", "human-gate":
+	case "deny":
+		if len(packet.TrustedValidators) == 0 {
+			return errors.New("no project validators are configured and planning.generatedValidators denies generation")
+		}
+	default:
+		return errors.New("invalid generated validation policy")
 	}
 	seen := make(map[string]struct{}, len(packet.TrustedValidators))
 	for _, validator := range packet.TrustedValidators {

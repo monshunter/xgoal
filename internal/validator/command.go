@@ -103,6 +103,8 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 	limiter.cancel = cancel
 	if checkoutErr != nil {
 		runErr = checkoutErr
+	} else if err := runner.registry.VerifyAcceptanceInputs(runner.handle.Worktree); err != nil {
+		trustErr, runErr = err, err
 	} else if err := verifyTrustedExecutable(runner.handle.Worktree, definition); err != nil {
 		trustErr = fmt.Errorf("%w: %v", ErrTrustedFileChanged, err)
 		runErr = trustErr
@@ -126,6 +128,10 @@ func (runner *CommandRunner) Run(ctx context.Context, request CommandRequest) (p
 		}
 	}
 	stopVerify()
+	if err := runner.registry.VerifyAcceptanceInputs(runner.handle.Worktree); err != nil {
+		trustErr = errors.Join(trustErr, err)
+		result = protocol.CommandFailed
+	}
 	if err := verifyTrustedFiles(runner.handle.Worktree, definition); err != nil {
 		trustErr = errors.Join(trustErr, err)
 		if !execution.StartedAt.IsZero() {

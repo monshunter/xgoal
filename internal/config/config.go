@@ -23,6 +23,7 @@ const (
 var ErrMigrationRequired = errors.New("CONFIG_MIGRATION_REQUIRED: workspace.provider git-worktree is no longer executable; review the current-directory contract, update xgoal.yaml to current-directory, and restart the daemon; historical status and reports remain readable")
 
 type Config struct {
+	Planning      *Planning     `yaml:"planning,omitempty" json:"planning,omitempty"`
 	APIVersion    string        `yaml:"apiVersion" json:"apiVersion"`
 	Kind          string        `yaml:"kind" json:"kind"`
 	Metadata      Metadata      `yaml:"metadata" json:"metadata"`
@@ -221,6 +222,9 @@ func (c Config) Hash() (string, error) {
 }
 
 func (c Config) Validate() error {
+	if err := c.validatePlanning(); err != nil {
+		return err
+	}
 	if c.APIVersion != APIVersion {
 		return fmt.Errorf("apiVersion must be %q", APIVersion)
 	}

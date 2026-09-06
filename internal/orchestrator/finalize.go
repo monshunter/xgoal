@@ -86,7 +86,7 @@ func (engine *Engine) finalizeGoal(ctx context.Context, goal domain.Goal) (resul
 			}
 		}
 	}()
-	registry, err := validator.LoadRegistry(ctx, engine.repository, integration.Commit, "xgoal.yaml")
+	registry, err := engine.validationRegistry(ctx, revision, integration.Commit)
 	if err != nil {
 		return err
 	}
@@ -282,10 +282,19 @@ func (engine *Engine) buildFinalReport(frozen frozenContract, revision domain.Go
 	}
 	evidenceByValidator := make(map[string]string, len(runs))
 	validators := make([]finalreport.ValidatorTrace, 0, len(runs))
+	generated := map[string]bool{}
+	for _, g := range frozen.Contract.GeneratedValidators {
+		generated[g.ID] = true
+	}
 	for _, run := range runs {
+		source := "project_configuration"
+		if generated[run.Validator] {
+			source = "agent_generated"
+		}
 		evidenceByValidator[run.Validator] = run.ID
 		validators = append(validators, finalreport.ValidatorTrace{
-			ID: run.Validator, Command: run.Receipt.Argv, ReceiptHash: run.Hash, Result: string(run.Receipt.Result),
+			Source: source,
+			ID:     run.Validator, Command: run.Receipt.Argv, ReceiptHash: run.Hash, Result: string(run.Receipt.Result),
 			Reproduction: append([]string(nil), run.Receipt.Argv...), Flaky: run.Flaky, Authority: domain.AuthorityDeterministic,
 		})
 	}
@@ -337,6 +346,9 @@ func (engine *Engine) buildFinalReport(frozen frozenContract, revision domain.Go
 			{Text: "Project secret policy is " + engine.config.Runtime.ProjectSecrets + "; L0 cannot prove host credential isolation from a locally executed provider CLI.", Authority: domain.AuthorityFact},
 		},
 		Timestamps: finalreport.TimestampTrace{StartedAt: revision.FrozenAt.UTC().Format(time.RFC3339Nano), CompletedAt: completedAt.Format(time.RFC3339Nano), Authority: domain.AuthorityFact},
+	}
+	if len(generated) > 0 {
+		report.Limitations = append(report.Limitations, finalreport.Statement{Text: "Agent-generated checks are frozen before implementation and independently reviewed. Passing receipts prove their assertions on this tree, not exhaustive semantic coverage.", Authority: domain.AuthorityFact})
 	}
 	facts := sqlite.CompletionFacts{
 		IntegrationTree: tree, ExpectedTree: tree, Criteria: completionCriteria,

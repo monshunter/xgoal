@@ -78,7 +78,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	if err != nil {
 		return err
 	}
-	registry, err := validator.LoadRegistry(ctx, engine.repository, integration.Commit, "xgoal.yaml")
+	registry, err := engine.validationRegistry(ctx, revision, integration.Commit)
 	if err != nil {
 		return engine.failUnclaimed(ctx, goal, work, revision, reconcile.ValidatorUnavailable, err, profile.ID)
 	}
@@ -134,7 +134,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		Harness:         &harnessInput,
 		ProtocolVersion: protocol.WorkPacketVersion,
 		Project:         protocol.PacketProject{Name: engine.config.Metadata.Name, BaseTree: integration.Tree, Workspace: attemptWorkspace.Path},
-		Goal:            protocol.PacketGoal{ID: goal.ID, Revision: revision.Revision, Summary: frozen.Contract.Summary, ContractHash: revision.Hash},
+		Goal:            protocol.PacketGoal{RawGoal: revision.RawGoal, Contract: revision.ContractJSON, ID: goal.ID, Revision: revision.Revision, Summary: frozen.Contract.Summary, ContractHash: revision.Hash},
 		WorkItem: protocol.PacketWorkItem{
 			ID: work.ID, Title: work.Title, Objective: work.Objective, Dependencies: dependencies,
 			ReadScope: work.ReadScope, WriteScope: work.WriteScope,
@@ -381,7 +381,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		return fail(reconcile.InternalInvariantViolation, err, profile.ID, captured.Bundle.BundleHash)
 	}
 
-	if frozen.Mode == "standard" && engine.config.Review.RequiredInStandard {
+	if frozen.Mode == "standard" && engine.config.Review.RequiredInStandard || len(frozen.Contract.GeneratedValidators) > 0 {
 		if err := engine.advanceAttempt(ctx, lease, domain.AttemptReviewing); err != nil {
 			return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 		}
@@ -508,7 +508,15 @@ func (engine *Engine) runValidators(ctx context.Context, registry *validator.Reg
 			return nil, runErr
 		}
 		if receipt.Result != protocol.CommandPassed {
-			return nil, fmt.Errorf("validator %q returned %s", validatorID, receipt.Result)
+			detail := ""
+			if contract, err := decodeFrozenContract(revision.ContractJSON); err == nil {
+				for _, g := range contract.Contract.GeneratedValidators {
+					if g.ID == validatorID {
+						detail = "; frozen generated acceptance failed. Inspect the receipt and context; implementation retries preserve these checks. If the check itself is wrong, preserve the scene, cancel this Goal and start a new Goal with a reviewed corrected --proposal-file and clean committed baseline"
+					}
+				}
+			}
+			return nil, fmt.Errorf("validator %q returned %s%s", validatorID, receipt.Result, detail)
 		}
 		evidenceID, err := randomID("evidence")
 		if err != nil {
@@ -540,15 +548,11 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, candidateTree); err != nil {
 		return err
 	}
-	profile, reviewer, err := engine.reviewerProfile(implementer)
+	profile, reviewer, capabilities, err := engine.reviewerProfile(ctx, implementer)
 	if err != nil {
 		return err
 	}
 	harnessInput, err := harness.Discover(engine.projectRoot, profile.Adapter, engine.config.Project.Harness)
-	if err != nil {
-		return err
-	}
-	capabilities, err := engine.adapters[profile.ID].Probe(ctx, adapter.ProbeSpec{Mode: adapter.ProbePassive, ProfileID: profile.ID, Timeout: 10 * time.Second})
 	if err != nil {
 		return err
 	}
@@ -557,13 +561,14 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 		return err
 	}
 	packet, err := engine.reviews.Prepare(ctx, review.PrepareInput{
+		RawGoal: revision.RawGoal, GoalContract: revision.ContractJSON,
 		Harness: &harnessInput,
 		ID:      reviewID, GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash,
 		WorkItemID: work.ID, ImplementationAttemptID: validationWorkspace.AttemptID,
 		ImplementationProfileID: implementer.ID, ImplementationSessionID: implementationSession,
 		ReviewerProfileID: profile.ID, CandidateTree: candidateTree,
 		ValidationWorkspace: validationWorkspace, ValidatorRunIDs: validatorRunIDs,
-		RequiredChecks: []string{"correctness", "scope", "regression", "test_gap", "security"},
+		RequiredChecks: []string{"correctness", "scope", "regression", "test_gap", "security", "Compare the original goal, acceptance inputs and frozen criteria/scripts against real behavior. Reject vacuous assertions, skipped key requirements, mocked implementations and weakened user acceptance. Generated tests passing alone do not establish semantic coverage."},
 	})
 	if err != nil {
 		return err

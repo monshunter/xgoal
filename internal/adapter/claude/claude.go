@@ -448,12 +448,15 @@ func (runtime *Adapter) passiveProbe(ctx context.Context, spec adapter.ProbeSpec
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	version, err := runtime.runProbe(probeCtx, []string{runtime.binary, "--version"})
-	if err != nil || !strings.Contains(strings.ToLower(version), "claude code") {
+	if err != nil {
+		return adapter.Capabilities{}, fmt.Errorf("%w: Claude version: %w", adapter.ErrUnavailable, err)
+	}
+	if !strings.Contains(strings.ToLower(version), "claude code") {
 		return adapter.Capabilities{}, fmt.Errorf("%w: invalid Claude version output", adapter.ErrUnavailable)
 	}
 	help, err := runtime.runProbe(probeCtx, []string{runtime.binary, "--help"})
 	if err != nil {
-		return adapter.Capabilities{}, fmt.Errorf("%w: Claude help: %v", adapter.ErrUnavailable, err)
+		return adapter.Capabilities{}, fmt.Errorf("%w: Claude help: %w", adapter.ErrUnavailable, err)
 	}
 	for _, required := range []string{"--print", "--output-format", "--json-schema", "--permission-mode", "--tools", "--allowedTools", "--resume"} {
 		if !strings.Contains(help, required) {
@@ -462,6 +465,9 @@ func (runtime *Adapter) passiveProbe(ctx context.Context, spec adapter.ProbeSpec
 	}
 	credential := "unknown"
 	auth, authErr := runtime.runProbe(probeCtx, []string{runtime.binary, "auth", "status"})
+	if errors.Is(authErr, supervisor.ErrProcessUnconfirmed) || probeCtx.Err() != nil {
+		return adapter.Capabilities{}, fmt.Errorf("%w: Claude auth status: %w", adapter.ErrUnavailable, errors.Join(authErr, probeCtx.Err()))
+	}
 	if authErr == nil && strings.Contains(auth, "\"loggedIn\": true") {
 		credential = "available"
 	} else if authErr != nil {

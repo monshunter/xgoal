@@ -28,6 +28,14 @@ Plans:
 ## Objectives
 
 ---
+ID: OBJ-006
+Objective: 让新项目根据目标自动准备验收、实施并验证交付，兼容用户已有验收材料并保持信任与恢复边界
+Status: 已完成
+Plans:
+- [x] [PLAN-017：目标驱动的验收准备与自主交付](docs/plans/PLAN-017.md)
+---
+
+---
 ID: OBJ-005
 Objective: 支持新 Git 仓库通过 xgoal init 自动提交初始化文件并进入 Goal 规划
 Status: 已完成

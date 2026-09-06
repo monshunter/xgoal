@@ -62,4 +62,7 @@
 | REVIEW-057-plan-016 | REVIEW-057：PLAN-016 新仓库初始化 Plan Review | [REVIEW-057-plan-016.md](REVIEW-057-plan-016.md) |
 | REVIEW-058-init-contract | REVIEW-058：无首次提交仓库的初始化合同审查 | [REVIEW-058-init-contract.md](REVIEW-058-init-contract.md) |
 | REVIEW-059-init-first-commit | REVIEW-059：新仓库初始化首次提交 Change Review | [REVIEW-059-init-first-commit.md](REVIEW-059-init-first-commit.md) |
+| REVIEW-060-plan-017 | REVIEW-060：PLAN-017 目标驱动验收 Plan Review | [REVIEW-060-plan-017.md](REVIEW-060-plan-017.md) |
+| REVIEW-061-goal-acceptance-contract | REVIEW-061：目标驱动验收合同与设计 Review | [REVIEW-061-goal-acceptance-contract.md](REVIEW-061-goal-acceptance-contract.md) |
+| REVIEW-062-goal-acceptance-change | REVIEW-062：目标驱动验收实现 Change Review | [REVIEW-062-goal-acceptance-change.md](REVIEW-062-goal-acceptance-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->

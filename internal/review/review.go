@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -52,6 +53,8 @@ type Adapter interface {
 }
 
 type PrepareInput struct {
+	RawGoal                 string
+	GoalContract            json.RawMessage
 	Harness                 *protocol.HarnessInput
 	ID                      string
 	GoalRevisionHash        string
@@ -124,6 +127,7 @@ func (coordinator *Coordinator) Prepare(ctx context.Context, input PrepareInput)
 		})
 	}
 	packet := protocol.ReviewPacket{
+		RawGoal: input.RawGoal, GoalContract: append(json.RawMessage(nil), input.GoalContract...),
 		Harness:         input.Harness,
 		ProtocolVersion: protocol.ReviewPacketVersion, ID: input.ID,
 		GoalRevisionHash: input.GoalRevisionHash, PlanRevisionHash: input.PlanRevisionHash,

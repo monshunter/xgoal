@@ -22,6 +22,8 @@
       "additionalProperties": false,
       "required": ["id", "revision", "summary", "contract_hash"],
       "properties": {
+        "raw_goal": {"type": "string"},
+        "contract": {"type": "object", "description": "Frozen Goal Revision envelope; Kernel verifies its canonical hash and 8 MiB byte bound."},
         "id": {"type": "string", "minLength": 1},
         "revision": {"type": "integer", "minimum": 1},
         "summary": {"type": "string", "minLength": 1},

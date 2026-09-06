@@ -80,13 +80,14 @@ func doctorRequest(options doctorOptions) (requestSpec, error) {
 }
 
 type runOptions struct {
-	goalFile     string
-	goal         string
-	proposalFile string
-	mode         string
-	goalID       string
-	wait         bool
-	format       string
+	acceptanceFiles []string
+	goalFile        string
+	goal            string
+	proposalFile    string
+	mode            string
+	goalID          string
+	wait            bool
+	format          string
 }
 
 func newRunCommand(runtime runtime) *cobra.Command {
@@ -107,16 +108,20 @@ func newRunCommand(runtime runtime) *cobra.Command {
 				return err
 			}
 			request.human = options.format == "human"
+			if options.wait && !cmd.Flags().Changed("format") && runtime.terminal != nil && runtime.terminal(cmd.ErrOrStderr()) {
+				request.human = true
+			}
 			return runtime.executeAPI(cmd, request)
 		},
 	}
 	cmd.Flags().StringVar(&options.goalFile, "goal-file", "", "read the Goal from a file, or - for stdin")
+	cmd.Flags().StringArrayVar(&options.acceptanceFiles, "acceptance-file", nil, "optional repository acceptance document or script (repeatable)")
 	cmd.Flags().StringVar(&options.goal, "goal", "", "Goal text")
 	cmd.Flags().StringVar(&options.proposalFile, "proposal-file", "", "optional planner proposal JSON")
 	cmd.Flags().StringVar(&options.mode, "mode", "", "execution mode: fast or standard")
 	cmd.Flags().StringVar(&options.goalID, "id", "", "explicit Goal ID")
 	cmd.Flags().BoolVar(&options.wait, "wait", false, "wait until the Goal completes, waits, or is cancelled")
-	cmd.Flags().StringVar(&options.format, "format", "json", "wait feedback: json or human (human feedback goes to stderr)")
+	cmd.Flags().StringVar(&options.format, "format", "json", "wait feedback: json or human (terminal stderr shows progress by default; stdout stays JSON)")
 	_ = cmd.RegisterFlagCompletionFunc("format", cobra.FixedCompletions([]cobra.Completion{"json", "human"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = cmd.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions([]cobra.Completion{"fast", "standard"}, cobra.ShellCompDirectiveNoFileComp))
 	return cmd
@@ -149,6 +154,9 @@ func runRequest(stdin io.Reader, options runOptions, newID func(string) (string,
 		}
 	}
 	body := map[string]any{"goal_id": goalID, "raw_goal": string(rawGoal), "created_by": currentActor()}
+	if len(options.acceptanceFiles) > 0 {
+		body["acceptance_files"] = options.acceptanceFiles
+	}
 	if options.mode != "" {
 		body["mode"] = options.mode
 	}

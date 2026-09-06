@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +132,36 @@ func TestHumanFormatValidationBeforeClientCreation(t *testing.T) {
 		if code := execute(args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, r); code != 2 {
 			t.Fatalf("%v exit=%d", args, code)
 		}
+	}
+}
+
+func TestInteractiveWaitDefaultsToProgressWithoutChangingJSONContract(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tty      bool
+		format   string
+		progress bool
+	}{{"terminal", true, "", true}, {"redirected", false, "", false}, {"explicit json", true, "json", false}, {"explicit human", false, "human", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &planningClient{responses: []string{`{"goal_id":"g1","state":"DRAFT","planning_state":"QUEUED"}`, `{"goal_id":"g1","state":"COMPLETED","planning_state":"COMPLETED","acceptance_preparation":{"state":"frozen","policy":"allow","criteria":2,"generated_validators":1}}`}}
+			r := testRuntime(client)
+			r.terminal = func(io.Writer) bool { return tc.tty }
+			args := []string{"run", "--id", "g1", "--goal", "implement game", "--wait"}
+			if tc.format != "" {
+				args = append(args, "--format", tc.format)
+			}
+			var out, errOut bytes.Buffer
+			if code := execute(args, strings.NewReader(""), &out, &errOut, r); code != 0 {
+				t.Fatalf("exit %d %s", code, &errOut)
+			}
+			decoder := json.NewDecoder(&out)
+			var first, final map[string]any
+			if decoder.Decode(&first) != nil || decoder.Decode(&final) != nil || final["state"] != "COMPLETED" {
+				t.Fatalf("stdout contract changed: %s", &out)
+			}
+			if strings.Contains(errOut.String(), "Acceptance: frozen") != tc.progress {
+				t.Fatalf("progress=%t: %s", tc.progress, &errOut)
+			}
+		})
 	}
 }

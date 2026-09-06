@@ -46,10 +46,12 @@ type PacketProject struct {
 }
 
 type PacketGoal struct {
-	ID           string `json:"id"`
-	Revision     int64  `json:"revision"`
-	Summary      string `json:"summary"`
-	ContractHash string `json:"contract_hash"`
+	RawGoal      string          `json:"raw_goal,omitempty"`
+	Contract     json.RawMessage `json:"contract,omitempty"`
+	ID           string          `json:"id"`
+	Revision     int64           `json:"revision"`
+	Summary      string          `json:"summary"`
+	ContractHash string          `json:"contract_hash"`
 }
 
 type PacketWorkItem struct {
@@ -93,6 +95,9 @@ type PacketDecision struct {
 }
 
 func (packet WorkPacket) Validate() error {
+	if err := validateEmbeddedGoalContract(packet.Goal.Contract, packet.Goal.ContractHash); err != nil {
+		return err
+	}
 	if packet.Harness != nil {
 		if err := packet.Harness.Validate(); err != nil {
 			return err

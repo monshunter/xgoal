@@ -156,3 +156,30 @@ PLAN-012 验证信任变更和失败恢复；PLAN-013 验证 Profile、规则与
 关键负向场景：候选脚本/依赖篡改、入口 mode/symlink/CWD 逃逸、同 fingerprint 机械重试、变化 fingerprint 耗尽总数、旧 generation、人工外部编辑、取消与未知进程、准备/探针/业务断言失败、错误 Acceptance Claim、输入变更或继承身份未知时的 session resume、慢日志读者与损坏制品、长导出同时仍能心跳/CAS/取消和迁移外键历史。fixture Adapter 用于可重复注入故障；实际 Codex/Claude 调用与真实服务从用户入口验收，不能互相替代。
 
 仍不承诺任意测试的语义完备、模型一定遵守规则、同 UID 敌对隔离、共享外部数据自动回滚、未知 Provider 私有上下文读取或本次未运行的完整 Benchmark 成绩。
+
+## 目标驱动验收扩展（OBJ-006）
+
+本节按产品 Spec 第 22 节扩展原本仅接收项目已有 Validators 的规划边界。复用当前 Plan/Contract、Registry、CommandRunner、Review、Gate 与 Evidence，不引入第二套准备任务调度器，不让 Planner 修改工作目录或用户配置。
+
+输入：可选 `planning.acceptanceFiles` 与 `run --acceptance-file` 合并、去重为仓库相对路径；规划观察时从本次 Git InputTree 读取有界普通文本文件，保存路径、mode、SHA-256 和内容。材料进入不可变 Planner Packet，发布时由 Kernel 注入 Contract，模型不能替换。已有 Validator/Scenario 能力继续来自配置。CLI 参数属于请求幂等身份；配置字段用 omitempty，不改变缺省旧配置的 canonical hash。
+
+产物：Contract 增加可选 `generated_validators`，每项包含 ID、说明、运行时（node/python3/sh）、脚本文本和 1–120 秒时限，最多 16 项、单脚本 64 KiB。Planner 同时给出匹配这些断言的实现接口和工作图；每个新增断言须关联具体验收标准和 Work。Kernel 将 ID 按 Goal 命名空间规范化，拒绝覆盖配置 ID，并将所有生成项作为 required change/final 检查。脚本以内联解释器 argv 冻结到 Revision，后续只由这个 Revision 重建 Definition；不从候选文件读取可变脚本，不写 xgoal.yaml，不创建用户提交。用户提供的材料按原 InputTree 绑定到 Definition/ProtectedPaths，读取范围遵守项目 deny。
+
+运行：在 executeWork/finalize/失败现场检查加载项目 Registry 后，叠加当前冻结 Contract 的生成定义与输入文件绑定。Definition hash 包含脚本和输入绑定；注册沿用 ConfigHash/BaseCommit/命名空间 ID 与不可变定义哈希，CommandReceipt/Evidence 再绑定 GoalRevisionHash/最终 Tree。不同 Goal 使用不同 ID；已有字段为空时旧路径不变。生成脚本继承受控 PATH 与最小环境，禁止以成功输出替代断言，执行前后核对 Tree/HEAD/index。一般项目准备（源码、项目测试、启动脚本）由已授权 Work 生成；外部服务/网络继续沿现有配置和 Gate，不自动猜测安装或更改权限。
+
+信任：`planning.generatedValidators` 缺省 allow，表示目标范围内本地生成验收的授权，并不等于修改旧 Registry 的授权。human-gate 在 Proposal 已持久观察、尚未发布时打开 `generated_validation_approval` Gate，描述确切提案哈希与材料。批准续作在一个事务中消费决定，复制同一 Proposal 与批准的验收哈希到新 generation；不再次调用 Planner 改写批准对象。发布入口再次校验策略与批准哈希，拒绝过期、旧版本、输入变化或直接提交 Proposal 绕过。deny 允许复用已有验证器；只有实际生成执行方案时拒绝。
+
+审查与反馈：Work Packet 提供完整标准、生成脚本及用户材料；现有独立 Reviewer 的 required checks 明确要求按原目标验证覆盖与断言有效性。Review 仍是模型 Claim，Kernel 的结构校验也不保证语义完备。最终必须实际运行冻结断言，并显示验收来源。生成错误保留精确输出和脚本，不能由实现者改写标准。新 init 将现有 autoRetryLimit 设为 3，复用现场/noProgress 上限修复实现；既有显式零值不自动扩大。Planner ambiguities 与 Provider 故障分别展示，等待需要明确的缺口和恢复方式。交互终端 `run --wait` 未指定 format 时复用 humanFeedback 向 stderr 输出有界阶段进度；stdout 保持创建和终态 JSON，显式 `--format json` 或非终端 stderr 不增加进度输出。
+
+恢复与兼容：所有新增内容使用已有 JSON 持久化，无新调度状态或 Schema migration。发布在同一事务绑定 Contract/Plan；崩溃后只读取可靠观察，脚本不重复生成。旧未冻结 Goal 可显式 goal plan 采用新配置，已冻结 Goal 不重绑定。缺省旧 Request/Contract/Packet 无新字段时保留其哈希；旧二进制不应读取包含新可执行合同的 Goal。撤销实现仅在无活动新 Goal 时切回旧二进制，保留所有记录与用户文件，不回写旧 Evidence。
+
+冻结脚本自身错误属于验收基线缺陷，不能要求实现者迁就错误标准。当前最小恢复路径是查看 `context`/`logs` 与冻结 Contract，保留失败现场，`cancel` 旧 Goal；审查修改后的 Proposal（仍须符合原目标），在正常提交保留的源码、工作目录干净后通过 `run --proposal-file` 创建新 Goal。旧结果与 Gate 审批不转移到新 Goal，human-gate 策略重新确认新脚本。未冻结阶段可 `goal plan --proposal-file` 修正提案。现有自动重试只修实现，不承诺自动判断和修改错误的验收标准；错误提示须区分这一恢复方向，不能反复建议修改业务代码。语法/运行依赖与语义覆盖分别验证，脚本失败前未执行 Reviewer 不得声称 Review 已检查它。
+
+输入保护不改写静态项目 Definition：Registry 额外保存当前 Revision 的材料绑定，执行前后与 ProtectedPaths 一起核对；生成 Definition 可包含这些绑定。这样两个 Goal 提供不同材料时，不会在同一 ConfigHash/BaseCommit/项目 Validator ID 注册键下产生不同静态定义。
+
+生成验收的 Review 是完成所必需：executeWork 与最终完成事实在有 generated_validators 时均要求独立 Review，不受 fast 或 requiredInStandard=false 绕过；无生成脚本保留原分支。缺 Reviewer 在规划发布前给出能力缺口。测试覆盖 fast/关闭 standard Review 时空洞断言仍被独立 Reviewer 阻断。
+
+审批哈希绑定 Kernel 注入的全部材料、规范化后的 Contract 与工作图哈希，批准后不允许重新生成这些内容。即使没有生成脚本，用户材料也通过 Registry 的额外绑定独立保护；其身份由 Revision/Packet 哈希覆盖，不修改静态 Definition。omitempty 只保证旧数据缺省身份，不承诺旧二进制执行新合同；新 Contract 字段由旧严格解码拒绝，操作上禁止降级运行含新 Goal 的状态库。
+
+
+真实空仓验收发现：已安装但未登录的 Claude 会被不同 Provider 偏好选作 Reviewer，直到业务检查完成后才失败。Reviewer 的运行时选择在现有 Config.SelectProfile 顺序上增加被动可用性预检：仅默认选择排除 Probe 明确失败或 CredentialStatus=missing 的候选，复用其余已配置可信 Profile；明确 roleProfiles 绑定不回退，unknown 不当作 missing。选定后只调用一个独立 Review，会话独立与所有既有门禁不变，不根据 Review 拒绝再挑选另一模型。缺失候选给出具体预检原因和配置/登录恢复方式。此修正不修改配置或冻结验收，已有失败现场可通过原 work retry 继续。

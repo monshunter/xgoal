@@ -12,7 +12,6 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/goalcompile"
-	"github.com/monshunter/xgoal/internal/review"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 )
 
@@ -47,18 +46,6 @@ func decodeFrozenContract(value []byte) (frozenContract, error) {
 func (engine *Engine) implementationProfile(role domain.Role) (config.Agent, error) {
 	profile, _, err := engine.config.SelectProfile(string(role), "")
 	return profile, err
-}
-
-func (engine *Engine) reviewerProfile(implementer config.Agent) (config.Agent, review.Adapter, error) {
-	selected, _, err := engine.config.SelectProfile("reviewer", implementer.ID)
-	if err != nil {
-		return config.Agent{}, nil, err
-	}
-	reviewer := engine.reviewers[selected.ID]
-	if reviewer == nil {
-		return config.Agent{}, nil, fmt.Errorf("selected Reviewer Profile %q is unavailable", selected.ID)
-	}
-	return selected, reviewer, nil
 }
 
 func hasRole(profile config.Agent, role domain.Role) bool {

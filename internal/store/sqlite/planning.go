@@ -42,6 +42,11 @@ func normalizePlanningRequest(request planner.Request, generation int64) (planne
 	if request.BlockedReason == "" && (len(request.ConfigHash) != 64 || !validIdempotencyLabel(request.ProfileID)) {
 		return planner.Request{}, errors.New("planning requires a configuration and trusted profile")
 	}
+	switch request.GeneratedValidationPolicy {
+	case "", "allow", "human-gate", "deny":
+	default:
+		return planner.Request{}, errors.New("invalid generated validation policy")
+	}
 	request.TrustedValidatorIDs = append([]string(nil), request.TrustedValidatorIDs...)
 	sort.Strings(request.TrustedValidatorIDs)
 	if request.Proposal != nil && request.BlockedReason == "" {
@@ -52,6 +57,9 @@ func normalizePlanningRequest(request planner.Request, generation int64) (planne
 	return request, nil
 }
 func compilePlanning(request planner.Request, proposal planner.Proposal) (goalcompile.Compiled, error) {
+	if len(proposal.Contract.GeneratedValidators) > 0 && request.GeneratedValidationPolicy == "deny" {
+		return goalcompile.Compiled{}, errors.New("planning.generatedValidators denies generated checks; configure business validators or change that policy")
+	}
 	if proposal.ProtocolVersion != planner.ProposalVersion || len(proposal.Ambiguities) != 0 {
 		return goalcompile.Compiled{}, fmt.Errorf("%w: unresolved semantic gaps or invalid protocol", ErrInvalidPlanningProposal)
 	}
@@ -427,6 +435,9 @@ func (s *Store) PublishPlanning(ctx context.Context, publish PlanningPublish) (P
 		}
 		compiled, err := compilePlanning(p.Request, *p.Observation.Proposal)
 		if err != nil {
+			return err
+		}
+		if err := checkGeneratedApproval(p.Request, *p.Observation.Proposal); err != nil {
 			return err
 		}
 		revisionID, planID := p.Goal.ID+"_revision_1", p.Goal.ID+"_plan_1"

@@ -191,6 +191,20 @@ func (s *Store) CompleteGoal(
 			result.Complete = false
 			result.Reasons = append(result.Reasons, "active leases remain")
 		}
+		var generated int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(json_array_length(contract_json,'$.contract.generated_validators'),0) FROM goal_revisions WHERE id=?`, goal.ActiveRevisionID).Scan(&generated); err != nil {
+			return err
+		}
+		if generated > 0 {
+			var missing int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM work_items w JOIN plan_revisions p ON p.id=w.plan_revision_id WHERE p.goal_revision_id=? AND p.status='ACTIVE' AND w.required=1 AND NOT EXISTS(SELECT 1 FROM attempts a JOIN review_runs r ON r.attempt_id=a.id WHERE a.work_item_id=w.id AND a.state='SUCCEEDED' AND r.candidate_tree=a.result_tree AND r.review_status='approved' AND r.reviewer_session_id<>r.implementation_session_id)`, goal.ActiveRevisionID).Scan(&missing); err != nil {
+				return err
+			}
+			if missing > 0 {
+				result.Complete = false
+				result.Reasons = append(result.Reasons, "generated acceptance requires an independent approved review for every required Work")
+			}
+		}
 		if !result.Complete {
 			return nil
 		}

@@ -28,6 +28,7 @@ type apiClient interface {
 }
 
 type runtime struct {
+	terminal  func(io.Writer) bool
 	newClient func() (apiClient, error)
 	newID     func(string) (string, error)
 	now       func() time.Time
@@ -62,8 +63,9 @@ func silentStatus(code int) error {
 // Run executes xgoal with explicit output streams and returns the stable process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	dependencies := runtime{
-		newID: generatedID,
-		now:   time.Now,
+		terminal: terminalWriter,
+		newID:    generatedID,
+		now:      time.Now,
 	}
 	return execute(args, os.Stdin, stdout, stderr, dependencies)
 }

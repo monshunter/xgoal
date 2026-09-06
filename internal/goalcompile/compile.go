@@ -14,6 +14,7 @@ import (
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/domain"
+	"github.com/monshunter/xgoal/internal/validationplan"
 )
 
 const (
@@ -22,15 +23,17 @@ const (
 )
 
 type Contract struct {
-	Summary            string                `json:"summary"`
-	Rationale          string                `json:"rationale"`
-	InScope            []string              `json:"in_scope"`
-	OutOfScope         []string              `json:"out_of_scope"`
-	Constraints        []string              `json:"constraints"`
-	AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria"`
-	QualityAttributes  []string              `json:"quality_attributes"`
-	HumanGates         []string              `json:"human_gates"`
-	CompletionPolicy   CompletionPolicy      `json:"completion_policy"`
+	GeneratedValidators []validationplan.Generated `json:"generated_validators,omitempty"`
+	AcceptanceInputs    []validationplan.Input     `json:"acceptance_inputs,omitempty"`
+	Summary             string                     `json:"summary"`
+	Rationale           string                     `json:"rationale"`
+	InScope             []string                   `json:"in_scope"`
+	OutOfScope          []string                   `json:"out_of_scope"`
+	Constraints         []string                   `json:"constraints"`
+	AcceptanceCriteria  []AcceptanceCriterion      `json:"acceptance_criteria"`
+	QualityAttributes   []string                   `json:"quality_attributes"`
+	HumanGates          []string                   `json:"human_gates"`
+	CompletionPolicy    CompletionPolicy           `json:"completion_policy"`
 }
 
 type AcceptanceCriterion struct {
@@ -88,6 +91,11 @@ func Compile(goalID, revisionID, planID string, contract Contract, plan Plan, tr
 	if len(capabilities) == 1 {
 		coverage = capabilities[0]
 	}
+	var err error
+	contract, plan, trustedValidators, coverage, err = prepareGenerated(goalID, contract, plan, trustedValidators, coverage)
+	if err != nil {
+		return Compiled{}, err
+	}
 	if err := ValidateCoverage(contract, trustedValidators, coverage); err != nil {
 		return Compiled{}, err
 	}
@@ -124,6 +132,12 @@ func Compile(goalID, revisionID, planID string, contract Contract, plan Plan, tr
 }
 
 func (contract Contract) Validate() error {
+	if err := validationplan.ValidateGenerated(contract.GeneratedValidators); err != nil {
+		return err
+	}
+	if err := validationplan.ValidateInputs(contract.AcceptanceInputs); err != nil {
+		return err
+	}
 	if blank(contract.Summary) || blank(contract.Rationale) || len(contract.InScope) == 0 || len(contract.OutOfScope) == 0 || len(contract.Constraints) == 0 || len(contract.AcceptanceCriteria) == 0 || len(contract.QualityAttributes) == 0 || len(contract.HumanGates) == 0 {
 		return errors.New("Goal Contract has required semantic gaps")
 	}

@@ -262,6 +262,16 @@ func (s *Store) retryPlanning(ctx context.Context, goalID string, expectedGoalVe
 			observation.FailureReason = redact.String(observation.FailureReason)
 			request = p.Request
 			request.Proposal = nil
+			if gate.ReasonCode == "generated_validation_approval" {
+				if p.Observation.Proposal == nil {
+					return ErrPlanningBlocked
+				}
+				request.Proposal = p.Observation.Proposal
+				request.ApprovedValidationHash, err = preparedValidationHash(request, *request.Proposal)
+				if err != nil {
+					return err
+				}
+			}
 			request.Prior = &planner.PriorContext{EffectID: p.Effect.ID, RequestHash: p.Effect.RequestHash, Generation: p.Generation, Observation: observation, Decision: protocol.PacketDecision{GateID: gate.ID, GateVersion: gate.Version, Answer: redact.String(gate.DecisionReason)}}
 			if _, err := tx.ExecContext(ctx, `UPDATE gates SET used=1,required=0,version=version+1,updated_at=? WHERE id=? AND version=?`, s.source.Now().UTC().Format(time.RFC3339Nano), gate.ID, gate.Version); err != nil {
 				return err

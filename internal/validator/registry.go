@@ -57,11 +57,12 @@ type definitionIdentity struct {
 }
 
 type Registry struct {
-	baseCommit  string
-	baseTree    string
-	configHash  string
-	definitions map[string]Definition
-	controls    map[string]Definition
+	acceptanceInputs []TrustedFile
+	baseCommit       string
+	baseTree         string
+	configHash       string
+	definitions      map[string]Definition
+	controls         map[string]Definition
 }
 
 func LoadRegistry(ctx context.Context, repository *gitrepo.Repository, baseCommit, configPath string) (*Registry, error) {

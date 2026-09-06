@@ -25,19 +25,32 @@ type Entry struct {
 }
 
 type Result struct {
-	Status               string                       `json:"status"`
-	Entries              []Entry                      `json:"entries"`
-	ConfiguredValidators []config.ValidatorCapability `json:"configured_validators"`
-	Coverage             string                       `json:"coverage"`
-	Preparation          []string                     `json:"preparation"`
-	Diagnostics          []string                     `json:"diagnostics"`
+	GeneratedValidationPolicy string                       `json:"generated_validation_policy"`
+	Status                    string                       `json:"status"`
+	Entries                   []Entry                      `json:"entries"`
+	ConfiguredValidators      []config.ValidatorCapability `json:"configured_validators"`
+	Coverage                  string                       `json:"coverage"`
+	Preparation               []string                     `json:"preparation"`
+	Diagnostics               []string                     `json:"diagnostics"`
 }
 
 func Inspect(projectRoot string, configuration *config.Config) Result {
-	r := Result{Status: "unknown", Entries: []Entry{}, ConfiguredValidators: []config.ValidatorCapability{}, Coverage: "not_verified", Diagnostics: []string{}, Preparation: []string{"Review the existing tests and identify the business assertions needed for the Goal.", "Declare reviewed test commands and their trusted files in xgoal.yaml; configure required scenarios and service readiness when needed.", "Prepare dependencies using the project's documented setup, run the selected tests, then review and commit the configuration before creating a Goal."}}
+	r := Result{Status: "unknown", Entries: []Entry{}, ConfiguredValidators: []config.ValidatorCapability{}, Coverage: "not_verified", Diagnostics: []string{}, GeneratedValidationPolicy: "allow", Preparation: []string{
+		"Provide the goal, hard constraints and necessary environment authorization. Acceptance criteria and tests are optional inputs.",
+		"The Planner derives missing acceptance criteria and executable checks, freezes them with the Goal, then implementation, independent review and final validation use that baseline.",
+		"Optionally pass --acceptance-file or configure planning.acceptanceFiles for existing scripts or Markdown requirements; project validators remain authoritative.",
+	}}
 	if configuration != nil {
 		r.ConfiguredValidators = configuration.ValidationCapabilities().Validators
+		r.GeneratedValidationPolicy = configuration.GeneratedValidationPolicy()
 	}
+	switch r.GeneratedValidationPolicy {
+	case "human-gate":
+		r.Preparation = append(r.Preparation, "This project requires one explicit approval of the exact generated acceptance plan before implementation; inspect its context and use approve --resume.")
+	case "deny":
+		r.Preparation[1] = "Generated checks are disabled by project policy. Provide trusted business validators, or explicitly change planning.generatedValidators before starting a new Goal."
+	}
+
 	root, err := os.OpenRoot(projectRoot)
 	if err != nil {
 		r.Diagnostics = append(r.Diagnostics, "project root is unavailable")
@@ -114,7 +127,7 @@ func Inspect(projectRoot string, configuration *config.Config) Result {
 	if len(r.Entries) > 0 {
 		r.Status = "entrypoints_detected"
 	} else {
-		r.Preparation = append([]string{"No recognized test entrypoint was found. git-diff-check only checks whitespace; add business assertions before relying on automated acceptance."}, r.Preparation...)
+		r.Preparation = append([]string{"No recognized test entrypoint was found. git-diff-check only checks whitespace; it does not establish business coverage. Missing checks are prepared during planning when project policy permits."}, r.Preparation...)
 	}
 	return r
 }

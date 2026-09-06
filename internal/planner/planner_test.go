@@ -71,3 +71,19 @@ func TestPrepareRejectsUnsafeGoalIdentityAndPolicy(t *testing.T) {
 		t.Fatal("unsafe Goal id was accepted")
 	}
 }
+
+func TestPlannerDoesNotRequirePlaceholderValidators(t *testing.T) {
+	for _, policy := range []string{"allow", "human-gate", "deny"} {
+		t.Run(policy, func(t *testing.T) {
+			packet := Packet{ProtocolVersion: PacketVersion, GoalID: "goal_new", RawGoal: "implement game", Mode: "standard", ConfigHash: strings.Repeat("a", 64), ProjectRoot: t.TempDir(), ProjectNetwork: "deny", ProjectSecrets: "deny", GeneratedValidationPolicy: policy}
+			_, _, err := Prepare(filepath.Join(t.TempDir(), "runtime"), packet)
+			if policy == "deny" {
+				if err == nil || !strings.Contains(err.Error(), "denies generation") {
+					t.Fatalf("unclear policy failure: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

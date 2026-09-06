@@ -2067,3 +2067,7 @@ v0.1 成功的标志不是“同时跑了多少 Agent”，而是：**系统在�
 
 Gate 便利入口 `POST /v1/gates/{id}/resume` 接收 `expected_gate_version` 与 `expected_owner_version`，无隐式批准或 CAS 重取。初始规划与最终验收的 owner version 是 Goal version，Work 是 Work Item version。决定与续作顺序执行，第二步失败不回退决定，单独重试续作不再次记录决定。新 Planner/Acceptance Packet 携带绑定旧 Effect/Invocation 的公开失败反馈和准确答案；Planner 的 generation 在实际启动时再次核对旧 Tree/CheckoutIdentity 与全部必要 Gate。人工只批准一次的规划续作被中断后不得自动再消费同一答案。最终验收保留历史 Observation 标记，准确人工授权后可将其作为新会话输入，不能作为当前完成证据或自动重放依据。
 8. **兼容和迁移**：新增可选字段用 `omitempty` 保持缺省旧输入的 canonical 身份；新增 SQLite migration 保留历史失败与外键关系，不修改旧 migration。旧安全配置保持行为，过去被忽略的冲突权限或无法确定入口的缺失依赖声明需显式迁移诊断。新增受信文件绑定与旧注册键冲突时返回 TRUST_BINDING_MIGRATION_REQUIRED，保留旧定义/注册并要求显式配置声明、审阅提交新基线和新 Goal。状态库升级前沿用一致备份，回退旧二进制只能使用升级前备份，不能降级写新库。历史 tokens/cost/budget 功能不恢复。
+
+### 目标驱动验收（OBJ-006）
+
+产品 Spec 第 22 节与 DESIGN-007 的目标驱动验收扩展定义新增行为：可选 `planning.acceptanceFiles`、`planning.generatedValidators` 与 run 请求 `acceptance_files`；规划输入冻结用户材料，Contract 冻结 Agent 生成的本地验收脚本。Kernel 校验范围、大小、运行时、ID、标准映射及精确 Gate 授权后发布；Registry 按当前 Goal 命名空间加入不可变 Definition，沿用 change/final CommandReceipt 与当前 Revision/Tree Evidence。生成仅补充项目已有验收，不授予配置修改或额外环境权限。旧字段缺省保持 canonical 身份；无验收材料不再要求用户预先编写业务测试。结构校验不证明语义完备，独立 Review 和实际断言共同承担验收。

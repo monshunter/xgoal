@@ -17,6 +17,7 @@ import (
 	"github.com/monshunter/xgoal/internal/goalcompile"
 	"github.com/monshunter/xgoal/internal/planner"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/validationplan"
 )
 
 type planningAdapter struct {
@@ -42,7 +43,11 @@ func TestPlanningSavedObservationPublishesAfterResumeWithoutProviderReplay(t *te
 	runtime.plan = func(context.Context, planner.Invocation) (planner.Execution, error) {
 		close(started)
 		<-release
-		return planner.Execution{Proposal: planningProposal(), SessionID: "independent-planner"}, nil
+		proposal := planningProposal()
+		proposal.Contract.GeneratedValidators = []validationplan.Generated{{ID: "behavior", Description: "output bytes", Runtime: "sh", Script: "test -s output.txt", TimeoutSeconds: 5}}
+		proposal.Contract.AcceptanceCriteria[0].Validators = []string{"behavior"}
+		proposal.Plan.WorkItems[0].Validators = []string{"behavior"}
+		return planner.Execution{Proposal: proposal, SessionID: "independent-planner"}, nil
 	}
 	done := make(chan error, 1)
 	go func() { done <- engine.runPlanning(context.Background(), request.GoalID) }()

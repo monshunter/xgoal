@@ -21,6 +21,7 @@ import (
 	"github.com/monshunter/xgoal/internal/orchestrator"
 	finalreport "github.com/monshunter/xgoal/internal/report"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/validationplan"
 	"github.com/monshunter/xgoal/internal/workpacket"
 )
 
@@ -56,6 +57,10 @@ func TestEngineRejectsValidatorAndReviewerSourceMutations(t *testing.T) {
 	for _, phase := range []string{"validator", "reviewer", "trust"} {
 		t.Run(phase, func(t *testing.T) { runCurrentDirectoryFixture(t, phase) })
 	}
+}
+
+func TestGeneratedVacuousCheckIsBlockedByReviewEvenInFast(t *testing.T) {
+	runCurrentDirectoryFixture(t, "generated-reject")
 }
 
 func runCurrentDirectoryFixture(t *testing.T, behavior string) {
@@ -139,6 +144,15 @@ review:
 policy: {gitPush: deny, publishArtifact: deny, production: deny, destructiveCommands: human-gate, expandScope: human-gate}
 report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproductionCommands: true}
 `, codex, claude)
+	if behavior == "generated-reject" {
+		configurationText = strings.Replace(configurationText, "requiredInStandard: true", "requiredInStandard: false", 1)
+		if err := os.WriteFile(filepath.Join(root, "codex-execution-count"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "reject-generated"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if behavior == "harness-missing" {
 		configurationText = strings.Replace(configurationText, "trustedRepository: true}", "trustedRepository: true, harness: {type: autogo, required: true}}", 1)
 	}
@@ -206,6 +220,13 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if behavior == "trust" {
 		plan.WorkItems[0].WriteScope = append(plan.WorkItems[0].WriteScope, "/scripts/**")
 	}
+	mode := "standard"
+	if behavior == "generated-reject" {
+		mode = "fast"
+		contract.GeneratedValidators = []validationplan.Generated{{ID: "vacuous", Description: "claims required behavior", Runtime: "sh", Script: "true", TimeoutSeconds: 5}}
+		contract.AcceptanceCriteria[0].Validators = []string{"vacuous"}
+		plan.WorkItems[0].Validators = []string{"vacuous"}
+	}
 	compiled, err := goalcompile.Compile(goalID, goalID+"_revision_1", goalID+"_plan_1", contract, plan, map[string]bool{"one-check": true, "two-check": true})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +235,7 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		t.Fatal(err)
 	}
 	configHash, _ := configuration.Hash()
-	revision, err := store.FreezeGoalRevision(ctx, sqlite.GoalRevisionDraft{ID: goalID + "_revision_1", GoalID: goalID, Revision: 1, RawGoal: "create two files", Contract: map[string]any{"protocol_version": goalcompile.ContractVersion, "contract": compiled.Contract, "config_hash": configHash, "created_by": "fixture", "mode": "standard"}}, 1, sqlite.EventInput{Type: "GoalRevisionFrozen", ActorType: "planner", Payload: map[string]any{}})
+	revision, err := store.FreezeGoalRevision(ctx, sqlite.GoalRevisionDraft{ID: goalID + "_revision_1", GoalID: goalID, Revision: 1, RawGoal: "create two files", Contract: map[string]any{"protocol_version": goalcompile.ContractVersion, "contract": compiled.Contract, "config_hash": configHash, "created_by": "fixture", "mode": mode}}, 1, sqlite.EventInput{Type: "GoalRevisionFrozen", ActorType: "planner", Payload: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +268,12 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	failed, err := store.GoalStatus(ctx, goalID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if behavior == "generated-reject" {
+		if failed.Goal.State != domain.GoalWaiting || len(failed.Findings) == 0 || failed.Goal.FinalEvidenceSetID != "" {
+			t.Fatalf("vacuous check bypassed review: %+v", failed)
+		}
+		return
 	}
 	if behavior == "harness-missing" {
 		if failed.Goal.State != domain.GoalWaiting || len(failed.Attempts) != 0 || len(failed.Gates) != 1 || failed.Gates[0].ReasonCode != "project_harness_required" {
@@ -621,6 +648,11 @@ if [ "${1:-}" = "--version" ]; then echo '1.0 (Claude Code)'; exit 0; fi
 if [ "${1:-}" = "--help" ]; then echo '--print --output-format --json-schema --permission-mode --tools --allowedTools --resume'; exit 0; fi
 if [ "${1:-}" = "auth" ]; then echo '{"loggedIn": true}'; exit 0; fi
 if [ -f "$(dirname "$0")/review-mutation" ]; then printf 'reviewer-mutation' > one.txt; exit 7; fi
+if [ -f "$(dirname "$0")/reject-generated" ]; then
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"claude-review-fixture"}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-review-fixture","structured_output":{"protocol_version":"xgoal.review-result/v1alpha1","review_status":"changes_requested","findings":[{"id":"vacuous-check","severity":"high","category":"test_gap","path":"one.txt","line":1,"claim":"Generated true check does not verify the requested behavior","basis":"The frozen script contains no business assertion","recommended_fix":"Prepare a corrected acceptance baseline"}],"suggested_validators":[]}}'
+exit 0
+fi
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"claude-review-fixture"}'
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-review-fixture","structured_output":{"protocol_version":"xgoal.review-result/v1alpha1","review_status":"approved","findings":[],"suggested_validators":[]}}'
 `

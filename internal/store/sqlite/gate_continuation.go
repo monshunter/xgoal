@@ -104,7 +104,7 @@ func (s *Store) continuationGate(ctx context.Context, tx *sql.Tx, c GateContinua
 
 func planningContinuationReason(reason string) bool {
 	switch reason {
-	case "planner_failed", "planner_timeout", "planner_interrupted", "planner_invalid_proposal":
+	case "planner_failed", "planner_timeout", "planner_interrupted", "planner_invalid_proposal", "planner_clarification_required", "generated_validation_approval":
 		return true
 	default:
 		return false

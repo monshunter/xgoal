@@ -9,6 +9,20 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 )
 
+func TestPlanningAcceptanceConfiguration(t *testing.T) {
+	for _, policy := range []string{"allow", "human-gate", "deny"} {
+		_, err := config.Load(strings.NewReader(validConfig + "\nplanning:\n  generatedValidators: " + policy + "\n  acceptanceFiles: [docs/acceptance.md, tests/accept.sh]\n"))
+		if err != nil {
+			t.Fatalf("valid planning configuration: %v", err)
+		}
+	}
+	for _, suffix := range []string{"generatedValidators: trust-everything", "acceptanceFiles: [../outside.md]", "acceptanceFiles: [.git/config]", "acceptanceFiles: [.xgoal/state.db]"} {
+		if _, err := config.Load(strings.NewReader(validConfig + "\nplanning: {" + suffix + "}\n")); err == nil {
+			t.Fatalf("accepted %s", suffix)
+		}
+	}
+}
+
 const validConfig = `apiVersion: xgoal.dev/v1alpha1
 kind: Project
 metadata:

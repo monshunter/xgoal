@@ -11,6 +11,7 @@
       "additionalProperties": false,
       "required": ["summary", "rationale", "in_scope", "out_of_scope", "constraints", "acceptance_criteria", "quality_attributes", "human_gates", "completion_policy"],
       "properties": {
+        "generated_validators": {"type":"array","maxItems":16,"items":{"type":"object","additionalProperties":false,"required":["id","description","runtime","script","timeout_seconds"],"properties":{"id":{"type":"string"},"description":{"type":"string"},"runtime":{"enum":["sh","node","python3"]},"script":{"type":"string","maxLength":65536},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120}}}},
         "summary": {"type": "string"},
         "rationale": {"type": "string"},
         "in_scope": {"type": "array", "items": {"type": "string"}},

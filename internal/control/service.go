@@ -311,7 +311,21 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 		return http.StatusOK, item, mapStoreError(err)
 	case "gate.get":
 		item, err := service.store.Gate(ctx, operation.ResourceID)
-		return http.StatusOK, item, mapStoreError(err)
+		if err != nil {
+			return 0, nil, mapStoreError(err)
+		}
+		if item.ReasonCode == "generated_validation_approval" {
+			proposal, hash, err := service.store.PreparedAcceptance(ctx, item)
+			if err != nil {
+				return 0, nil, mapStoreError(err)
+			}
+			return http.StatusOK, struct {
+				domain.Gate
+				PreparedProposal any    `json:"prepared_proposal"`
+				PreparedPlanHash string `json:"prepared_plan_hash"`
+			}{item, proposal, hash}, nil
+		}
+		return http.StatusOK, item, nil
 	case "goal.invocations":
 		return service.queryInvocations(ctx, operation)
 	case "invocation.context", "invocation.logs":
@@ -412,11 +426,12 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 }
 
 type createGoalRequest struct {
-	GoalID    string        `json:"goal_id"`
-	RawGoal   string        `json:"raw_goal"`
-	Mode      string        `json:"mode"`
-	CreatedBy string        `json:"created_by,omitempty"`
-	Proposal  *goalProposal `json:"proposal,omitempty"`
+	AcceptanceFiles []string      `json:"acceptance_files,omitempty"`
+	GoalID          string        `json:"goal_id"`
+	RawGoal         string        `json:"raw_goal"`
+	Mode            string        `json:"mode"`
+	CreatedBy       string        `json:"created_by,omitempty"`
+	Proposal        *goalProposal `json:"proposal,omitempty"`
 }
 
 type goalProposal struct {

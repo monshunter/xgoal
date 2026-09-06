@@ -12,11 +12,17 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/mattn/go-isatty"
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/redact"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
+
+func terminalWriter(writer io.Writer) bool {
+	file, ok := writer.(interface{ Fd() uintptr })
+	return ok && isatty.IsTerminal(file.Fd())
+}
 
 func checkFormat(format string) error {
 	if format != "json" && format != "human" {
@@ -26,6 +32,13 @@ func checkFormat(format string) error {
 }
 
 type humanGoal struct {
+	Acceptance *struct {
+		State      string   `json:"state"`
+		Policy     string   `json:"policy"`
+		InputFiles []string `json:"input_files"`
+		Criteria   int      `json:"criteria"`
+		Generated  int      `json:"generated_validators"`
+	} `json:"acceptance_preparation"`
 	GoalID           string              `json:"goal_id"`
 	State            string              `json:"state"`
 	Version          int64               `json:"version"`
@@ -60,6 +73,9 @@ func renderHumanGoal(response []byte, command string) (string, error) {
 	fmt.Fprintf(&out, "Goal %s · %s · version %d\n", terminalText(goal.GoalID), terminalText(goal.State), goal.Version)
 	if goal.PlanningState != "" {
 		fmt.Fprintf(&out, "Planning: %s\n", terminalText(goal.PlanningState))
+	}
+	if a := goal.Acceptance; a != nil {
+		fmt.Fprintf(&out, "Acceptance: %s · policy %s · %d input files · %d criteria · %d generated checks\n", terminalText(a.State), terminalText(a.Policy), len(a.InputFiles), a.Criteria, a.Generated)
 	}
 	for _, blocker := range []string{goal.PlanningBlocker, goal.ExecutionBlocker} {
 		if blocker != "" {

@@ -22,7 +22,11 @@ func (engine *Engine) finalScenarios(frozen frozenContract, registry *validator.
 	for _, definition := range registry.Definitions() {
 		trusted[definition.ID] = true
 	}
-	if err := goalcompile.ValidateCoverage(frozen.Contract, trusted, engine.config.ValidationCapabilities()); err != nil {
+	capabilities := engine.config.ValidationCapabilities()
+	for _, g := range frozen.Contract.GeneratedValidators {
+		capabilities.Validators = append(capabilities.Validators, config.ValidatorCapability{ID: g.ID, Description: g.Description, Type: "command", Coverage: "generated", Phases: []string{"change", "final"}})
+	}
+	if err := goalcompile.ValidateCoverage(frozen.Contract, trusted, capabilities); err != nil {
 		return nil, nil, err
 	}
 	var ids []string

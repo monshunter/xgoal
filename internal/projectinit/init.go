@@ -156,6 +156,7 @@ orchestration:
   leaseTTL: 90s
   heartbeatInterval: 20s
   noProgressLimit: 2
+  autoRetryLimit: 3
   integrationBranchPrefix: xgoal/
 agents:
 %sworkspace:
