@@ -1,4 +1,4 @@
-.PHONY: verify-m0 verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 fmt-check test shuffle race vet cli-smoke sqlite-cross-build m2-failure-matrix m2-cross-build m3-contract m3-real-smoke m4-contract m4-real-smoke m5-safety m5-cross-build m6-release m6-cross-build benchmark-validate
+.PHONY: install verify-m0 verify-m1 verify-m2 verify-m3 verify-m4 verify-m5 verify-m6 fmt-check test shuffle race vet cli-smoke sqlite-cross-build m2-failure-matrix m2-cross-build m3-contract m3-real-smoke m4-contract m4-real-smoke m5-safety m5-cross-build m6-release m6-cross-build benchmark-validate
 
 # Keep local verification usable alongside the desktop and project services.
 # Export both limits so test-launched Go builds inherit them. Tests using
@@ -22,6 +22,9 @@ SHUFFLE_STORE_TESTS := TestConcurrentClaimsAcrossWorkItemsCreateOnlyOneProjectLe
 	TestGatePersistsBoundedDecisionAndReopens \
 	TestRequiredGateDecisionAndExpiryFenceSchedulingAndCompletion \
 	TestInvocationIndexIsImmutableCASAndDoesNotChangeGoal
+
+install:
+	go install ./cmd/xgoal
 
 verify-m0: fmt-check test race vet cli-smoke
 
