@@ -1497,6 +1497,7 @@ GET    /v1/daemon
 POST   /v1/daemon/stop
 POST   /v1/projects/init
 POST   /v1/goals
+GET    /v1/goals?state=COMPLETED&limit=100&after=<cursor>
 GET    /v1/goals/{id}
 POST   /v1/goals/{id}/pause
 POST   /v1/goals/{id}/resume
@@ -1527,6 +1528,15 @@ POST   /v1/projects/{id}/clean
 ```
 
 `xgoal run --wait` 可以在 Goal Completed 时退出 0，在 Waiting 时退出 3；默认 `run` 只负责创建并启动，不把“已接受任务”误写为“已完成目标”。
+
+
+### 23.4 项目 Goal 集合查询合同
+
+对应产品 FR-090A / AC-GL-001–004。`GET /v1/goals` 经既有只读 Query 路由为 `goal.list`，返回 `{ "items": [...], "next_cursor": "" }`。每项字段为 `goal_id/state/version/summary/planning_state/created_at/updated_at`；时间为 UTC RFC3339Nano。planning_state 复用单 Goal 详情的规划状态投影，包含 SUCCEEDED、缺失持久请求时的 WAITING 及暂停/恢复优先级；不存在规划状态时为空。
+
+查询参数 `state` 为空表示所有状态，否则必须是 domain GoalState；`limit` 缺省 100、范围 1–100；`after` 是上一页返回的无状态不透明游标，使用无 padding 的规范 base64url 编码最后一项的 rowid 与完整 ID 的 SHA-256，长度不超过 128 字节。按 rowid 只读查回 ID 并核对摘要后，作为字典序下界，不要求匹配筛选，不进行唯一前缀解析；记录不存在或定位变化时返回 INVALID_REQUEST 并提示从首页刷新，防止维护后 rowid 复用导致误跳。该紧凑定位不改变 ID 升序或创建合同，可处理历史长 ID/控制字符，保持 daemon 32 KiB 请求头上限。无效值返回既有 INVALID_REQUEST / HTTP 400，CLI 参数错误在连接前退出 2。按 ID 升序进行 keyset 分页，单条集合 SELECT 查询 limit+1 行（有游标时另加一次按 rowid 的读取）；下一页游标定位当前页最后一项完整 ID，有更多数据时才返回。每页独立读取，更新状态不会改变排序键，不承诺跨页事务快照。
+
+复用现有 goals、活动 goal_revisions 与当前 planning_effect_id 指向的 effects，仅查询公开摘要所需字段，不逐个构造 GoalStatus、不刷新 Invocation、不追加 Event 或幂等写记录。使用绑定参数并复用公开 JSON 脱敏；human 复用终端控制字符清理。无需 Schema 或协议版本迁移。旧 daemon 不认识集合入口时保持明确 API 错误，升级/重启该项目 daemon 后使用，禁止回退到会截断的 ids 伪装完整成功。
 
 ---
 

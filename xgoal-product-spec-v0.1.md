@@ -622,6 +622,21 @@ Agent 输出中的 `status: done` 不参与该布尔判定。
 - 已执行 Attempt、运行时长和最近实质进展时间。
 - 最终或最近代码 Tree 与验证摘要。
 
+#### FR-090A：项目 Goal 列表
+
+`xgoal goal list` 在当前项目内列出所有状态的 Goal，包含完整 `goal_id`、当前 `state`、`version`、目标摘要 `summary`、`planning_state` 和创建/更新时间；不需要预先知道 Goal ID。摘要优先取活动 Revision 的 Contract summary，未冻结时取当前规划请求的 raw_goal；缺失时为空，不猜测目标。摘要规范为空白分隔单行，最多 160 个 Unicode 字符（超长末尾省略号），不替代单 Goal 详情。
+
+默认 JSON，`--format human` 显示表格。空结果为成功且 `items: []`，human 明示无匹配目标。`--state` 可选精确 Goal 状态；不把 DRAFT 下的 planning WAITING 映射为 Goal WAITING。`--limit` 默认 100、范围 1–100，`--after` 使用上一页的无状态不透明 `next_cursor`；按完整 Goal ID 升序且排除游标本身，直到 `next_cursor` 为空即可遍历全部匹配目标，不能静默截断。human 有下一页时输出保留项目入口、筛选和页大小的可执行命令。
+
+查询使用当前项目 daemon，无隐式初始化、启动、规划、Provider 调用或状态写入。沿用现有 JSON、脱敏和退出码；`ids`、`status <goal-id>` 和单 Goal API 保持兼容。跨页不是冻结快照：状态按各页读取时为准；并发新增位于已读游标之前的目标需从首页刷新。
+
+- [x] **AC-GL-001**：空项目成功；包含所有 Goal 状态和正确字段，DRAFT 规划状态可辨认，摘要来源与脱敏正确。
+- [x] **AC-GL-002**：超过 100 个目标可分页完整遍历，无重复或遗漏；状态筛选、游标特殊字符、末页/空页和非法参数均被验证。
+- [x] **AC-GL-003**：CLI 帮助、JSON/human、补全和参数失败符合合同，已有 ids/status 行为兼容，失败不得伪装为空列表。
+- [x] **AC-GL-004**：真实 CLI/daemon 在 tmp/demo5 列出已有 Goal，与 status/数据库状态一致；查询不改变 Goal、事件、Invocation、用户源码/index/配置。
+
+验收 Evidence：[Goal 列表真实验收](docs/operations/GOAL-LIST-ACCEPTANCE.md) 与 [Change Review](docs/reviews/REVIEW-065-goal-list-change.md)；定向测试覆盖空列表、所有状态、摘要/脱敏、完整分页与错误，真实 CLI 和 demo5 对账证明用户路径及数据保留。
+
 #### FR-091：最终报告
 
 Final Report 包含：

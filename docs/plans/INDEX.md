@@ -20,4 +20,5 @@
 | PLAN-015 | PLAN-015：完善实时观测、用户操作与综合验收 | [PLAN-015.md](PLAN-015.md) |
 | PLAN-016 | PLAN-016：初始化无首次提交的 Git 仓库 | [PLAN-016.md](PLAN-016.md) |
 | PLAN-017 | PLAN-017：目标驱动的验收准备与自主交付 | [PLAN-017.md](PLAN-017.md) |
+| PLAN-018 | PLAN-018：项目 Goal 列表与状态总览 | [PLAN-018.md](PLAN-018.md) |
 <!-- AGENT-HARNESS:END INDEX -->

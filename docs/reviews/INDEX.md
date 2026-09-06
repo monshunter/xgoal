@@ -65,4 +65,7 @@
 | REVIEW-060-plan-017 | REVIEW-060：PLAN-017 目标驱动验收 Plan Review | [REVIEW-060-plan-017.md](REVIEW-060-plan-017.md) |
 | REVIEW-061-goal-acceptance-contract | REVIEW-061：目标驱动验收合同与设计 Review | [REVIEW-061-goal-acceptance-contract.md](REVIEW-061-goal-acceptance-contract.md) |
 | REVIEW-062-goal-acceptance-change | REVIEW-062：目标驱动验收实现 Change Review | [REVIEW-062-goal-acceptance-change.md](REVIEW-062-goal-acceptance-change.md) |
+| REVIEW-063-plan-018 | REVIEW-063：PLAN-018 Goal 列表 Plan Review | [REVIEW-063-plan-018.md](REVIEW-063-plan-018.md) |
+| REVIEW-064-goal-list-contract | REVIEW-064：Goal 列表合同 Review | [REVIEW-064-goal-list-contract.md](REVIEW-064-goal-list-contract.md) |
+| REVIEW-065-goal-list-change | REVIEW-065：项目 Goal 列表 Change Review | [REVIEW-065-goal-list-change.md](REVIEW-065-goal-list-change.md) |
 <!-- AGENT-HARNESS:END INDEX -->

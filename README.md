@@ -68,6 +68,7 @@ printf '%s\n' '修复并验收当前回归' | xgoal run --goal-file -
 常用控制命令：
 
 ```text
+xgoal goal list [--state STATE] [--limit 1..100] [--after CURSOR] [--format json|human]
 xgoal status <goal-id> [--watch] [--format json|human]
 xgoal logs <attempt-id>
 xgoal ids [prefix] [--kind goal|work|gate|invocation]
@@ -100,6 +101,16 @@ xgoal daemon stop [--timeout 30s]
 xgoal --help
 xgoal goal replan --help
 ```
+
+先用 `xgoal goal list` 发现当前项目的 Goal；默认输出 JSON，`--format human` 显示 ID、状态、版本、规划阶段、更新时间和目标摘要表格。`--state COMPLETED` 可筛选状态，未指定时包含所有状态。列表按 ID 升序，每页默认/最多 100 条；JSON 的 `next_cursor` 非空时，将它传给 `--after` 继续，human 会给出保留项目参数与筛选的下一页命令。空列表成功返回 `items: []`。跨页读取当前状态，不承诺冻结快照；新增目标可能需要从首页刷新。
+
+```sh
+xgoal --project /path/to/project goal list --format human
+xgoal --project /path/to/project goal list --state COMPLETED --limit 20
+xgoal --project /path/to/project goal list --state COMPLETED --limit 20 --after '<next_cursor>'
+```
+
+列表需要项目 daemon 已启动；升级 CLI 后也要重启该项目的 daemon 才能使用新增 API。查询本身不启动 daemon、不运行 Agent。目标描述最多显示 160 字符的公开摘要；`planning_state` 单独反映 DRAFT 下的 WAITING 等阶段。取得 ID 后，使用 `status <goal-id> --format human` 查看详情。`ids` 保留用于 ID/版本查找和补全，但它只有最多 100 条候选，不支持完整分页。
 
 Goal、Work、Gate 和 Invocation 接受唯一前缀，精确 ID 优先；歧义返回候选，不记录新的写请求。`ids`、`work get`、`gate get` 提供当前版本，修改仍要求显式版本 CAS。动态补全查询当前项目的 ID 和版本；daemon 不可用时安静返回空候选，不自动启动或初始化项目。
 

@@ -170,6 +170,7 @@ func groupCommand(use, short string) *cobra.Command {
 }
 
 type requestSpec struct {
+	render  func([]byte, string) (string, error)
 	method  string
 	path    string
 	body    any
@@ -229,8 +230,12 @@ func (runtime runtime) executeAPI(cmd *cobra.Command, request requestSpec) error
 		if status >= 400 {
 			writer = cmd.ErrOrStderr()
 		}
-		if request.human && !request.wait && status >= 200 && status < 300 {
-			text, err := renderHumanGoal(response, humanCommand(cmd))
+		if (request.human || request.render != nil) && !request.wait && status >= 200 && status < 300 {
+			render := request.render
+			if render == nil {
+				render = renderHumanGoal
+			}
+			text, err := render(response, humanCommand(cmd))
 			if err != nil {
 				return fail(5, err)
 			}

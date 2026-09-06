@@ -245,6 +245,10 @@ func route(request *http.Request) (Operation, bool, bool) {
 		operation.Name = "goal.create"
 		return operation, true, true
 	}
+	if len(parts) == 2 && parts[0] == "v1" && parts[1] == "goals" && request.Method == http.MethodGet {
+		operation.Name = "goal.list"
+		return operation, false, true
+	}
 	if len(parts) == 2 && parts[0] == "v1" && parts[1] == "identifiers" && request.Method == http.MethodGet {
 		operation.Name = "identifiers"
 		return operation, false, true

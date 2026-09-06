@@ -25,7 +25,7 @@
 └── AGENTS.md                     # 项目事实与工程运行合同
 ```
 
-当前 CLI 实现 `init`、`doctor`、`run`、`status`、`ids`、`invocations`、`context`、`logs`、`gates`、`gate get/resume`、`approve`、`pause/resume/cancel`、`work get/retry/cancel`、`goal plan/replan/finalize`、`report`、`export`、`clean`、`benchmark`、`config validate` 与 `daemon start/status/stop/serve`。默认 JSON 与版本 CAS 保持稳定，可显式选择 human 状态和等待反馈。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
+当前 CLI 实现 `init`、`doctor`、`run`、`status`、`ids`、`invocations`、`context`、`logs`、`gates`、`gate get/resume`、`approve`、`pause/resume/cancel`、`work get/retry/cancel`、`goal list/get/plan/replan/finalize`、`report`、`export`、`clean`、`benchmark`、`config validate` 与 `daemon start/status/stop/serve`。默认 JSON 与版本 CAS 保持稳定，可显式选择 human 状态和等待反馈。真实 Provider smoke 显式 opt-in，普通测试不会调用 Provider。
 
 ---
 

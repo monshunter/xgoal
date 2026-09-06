@@ -222,37 +222,53 @@ func readPlanning(ctx context.Context, q rowQueryer, goalID string) (PlanningRec
 			return p, errors.New("invalid persisted planning observation hash")
 		}
 	}
-	p.State = string(p.Effect.State)
-	switch p.Effect.State {
-	case domain.EffectRequested:
-		p.State = "QUEUED"
-	case domain.EffectSucceeded:
-		p.State = "SUCCEEDED"
-	case domain.EffectFailed, domain.EffectRecovering:
-		p.State = "WAITING"
-	}
-	if p.Effect.State == domain.EffectRecovering && p.Observation != nil && p.Observation.ExecutionStopped && (p.Observation.FailureCode == "planner_interrupted" || p.Observation.FailureCode == "planner_paused") {
-		p.State = "RECOVERING"
-	}
+	p.State = planningState(p, model)
 	if p.Request.BlockedReason != "" {
-		p.State = "WAITING"
 		p.Blocker = p.Request.BlockedReason
 	}
 	if p.Observation != nil && p.Observation.FailureReason != "" {
 		p.Blocker = p.Observation.FailureCode + ": " + p.Observation.FailureReason
 	}
-	if p.Paused {
-		p.State = "PAUSED"
-	}
-	if p.Goal.State == domain.GoalCancelled {
-		p.State = "CANCELLED"
-	}
 	if model != "current-directory" {
-		p.State = "WAITING"
 		p.Blocker = "MIGRATION_REQUIRED: historical execution cannot be resumed"
 	}
 	return p, nil
 }
+
+// planningState is shared by detail and collection projections. It only reads
+// already loaded facts; it does not claim or refresh planning work.
+func planningState(p PlanningRecord, model string) string {
+	if p.Effect.ID == "" {
+		if p.Goal.ActiveRevisionID != "" && p.Goal.State != domain.GoalReady {
+			return ""
+		}
+		return "WAITING"
+	}
+	state := string(p.Effect.State)
+	switch p.Effect.State {
+	case domain.EffectRequested:
+		state = "QUEUED"
+	case domain.EffectFailed, domain.EffectRecovering:
+		state = "WAITING"
+	}
+	if p.Effect.State == domain.EffectRecovering && p.Observation != nil && p.Observation.ExecutionStopped && (p.Observation.FailureCode == "planner_interrupted" || p.Observation.FailureCode == "planner_paused") {
+		state = "RECOVERING"
+	}
+	if p.Request.BlockedReason != "" {
+		state = "WAITING"
+	}
+	if p.Paused {
+		state = "PAUSED"
+	}
+	if p.Goal.State == domain.GoalCancelled {
+		state = "CANCELLED"
+	}
+	if model != "current-directory" {
+		state = "WAITING"
+	}
+	return state
+}
+
 func (s *Store) RunnablePlanningGoalIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT g.id FROM goals g JOIN effects e ON e.id=g.planning_effect_id WHERE g.state='DRAFT' AND g.active_revision_id='' AND g.planning_paused=0 AND g.execution_model='current-directory' AND (e.state IN ('REQUESTED','OBSERVING') OR (e.state='RECOVERING' AND json_extract(e.observation_json,'$.failure_code') IN ('planner_interrupted','planner_paused') AND json_extract(e.observation_json,'$.execution_stopped')=1)) AND COALESCE(json_extract(e.request_json,'$.blocked_reason'),'')='' ORDER BY g.created_at,g.id`)
 	if err != nil {

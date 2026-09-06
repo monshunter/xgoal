@@ -28,6 +28,14 @@ Plans:
 ## Objectives
 
 ---
+ID: OBJ-007
+Objective: 支持完整发现项目 Goal 及其当前状态，并通过 demo5 真实命令行验收
+Status: 已完成
+Plans:
+- [x] [PLAN-018：项目 Goal 列表与状态总览](docs/plans/PLAN-018.md)
+---
+
+---
 ID: OBJ-006
 Objective: 让新项目根据目标自动准备验收、实施并验证交付，兼容用户已有验收材料并保持信任与恢复边界
 Status: 已完成

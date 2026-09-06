@@ -341,6 +341,7 @@ func newCleanCommand(runtime runtime) *cobra.Command {
 func newGoalCommand(runtime runtime) *cobra.Command {
 	parent := groupCommand("goal", "Inspect and revise Goals")
 	parent.AddCommand(
+		newGoalListCommand(runtime),
 		getCommand("get <goal-id>", "Get one Goal", func(id string) string { return "/v1/goals/" + url.PathEscape(id) }, runtime),
 		newGoalPlanCommand(runtime),
 		newGoalFileCommand(runtime, "replan"),

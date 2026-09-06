@@ -91,7 +91,9 @@ func configureIdentifierCompletion(root *cobra.Command, runtime runtime) {
 		} else if parent != nil {
 			switch parent.Name() {
 			case "goal":
-				kind = "goal"
+				if cmd.Name() != "list" {
+					kind = "goal"
+				}
 			case "gate":
 				kind = "gate"
 			case "work":

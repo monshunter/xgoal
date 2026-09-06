@@ -304,6 +304,8 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 		return 0, nil, err
 	}
 	switch operation.Name {
+	case "goal.list":
+		return service.queryGoals(ctx, operation)
 	case "identifiers":
 		return service.queryIdentifiers(ctx, operation)
 	case "work.get":
@@ -810,6 +812,8 @@ func mapStoreError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, sqlite.ErrInvalidGoalListQuery):
+		return invalid("invalid goal list query", err)
 	case errors.Is(err, sqlite.ErrInvalidIdentifierQuery):
 		return invalid("invalid identifier query", err)
 	case errors.Is(err, sqlite.ErrInvalidPlanningProposal):
