@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,7 +11,10 @@ import (
 
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/domain"
+	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/planner"
+	"github.com/monshunter/xgoal/internal/protocol"
+	"github.com/monshunter/xgoal/internal/redact"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/supervisor"
 )
@@ -200,6 +204,14 @@ func planningProcessesStopped(ctx context.Context, q rowQueryer, goalID string) 
 }
 
 func (s *Store) RetryPlanning(ctx context.Context, goalID string, expectedGoalVersion int64, request planner.Request, reason string) (PlanningRecord, error) {
+	return s.retryPlanning(ctx, goalID, expectedGoalVersion, request, reason, nil, gitrepo.CheckoutIdentity{}, "")
+}
+
+func (s *Store) ResumePlanningGate(ctx context.Context, goalID string, continuation GateContinuation, configHash string, identity gitrepo.CheckoutIdentity, tree string) (PlanningRecord, error) {
+	return s.retryPlanning(ctx, goalID, continuation.OwnerVersion, planner.Request{ConfigHash: configHash}, "resume approved planning Gate", &continuation, identity, tree)
+}
+
+func (s *Store) retryPlanning(ctx context.Context, goalID string, expectedGoalVersion int64, request planner.Request, reason string, continuation *GateContinuation, identity gitrepo.CheckoutIdentity, tree string) (PlanningRecord, error) {
 	var result PlanningRecord
 	if expectedGoalVersion <= 0 || strings.TrimSpace(reason) == "" {
 		return result, errors.New("planning retry requires a version and reason")
@@ -214,6 +226,49 @@ func (s *Store) RetryPlanning(ctx context.Context, goalID string, expectedGoalVe
 		}
 		if p.Goal.State != domain.GoalDraft || p.Goal.ActiveRevisionID != "" || p.Effect.ID == "" {
 			return ErrPlanningBlocked
+		}
+		if continuation != nil {
+			blocking, err := countBlockingRequiredGates(ctx, tx, goalID, "", s.source.Now())
+			if err != nil {
+				return err
+			}
+			if blocking != 0 {
+				return basestore.ErrAuthorizationDenied
+			}
+			gate, err := s.continuationGate(ctx, tx, *continuation)
+			if err != nil {
+				return err
+			}
+			var facts struct {
+				Owner      string `json:"owner"`
+				Generation int64  `json:"generation"`
+			}
+			if err := json.Unmarshal(gate.FactsJSON, &facts); err != nil {
+				return err
+			}
+			if gate.GoalID != goalID || gate.WorkItemID != "" || gate.AttemptID != "" || facts.Owner != "planning" || facts.Generation != p.Generation || len(gate.Scope) != 1 || gate.Scope[0] != "goal/"+goalID+"/planning" || !planningContinuationReason(gate.ReasonCode) || p.Effect.State != domain.EffectFailed || p.Observation == nil || !p.Observation.ExecutionStopped || p.Observation.InvocationID == "" {
+				return basestore.ErrAuthorizationDenied
+			}
+			if request.ConfigHash != p.Request.ConfigHash {
+				return ErrConfigurationChanged
+			}
+			if p.Observation.FailureCode != gate.ReasonCode {
+				return basestore.ErrAuthorizationDenied
+			}
+			if identity != p.Observation.CheckoutIdentity || tree != p.Observation.InputTree {
+				return ErrCheckoutConflict
+			}
+			observation := *p.Observation
+			observation.FailureReason = redact.String(observation.FailureReason)
+			request = p.Request
+			request.Proposal = nil
+			request.Prior = &planner.PriorContext{EffectID: p.Effect.ID, RequestHash: p.Effect.RequestHash, Generation: p.Generation, Observation: observation, Decision: protocol.PacketDecision{GateID: gate.ID, GateVersion: gate.Version, Answer: redact.String(gate.DecisionReason)}}
+			if _, err := tx.ExecContext(ctx, `UPDATE gates SET used=1,required=0,version=version+1,updated_at=? WHERE id=? AND version=?`, s.source.Now().UTC().Format(time.RFC3339Nano), gate.ID, gate.Version); err != nil {
+				return err
+			}
+			if err := s.planningEvent(ctx, tx, "gate", gate.ID, "GateContinuationConsumed", map[string]any{"generation": p.Generation + 1}); err != nil {
+				return err
+			}
 		}
 		if request.GoalID != goalID || request.RawGoal != p.Request.RawGoal || request.Mode != p.Request.Mode || request.CreatedBy != p.Request.CreatedBy {
 			return basestore.ErrConflict

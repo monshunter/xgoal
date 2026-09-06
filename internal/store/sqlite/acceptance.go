@@ -130,6 +130,12 @@ func (s *Store) BeginAcceptance(ctx context.Context, r acceptance.Request, event
 				if r.PreviousInvocationID != old.Packet.ID {
 					return basestore.ErrConflict
 				}
+				if p := r.Packet.Prior; p != nil {
+					data, hash, err := canonicalValue("effect-observation", effectSchema, p.Observation)
+					if err != nil || p.InvocationID != old.Packet.ID || p.ObservationHash != prior.ObservationHash || hash != prior.ObservationHash || string(data) != string(prior.ObservationJSON) {
+						return basestore.ErrConflict
+					}
+				}
 				if len(r.Packet.Decisions) == 1 {
 					if err := s.consumeAcceptanceDecision(ctx, tx, r, prior, prepared); err != nil {
 						return err
@@ -147,7 +153,7 @@ func (s *Store) BeginAcceptance(ctx context.Context, r acceptance.Request, event
 		} else if !errors.Is(priorErr, basestore.ErrNotFound) {
 			return priorErr
 		}
-		if !sameChain && (r.PreviousInvocationID != "" || len(r.Packet.Decisions) != 0) {
+		if !sameChain && (r.PreviousInvocationID != "" || len(r.Packet.Decisions) != 0 || r.Packet.Prior != nil) {
 			return basestore.ErrAuthorizationDenied
 		}
 		now := s.source.Now().UTC().Format(time.RFC3339Nano)
@@ -169,12 +175,16 @@ func (s *Store) BeginAcceptance(ctx context.Context, r acceptance.Request, event
 }
 
 func acceptanceBinding(ctx context.Context, q rowQueryer, r acceptance.Request, checkVersion bool) error {
+	return acceptanceBindingState(ctx, q, r, checkVersion, domain.GoalVerifying)
+}
+
+func acceptanceBindingState(ctx context.Context, q rowQueryer, r acceptance.Request, checkVersion bool, state domain.GoalState) error {
 	p := r.Packet
 	goal, err := readGoal(ctx, q, p.GoalID)
 	if err != nil {
 		return err
 	}
-	if goal.State != domain.GoalVerifying || (checkVersion && goal.Version != r.GoalVersion) {
+	if goal.State != state || (checkVersion && goal.Version != r.GoalVersion) {
 		return basestore.ErrConflict
 	}
 	rev, err := readGoalRevision(ctx, q, goal.ActiveRevisionID)
@@ -231,16 +241,27 @@ func (s *Store) acceptanceReplayAllowed(ctx context.Context, q rowQueryer, prior
 }
 
 func (s *Store) consumeAcceptanceDecision(ctx context.Context, tx *sql.Tx, r acceptance.Request, prior domain.Effect, event preparedEvent) error {
+	gate, err := s.acceptanceDecision(ctx, tx, r, prior)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE gates SET used=1,version=version+1,updated_at=? WHERE id=? AND version=?`, s.source.Now().UTC().Format(time.RFC3339Nano), gate.ID, gate.Version); err != nil {
+		return err
+	}
+	return s.appendEvent(ctx, tx, "gate", gate.ID, event)
+}
+
+func (s *Store) acceptanceDecision(ctx context.Context, tx *sql.Tx, r acceptance.Request, prior domain.Effect) (domain.Gate, error) {
 	d := r.Packet.Decisions[0]
 	gate, err := readGate(ctx, tx, d.GateID)
 	if err != nil {
-		return err
+		return gate, err
 	}
 	var facts struct{ Owner, InvocationID, GoalRevisionHash, ConfigHash, TreeHash string }
 	// Gate facts use the same packet-shaped names as the immutable request.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(gate.FactsJSON, &raw); err != nil {
-		return err
+		return gate, err
 	}
 	_ = json.Unmarshal(raw["owner"], &facts.Owner)
 	_ = json.Unmarshal(raw["invocation_id"], &facts.InvocationID)
@@ -248,12 +269,9 @@ func (s *Store) consumeAcceptanceDecision(ctx context.Context, tx *sql.Tx, r acc
 	_ = json.Unmarshal(raw["config_hash"], &facts.ConfigHash)
 	_ = json.Unmarshal(raw["tree_hash"], &facts.TreeHash)
 	if gate.Version != d.GateVersion || gate.GoalID != r.Packet.GoalID || gate.WorkItemID != "" || gate.AttemptID != "" || facts.Owner != "final" || facts.InvocationID != r.PreviousInvocationID || facts.GoalRevisionHash != r.Packet.GoalRevisionHash || facts.ConfigHash != r.Packet.ConfigHash || facts.TreeHash != r.Packet.TreeHash || gate.ReasonCode != acceptance.ReplayReason || gate.Action != domain.ActionExecCommand || !slices.Equal(gate.Scope, []string{"goal/" + r.Packet.GoalID + "/final/" + r.PreviousInvocationID}) || gate.State != domain.GateApproved || gate.Decision != domain.GateAllow || gate.Used != 0 || gate.MaxUses != 1 || !gate.ExpiresAt.After(s.source.Now()) || redact.String(gate.DecisionReason) != d.Answer || prior.ID != acceptance.EffectID(r.PreviousInvocationID) {
-		return basestore.ErrAuthorizationDenied
+		return gate, basestore.ErrAuthorizationDenied
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE gates SET used=1,version=version+1,updated_at=? WHERE id=? AND version=?`, s.source.Now().UTC().Format(time.RFC3339Nano), gate.ID, gate.Version); err != nil {
-		return err
-	}
-	return s.appendEvent(ctx, tx, "gate", gate.ID, event)
+	return gate, nil
 }
 
 // ObserveAcceptance may preserve late historical claims, but only a current

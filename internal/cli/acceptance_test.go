@@ -16,6 +16,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/acceptance"
 	"github.com/monshunter/xgoal/internal/config"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/supervisor"
 )
 
@@ -94,6 +95,38 @@ func TestRealCLIAcceptanceSessionCallsServiceBeforeIndependentFinalAssertions(t 
 		t.Fatal(err)
 	}
 	defer db.Close()
+	rows, err := db.Query(`SELECT input_json,observation_json FROM invocations WHERE goal_id='goal_acceptance' ORDER BY rowid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for rows.Next() {
+		var rawInput, rawObservation []byte
+		if err := rows.Scan(&rawInput, &rawObservation); err != nil {
+			t.Fatal(err)
+		}
+		var input callindex.Input
+		var output callindex.Observation
+		if json.Unmarshal(rawInput, &input) != nil || json.Unmarshal(rawObservation, &output) != nil {
+			t.Fatal("invalid invocation index")
+		}
+		if input.Validate() != nil || output.Status != "returned" || output.Cursor == 0 || output.SessionID == "" || output.LogError != "" {
+			t.Fatalf("incomplete invocation context: %s %s", rawInput, rawObservation)
+		}
+		if input.Role == "planner" && (input.RequestHash == "" || input.GoalRevisionHash != "") {
+			t.Fatal("Planner requires request identity without a premature revision")
+		}
+		seen[input.Role] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	for _, role := range []string{"planner", "implementer", "reviewer", "acceptance"} {
+		if !seen[role] {
+			t.Fatalf("missing %s invocation", role)
+		}
+	}
 	var requestJSON, observationJSON []byte
 	var state string
 	if err := db.QueryRow(`SELECT state,request_json,observation_json FROM effects WHERE effect_type='acceptance'`).Scan(&state, &requestJSON, &observationJSON); err != nil {
@@ -180,6 +213,11 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id
 exit 0
 fi
 `
+					injection += "python3 -c " + currentDirectoryShellQuote(`import json,re,sys
+p=json.load(open(re.search(r'(/\S+/packet\.json)',sys.stdin.read()).group(1)))
+assert p['prior']['observation']['result']['summary']=='which test account should be used?'
+assert p['decisions'][0]['answer']=='use fixture test account'
+`) + "\n"
 				case "source-write":
 					injection = "printf 'unauthorized\\n' >> output.txt\n"
 					// The fixture deliberately claims success despite the corrupted source.
@@ -239,8 +277,23 @@ fi
 					t.Fatal("blocked was not preserved")
 				}
 				writeCurrentDirectoryFixture(t, approved, "operator prepared account", 0600)
-				f.invoke(t, "approve", gateID, "--version", strconv.FormatInt(gateVersion, 10), "--reason", "use fixture test account", "--by", "operator")
-				f.invoke(t, "resume", goalID, "--version", strconv.FormatInt(goalVersion, 10), "--reason", "test account ready")
+				outputPath := filepath.Join(f.root, "output.txt")
+				acceptedOutput, err := os.ReadFile(outputPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeCurrentDirectoryFixture(t, outputPath, string(acceptedOutput)+"external edit\n", 0600)
+				out, err := invokeCurrentDirectoryCLI(f.binary, f.environment, "--project", f.root, "approve", gateID, "--version", strconv.FormatInt(gateVersion, 10), "--reason", "use fixture test account", "--by", "operator", "--resume", "--owner-version", strconv.FormatInt(goalVersion, 10))
+				if err == nil || !strings.Contains(out, "Decision retained") || !strings.Contains(out, "CHECKOUT_WAITING") {
+					t.Fatalf("changed scene resumed: %v %s", err, out)
+				}
+				var retainedState string
+				var retainedUsed int
+				if err := db.QueryRow(`SELECT state,used,version FROM gates WHERE id=?`, gateID).Scan(&retainedState, &retainedUsed, &gateVersion); err != nil || retainedState != "APPROVED" || retainedUsed != 0 {
+					t.Fatalf("decision was lost: %s %d %v", retainedState, retainedUsed, err)
+				}
+				writeCurrentDirectoryFixture(t, outputPath, string(acceptedOutput), 0600)
+				f.invoke(t, "gate", "resume", gateID, "--version", strconv.FormatInt(gateVersion, 10), "--owner-version", strconv.FormatInt(goalVersion, 10))
 				_ = f.complete(t, goalID)
 				var used int
 				if err := db.QueryRow(`SELECT used FROM gates WHERE id=?`, gateID).Scan(&used); err != nil || used != 1 {
@@ -251,7 +304,7 @@ fi
 					t.Fatal(err)
 				}
 				var request acceptance.Request
-				if json.Unmarshal(requestJSON, &request) != nil || len(request.Packet.Decisions) != 1 || request.Packet.Decisions[0].Answer != "use fixture test account" {
+				if json.Unmarshal(requestJSON, &request) != nil || len(request.Packet.Decisions) != 1 || request.Packet.Decisions[0].Answer != "use fixture test account" || request.Packet.Prior == nil || request.Packet.Prior.Observation.Result == nil || request.Packet.Prior.Observation.Result.Summary != "which test account should be used?" {
 					t.Fatalf("missing exact answer: %s", requestJSON)
 				}
 			} else if mode == "source-write" {

@@ -28,6 +28,14 @@ func normalizePlanningRequest(request planner.Request, generation int64) (planne
 		request.ProtocolVersion = planner.RequestVersion
 	}
 	request.Generation = generation
+	if request.Prior != nil {
+		if err := request.Prior.Validate(); err != nil {
+			return planner.Request{}, err
+		}
+		if request.Prior.Generation != generation-1 {
+			return planner.Request{}, basestore.ErrConflict
+		}
+	}
 	if request.ProtocolVersion != planner.RequestVersion || !validIdempotencyLabel(request.GoalID) || strings.ContainsAny(request.GoalID, "/\\\x00") || strings.TrimSpace(request.RawGoal) == "" || !validIdempotencyLabel(request.CreatedBy) || (request.Mode != "fast" && request.Mode != "standard") || generation < 1 {
 		return planner.Request{}, errors.New("invalid planning request")
 	}
@@ -292,6 +300,16 @@ func (s *Store) BeginPlanning(ctx context.Context, c PlanningClaim) (PlanningRec
 		}
 		if p.Effect.State != domain.EffectRequested {
 			return basestore.ErrConflict
+		}
+		if prior := p.Request.Prior; prior != nil && (prior.Observation.InputTree != c.InputTree || prior.Observation.CheckoutIdentity != c.CheckoutIdentity) {
+			return ErrCheckoutConflict
+		}
+		blocking, err := countBlockingRequiredGates(ctx, tx, c.GoalID, "", s.source.Now())
+		if err != nil {
+			return err
+		}
+		if blocking != 0 {
+			return basestore.ErrAuthorizationDenied
 		}
 		if err = executionIdle(ctx, tx); err != nil {
 			return err

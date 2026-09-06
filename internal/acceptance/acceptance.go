@@ -23,6 +23,7 @@ const PacketVersion = "xgoal.acceptance-packet/v1"
 const maxPacketBytes = 8 << 20
 
 type Packet struct {
+	Prior            *PriorContext             `json:"prior,omitempty"`
 	ProtocolVersion  string                    `json:"protocol_version"`
 	ID               string                    `json:"id"`
 	GoalID           string                    `json:"goal_id"`
@@ -40,6 +41,12 @@ type Packet struct {
 	ProjectNetwork   string                    `json:"project_network"`
 	Harness          *protocol.HarnessInput    `json:"harness,omitempty"`
 	Decisions        []protocol.PacketDecision `json:"decisions,omitempty"`
+}
+
+type PriorContext struct {
+	InvocationID    string      `json:"invocation_id"`
+	ObservationHash string      `json:"observation_hash"`
+	Observation     Observation `json:"observation"`
 }
 
 type Invocation struct {
@@ -87,6 +94,16 @@ func (i Invocation) Record() InvocationRecord {
 }
 
 func (p Packet) Validate() error {
+	if p.Prior != nil {
+		if !component(p.Prior.InvocationID) || !hash(p.Prior.ObservationHash, 64) || !p.Prior.Observation.ExecutionStopped || p.Prior.Observation.Result == nil && p.Prior.Observation.FailureCode == "" {
+			return errors.New("invalid prior acceptance context")
+		}
+		if p.Prior.Observation.Result != nil {
+			if err := p.Prior.Observation.Result.Validate(); err != nil {
+				return err
+			}
+		}
+	}
 	if p.ProtocolVersion != PacketVersion || !component(p.ID) || !component(p.GoalID) || !component(p.ProfileID) || !component(p.OwnerAttemptID) || p.OwnerGeneration <= 0 || !component(p.EnvironmentID) || !cleanAbsolute(p.Workspace) || !cleanAbsolute(p.ScenarioDir) || len(p.Scenarios) == 0 || len(p.Scenarios) > 64 {
 		return errors.New("invalid acceptance packet identity, ownership or scenarios")
 	}

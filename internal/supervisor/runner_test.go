@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,6 +14,25 @@ import (
 
 	"github.com/monshunter/xgoal/internal/supervisor"
 )
+
+type delayedOutput struct{ io.Writer }
+
+func (w delayedOutput) Write(data []byte) (int, error) {
+	time.Sleep(750 * time.Millisecond)
+	return w.Writer.Write(data)
+}
+
+func TestSuccessfulExitWaitsForDurableOutputDrain(t *testing.T) {
+	// A local immutable event write may fsync after the Provider has already
+	// exited. Process exit alone must not truncate a healthy bounded sink.
+	var stdout bytes.Buffer
+	command := helperCommand(t.TempDir(), "exit", "", nil, nil)
+	command.Stdout, command.Stderr = delayedOutput{&stdout}, io.Discard
+	execution, err := supervisor.Run(context.Background(), command)
+	if err != nil || execution.ExitCode != 0 || stdout.String() != "stdout\n" {
+		t.Fatalf("drained execution=%+v output=%q err=%v", execution, stdout.String(), err)
+	}
+}
 
 func TestRunCapturesExitAndTerminatesTimedOutProcessGroup(t *testing.T) {
 	t.Parallel()
@@ -74,6 +94,10 @@ func TestSupervisorProcessHelper(t *testing.T) {
 	if os.Getenv("XGOAL_SUPERVISOR_HELPER") != "1" {
 		return
 	}
+	// Cancellation tests normally stop these children within seconds. A broken
+	// parent must not leave an hour-long helper behind or turn timeout into PASS.
+	watchdog := time.AfterFunc(30*time.Second, func() { os.Exit(124) })
+	defer watchdog.Stop()
 	switch os.Getenv("XGOAL_SUPERVISOR_MODE") {
 	case "exit":
 		_, _ = os.Stdout.WriteString("stdout\n")
@@ -82,7 +106,7 @@ func TestSupervisorProcessHelper(t *testing.T) {
 		if err := os.WriteFile(os.Getenv("XGOAL_SUPERVISOR_READY"), []byte("ready"), 0o600); err != nil {
 			os.Exit(3)
 		}
-		time.Sleep(time.Hour)
+		select {}
 	case "ordered-service":
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 		defer cancel()
@@ -97,7 +121,7 @@ func TestSupervisorProcessHelper(t *testing.T) {
 		_, _ = f.WriteString(os.Getenv("XGOAL_SERVICE_ID") + "\n")
 		_ = f.Close()
 	case "sleep":
-		time.Sleep(time.Hour)
+		select {}
 	default:
 		os.Exit(4)
 	}

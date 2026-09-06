@@ -18,6 +18,7 @@ import (
 	"github.com/monshunter/xgoal/internal/acceptance"
 	"github.com/monshunter/xgoal/internal/app"
 	"github.com/monshunter/xgoal/internal/config"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/report"
 )
@@ -164,6 +165,7 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	invoke("run", "--id", "goal_real_background", "--goal", goalText)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
+	liveRoles := map[string]bool{}
 	for {
 		var status struct {
 			State         string `json:"state"`
@@ -182,6 +184,25 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 		}
 		if status.State == "WAITING" || status.PlanningState == "WAITING" {
 			t.Fatalf("real Goal requires action: %s", body)
+		}
+		var calls struct {
+			Invocations []callindex.Summary `json:"invocations"`
+		}
+		if err := json.Unmarshal([]byte(invoke("invocations", "goal_real_background")), &calls); err != nil {
+			t.Fatal(err)
+		}
+		for _, call := range calls.Invocations {
+			if call.Observation.Status == "running" && call.Observation.Cursor > 0 && !liveRoles[call.Role] {
+				var view callindex.Context
+				if err := json.Unmarshal([]byte(invoke("context", call.ID)), &view); err != nil || view.Invocation.Input.ID != call.ID || len(view.Packet) == 0 || len(view.Metadata) == 0 {
+					t.Fatalf("live %s context unavailable: %+v %v", call.Role, view.ArtifactErrors, err)
+				}
+				var logs callindex.LogPage
+				if err := json.Unmarshal([]byte(invoke("logs", "--invocation", call.ID, "--limit", "1")), &logs); err != nil || len(logs.Events) != 1 || logs.Next != 1 {
+					t.Fatalf("live %s output unavailable: %+v %v", call.Role, logs, err)
+				}
+				liveRoles[call.Role] = true
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -206,6 +227,30 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if err != nil || !bytes.Equal(indexBefore, indexAfter) {
 		t.Fatal("user index bytes changed")
 	}
+	roles := map[string]string{"plans": "planner", "invocations": "implementer", "reviews": "reviewer"}
+	if acceptanceEnabled {
+		roles["acceptances"] = "acceptance"
+	}
+	for _, role := range roles {
+		if !liveRoles[role] {
+			t.Fatalf("real %s execution lacked live context and output evidence", role)
+		}
+	}
+	var finalInvocations struct {
+		Invocations []callindex.Summary `json:"invocations"`
+	}
+	if err := json.Unmarshal([]byte(invoke("invocations", "goal_real_background")), &finalInvocations); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range finalInvocations.Invocations {
+		var view callindex.Context
+		if err := json.Unmarshal([]byte(invoke("context", call.ID)), &view); err != nil {
+			t.Fatal(err)
+		}
+		effective := view.Invocation.Input.ExecutionConfig
+		t.Logf("real %s role=%s requested_model=%s effort=%s cli=%s observed_model=%s", providerName, call.Role, effective.Model, effective.ReasoningEffort, effective.CLIVersion, call.Observation.ObservedModel)
+	}
+	invoke("export", "goal_real_background", "--output", filepath.Join(base, "audit"))
 	invoke("daemon", "stop", "--timeout", "30s")
 	startedDaemon = false
 	assertCurrentDirectoryEvidence(t, daemon.StateDir, []report.Report{response.Report})
@@ -227,7 +272,7 @@ report: {formats: [markdown, json], includeAgentRawLogs: false, includeReproduct
 	if err := db.QueryRow(`SELECT implementation_session_id,reviewer_session_id FROM review_runs WHERE review_status='approved' AND reviewer_profile_id='reviewer' AND implementation_profile_id='worker' AND candidate_tree=? LIMIT 1`, privateTree).Scan(&implementationSession, &reviewerSession); err != nil || implementationSession == "" || reviewerSession == "" || implementationSession == reviewerSession {
 		t.Fatalf("independent real Review not proven: implementer=%s reviewer=%s err=%v", implementationSession, reviewerSession, err)
 	}
-	for directory, role := range map[string]string{"plans": "planner", "invocations": "implementer", "reviews": "reviewer"} {
+	for directory, role := range roles {
 		records, err := filepath.Glob(filepath.Join(daemon.StateDir, "adapters", providerName, directory, "*", "invocation.json"))
 		if err != nil || len(records) == 0 {
 			t.Fatalf("missing %s invocation identity: %v", role, err)
@@ -281,6 +326,13 @@ func realAcceptanceConfiguration(t *testing.T, root, text, provider string) stri
 	t.Helper()
 	if provider == "claude" {
 		text = managedServiceConfiguration(t, root, text, filepath.Join(filepath.Dir(root), "real-service.roles"))
+		// The shared multi-Goal fixture permits appended accepted lines. This
+		// single-Goal smoke promises exact bytes, including its business receipt.
+		client := strings.Replace(managedServiceClient, `assert value and value.endswith("\n") and all(line == "accepted" for line in value.splitlines()), result`, `assert value == "accepted\n", result`, 1)
+		if client == managedServiceClient {
+			t.Fatal("cannot bind the real smoke business assertion to its exact-byte contract")
+		}
+		writeCurrentDirectoryFixture(t, filepath.Join(root, "service-client.py"), client, 0600)
 	}
 	cfg, err := config.Load(strings.NewReader(text))
 	if err != nil {

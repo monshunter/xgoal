@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,8 @@ func (runtime *Adapter) Accept(ctx context.Context, invocation acceptance.Invoca
 	defer cancel()
 	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
 	stream := newStream(eventsDir, filepath.ToSlash(filepath.Join("acceptances", invocation.InvocationID)), sink, runtime.clock.Now, limiter, cancel)
-	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
+	stream.runtimeRoot = filepath.Dir(filepath.Dir(runtime.root))
+	stderr := &boundedStderr{limiter: limiter, cancel: cancel, live: callindex.NewStderrLog(filepath.Dir(filepath.Dir(runtime.root)), directory)}
 	tools := "Read,Glob,Grep"
 	allowedTools := tools
 	if invocation.ExecutionConfig != nil {

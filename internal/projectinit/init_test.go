@@ -29,6 +29,9 @@ func TestInitializeCreatesStrictProjectAndSharedIDWithoutRemoteEffects(t *testin
 	if result.ProjectID == "" || !result.CreatedConfig || !result.CreatedIgnore {
 		t.Fatalf("result = %+v", result)
 	}
+	if result.ValidationPreparation.Status != "entrypoints_detected" || len(result.ValidationPreparation.Entries) != 1 || !result.ValidationPreparation.Entries[0].Configured || result.ValidationPreparation.Coverage != "not_verified" {
+		t.Fatalf("missing init preparation: %+v", result.ValidationPreparation)
+	}
 	loaded, err := config.LoadFile(filepath.Join(root, "xgoal.yaml"))
 	if err != nil {
 		t.Fatalf("generated config is invalid: %v", err)

@@ -288,7 +288,10 @@ func (engine *Engine) Recover(ctx context.Context) error {
 		return err
 	}
 	liveHash, _ := engine.currentPlanningConfiguration(engine.configHash)
-	return engine.store.RecoverPlanning(ctx, sqlite.PlanningRecoveryOptions{CurrentConfigHash: liveHash, NoProgressLimit: engine.config.Orchestration.NoProgressLimit})
+	if err := engine.store.RecoverPlanning(ctx, sqlite.PlanningRecoveryOptions{CurrentConfigHash: liveHash, NoProgressLimit: engine.config.Orchestration.NoProgressLimit}); err != nil {
+		return err
+	}
+	return engine.recoverInvocationIndex(ctx)
 }
 
 func (engine *Engine) activeGoalRevision(ctx context.Context, goal domain.Goal) (domain.GoalRevision, error) {

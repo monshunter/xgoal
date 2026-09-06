@@ -35,6 +35,7 @@ type Proposal struct {
 }
 
 type Packet struct {
+	Prior                  *PriorContext                  `json:"prior,omitempty"`
 	ValidationCapabilities *config.ValidationCapabilities `json:"validation_capabilities,omitempty"`
 	Harness                *protocol.HarnessInput         `json:"harness,omitempty"`
 	ProtocolVersion        string                         `json:"protocol_version"`
@@ -47,6 +48,9 @@ type Packet struct {
 	ProjectNetwork         string                         `json:"project_network"`
 	ProjectSecrets         string                         `json:"project_secrets"`
 }
+
+// Validate checks an immutable Packet independently of a live Provider call.
+func (packet Packet) Validate() error { return validatePacket(packet) }
 
 type Invocation struct {
 	RequestHash     string
@@ -240,6 +244,11 @@ func ValidateInvocation(invocation Invocation) (Packet, error) {
 }
 
 func validatePacket(packet Packet) error {
+	if packet.Prior != nil {
+		if err := packet.Prior.Validate(); err != nil {
+			return err
+		}
+	}
 	if packet.Harness != nil {
 		if err := packet.Harness.Validate(); err != nil {
 			return err

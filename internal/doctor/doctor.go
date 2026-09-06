@@ -16,6 +16,7 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/harness"
 	"github.com/monshunter/xgoal/internal/project"
+	"github.com/monshunter/xgoal/internal/testdiscovery"
 )
 
 func Inspect(ctx context.Context, paths app.Paths) map[string]any {
@@ -91,7 +92,8 @@ func Inspect(ctx context.Context, paths app.Paths) map[string]any {
 		configError = configErr.Error()
 	}
 	return map[string]any{
-		"project_id": paths.ProjectID, "project_root": paths.ProjectRoot, "state_dir": paths.StateDir, "socket_path": paths.SocketPath, "repository_identity": paths.RepositoryIdentity,
+		"validation_preparation": testdiscovery.Inspect(paths.ProjectRoot, &configuration),
+		"project_id":             paths.ProjectID, "project_root": paths.ProjectRoot, "state_dir": paths.StateDir, "socket_path": paths.SocketPath, "repository_identity": paths.RepositoryIdentity,
 		"store": store, "daemon": daemonStatus, "os": runtime.GOOS, "arch": runtime.GOARCH, "git": gitFacts, "tools": tools, "config_hash": configHash,
 		"agent_profiles": profiles, "role_selections": configuration.RoleSelections(), "validators": validators, "unmet_capabilities": unmet,
 		"configuration_compatible": configErr == nil, "config_error": configError, "config_migration_required": errors.Is(configErr, config.ErrMigrationRequired),

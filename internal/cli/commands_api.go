@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,7 @@ type runOptions struct {
 	mode         string
 	goalID       string
 	wait         bool
+	format       string
 }
 
 func newRunCommand(runtime runtime) *cobra.Command {
@@ -94,10 +96,17 @@ func newRunCommand(runtime runtime) *cobra.Command {
 		Short: "Create and start a Goal",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkFormat(options.format); err != nil {
+				return err
+			}
+			if options.format == "human" && !options.wait {
+				return errors.New("--format human on run requires --wait")
+			}
 			request, err := runRequest(cmd.InOrStdin(), options, runtime.newID)
 			if err != nil {
 				return err
 			}
+			request.human = options.format == "human"
 			return runtime.executeAPI(cmd, request)
 		},
 	}
@@ -107,6 +116,8 @@ func newRunCommand(runtime runtime) *cobra.Command {
 	cmd.Flags().StringVar(&options.mode, "mode", "", "execution mode: fast or standard")
 	cmd.Flags().StringVar(&options.goalID, "id", "", "explicit Goal ID")
 	cmd.Flags().BoolVar(&options.wait, "wait", false, "wait until the Goal completes, waits, or is cancelled")
+	cmd.Flags().StringVar(&options.format, "format", "json", "wait feedback: json or human (human feedback goes to stderr)")
+	_ = cmd.RegisterFlagCompletionFunc("format", cobra.FixedCompletions([]cobra.Completion{"json", "human"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = cmd.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions([]cobra.Completion{"fast", "standard"}, cobra.ShellCompDirectiveNoFileComp))
 	return cmd
 }
@@ -157,45 +168,49 @@ func runRequest(stdin io.Reader, options runOptions, newID func(string) (string,
 
 func newStatusCommand(runtime runtime) *cobra.Command {
 	var watch bool
-	var after string
+	var after, format string
 	cmd := &cobra.Command{
 		Use:   "status <goal-id>",
 		Short: "Show Goal status or watch Goal events",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkFormat(format); err != nil {
+				return err
+			}
+			if format == "human" && after != "" {
+				return errors.New("--after-event-id requires --format json")
+			}
 			if after != "" && !watch {
 				return errors.New("--after-event-id requires --watch")
 			}
-			path := "/v1/goals/" + args[0]
-			if watch {
+			path := "/v1/goals/" + url.PathEscape(args[0])
+			if watch && format != "human" {
 				path += "/events?watch=1"
 				if after != "" {
-					path += "&after_event_id=" + after
+					path += "&after_event_id=" + url.QueryEscape(after)
 				}
 			}
-			return runtime.executeAPI(cmd, requestSpec{method: http.MethodGet, path: path, watch: watch})
+			return runtime.executeAPI(cmd, requestSpec{method: http.MethodGet, path: path, watch: watch, human: format == "human"})
 		},
 	}
 	cmd.Flags().BoolVar(&watch, "watch", false, "stream Goal events")
 	cmd.Flags().StringVar(&after, "after-event-id", "", "resume the event stream after this event ID")
+	cmd.Flags().StringVar(&format, "format", "json", "status presentation: json or human")
+	_ = cmd.RegisterFlagCompletionFunc("format", cobra.FixedCompletions([]cobra.Completion{"json", "human"}, cobra.ShellCompDirectiveNoFileComp))
 	return cmd
 }
 
-func newLogsCommand(runtime runtime) *cobra.Command {
-	return getCommand("logs <attempt-id>", "Show structured Attempt logs", func(id string) string {
-		return "/v1/attempts/" + id + "/logs"
-	}, runtime)
-}
+func newLogsCommand(runtime runtime) *cobra.Command { return newInvocationLogsCommand(runtime) }
 
 func newGatesCommand(runtime runtime) *cobra.Command {
 	return getCommand("gates <goal-id>", "List open Human Gates for a Goal", func(id string) string {
-		return "/v1/goals/" + id + "/gates?state=open"
+		return "/v1/goals/" + url.PathEscape(id) + "/gates?state=open"
 	}, runtime)
 }
 
 func newReportCommand(runtime runtime) *cobra.Command {
 	return getCommand("report <goal-id>", "Show the final Goal report", func(id string) string {
-		return "/v1/goals/" + id + "/report"
+		return "/v1/goals/" + url.PathEscape(id) + "/report"
 	}, runtime)
 }
 
@@ -218,6 +233,8 @@ type mutationOptions struct {
 func newApproveCommand(runtime runtime) *cobra.Command {
 	var options mutationOptions
 	var decision, actor string
+	var resume bool
+	var ownerVersion int64
 	cmd := &cobra.Command{
 		Use:   "approve <gate-id>",
 		Short: "Record a finite decision for a Human Gate",
@@ -233,18 +250,24 @@ func newApproveCommand(runtime runtime) *cobra.Command {
 			if decision != "ALLOW" && decision != "DENY" {
 				return errors.New("--decision must be ALLOW or DENY")
 			}
+			if resume && (ownerVersion <= 0 || decision != "ALLOW") || !resume && cmd.Flags().Changed("owner-version") {
+				return errors.New("--resume requires --decision ALLOW and a positive --owner-version")
+			}
 			if actor == "" {
 				actor = currentActor()
 			}
 			request := requestSpec{
 				method: http.MethodPost,
-				path:   "/v1/gates/" + args[0] + "/decisions",
+				path:   "/v1/gates/" + url.PathEscape(args[0]) + "/decisions",
 				body: map[string]any{
 					"expected_version": options.version,
 					"decision":         decision,
 					"decided_by":       actor,
 					"reason":           options.reason,
 				},
+			}
+			if resume {
+				return runtime.decideAndResume(cmd, request, ownerVersion)
 			}
 			return runtime.executeAPI(cmd, request)
 		},
@@ -253,6 +276,8 @@ func newApproveCommand(runtime runtime) *cobra.Command {
 	cmd.Flags().StringVar(&options.reason, "reason", "", "decision reason")
 	cmd.Flags().StringVar(&decision, "decision", "ALLOW", "decision: ALLOW or DENY")
 	cmd.Flags().StringVar(&actor, "by", "", "decision actor (defaults to the current user)")
+	cmd.Flags().BoolVar(&resume, "resume", false, "resume this Gate's owner after recording ALLOW")
+	cmd.Flags().Int64Var(&ownerVersion, "owner-version", 0, "expected Goal version for planning/final acceptance, or Work Item version")
 	_ = cmd.MarkFlagRequired("version")
 	_ = cmd.MarkFlagRequired("reason")
 	_ = cmd.RegisterFlagCompletionFunc("decision", cobra.FixedCompletions([]cobra.Completion{"ALLOW", "DENY"}, cobra.ShellCompDirectiveNoFileComp))
@@ -271,7 +296,7 @@ func newGoalControlCommand(runtime runtime, action string) *cobra.Command {
 			}
 			request := requestSpec{
 				method: http.MethodPost,
-				path:   "/v1/goals/" + args[0] + "/" + action,
+				path:   "/v1/goals/" + url.PathEscape(args[0]) + "/" + action,
 				body:   map[string]any{"expected_version": options.version, "reason": options.reason},
 			}
 			return runtime.executeAPI(cmd, request)
@@ -296,7 +321,7 @@ func newCleanCommand(runtime runtime) *cobra.Command {
 			}
 			return runtime.executeAPI(cmd, requestSpec{
 				method: http.MethodPost,
-				path:   "/v1/projects/" + projectID + "/clean",
+				path:   "/v1/projects/" + url.PathEscape(projectID) + "/clean",
 				body:   map[string]any{"dry_run": dryRun},
 			})
 		},
@@ -308,7 +333,7 @@ func newCleanCommand(runtime runtime) *cobra.Command {
 func newGoalCommand(runtime runtime) *cobra.Command {
 	parent := groupCommand("goal", "Inspect and revise Goals")
 	parent.AddCommand(
-		getCommand("get <goal-id>", "Get one Goal", func(id string) string { return "/v1/goals/" + id }, runtime),
+		getCommand("get <goal-id>", "Get one Goal", func(id string) string { return "/v1/goals/" + url.PathEscape(id) }, runtime),
 		newGoalPlanCommand(runtime),
 		newGoalFileCommand(runtime, "replan"),
 		newGoalFileCommand(runtime, "finalize"),
@@ -342,7 +367,7 @@ func newGoalPlanCommand(runtime runtime) *cobra.Command {
 				}
 				body["proposal"] = proposal
 			}
-			return runtime.executeAPI(cmd, requestSpec{method: http.MethodPost, path: "/v1/goals/" + args[0] + "/plan", body: body})
+			return runtime.executeAPI(cmd, requestSpec{method: http.MethodPost, path: "/v1/goals/" + url.PathEscape(args[0]) + "/plan", body: body})
 		},
 	}
 	cmd.Flags().Int64Var(&options.version, "expected-version", 0, "expected Goal version")
@@ -368,7 +393,7 @@ func newGoalFileCommand(runtime runtime, action string) *cobra.Command {
 			if err := json.Unmarshal(raw, &body); err != nil {
 				return fmt.Errorf("%s request is invalid JSON", action)
 			}
-			return runtime.executeAPI(cmd, requestSpec{method: http.MethodPost, path: "/v1/goals/" + args[0] + "/" + action, body: body})
+			return runtime.executeAPI(cmd, requestSpec{method: http.MethodPost, path: "/v1/goals/" + url.PathEscape(args[0]) + "/" + action, body: body})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "path to the JSON request")
@@ -379,10 +404,18 @@ func newGoalFileCommand(runtime runtime, action string) *cobra.Command {
 func newWorkCommand(runtime runtime) *cobra.Command {
 	parent := groupCommand("work", "Inspect and control Work Items")
 	parent.AddCommand(
-		getCommand("list <goal-id>", "List Work Items for a Goal", func(id string) string { return "/v1/goals/" + id + "/work-items" }, runtime),
+		getCommand("get <work-id>", "Read Work Item state and current version", func(id string) string { return "/v1/work-items/" + url.PathEscape(id) }, runtime),
+		getCommand("list <goal-id>", "List Work Items for a Goal", func(id string) string { return "/v1/goals/" + url.PathEscape(id) + "/work-items" }, runtime),
 		newWorkControlCommand(runtime, "retry"),
 		newWorkControlCommand(runtime, "cancel"),
 	)
+	return parent
+}
+
+func newGateCommand(runtime runtime) *cobra.Command {
+	parent := groupCommand("gate", "Inspect a Human Gate")
+	parent.AddCommand(getCommand("get <gate-id>", "Read Gate facts and current version", func(id string) string { return "/v1/gates/" + url.PathEscape(id) }, runtime))
+	parent.AddCommand(newGateResumeCommand(runtime))
 	return parent
 }
 
@@ -398,7 +431,7 @@ func newWorkControlCommand(runtime runtime, action string) *cobra.Command {
 			}
 			return runtime.executeAPI(cmd, requestSpec{
 				method: http.MethodPost,
-				path:   "/v1/work-items/" + args[0] + "/" + action,
+				path:   "/v1/work-items/" + url.PathEscape(args[0]) + "/" + action,
 				body:   map[string]any{"expected_version": options.version, "reason": options.reason},
 			})
 		},

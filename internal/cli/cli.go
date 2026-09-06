@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -121,12 +122,17 @@ func newRootCommand(runtime runtime) *cobra.Command {
 		newRunCommand(runtime),
 		newStatusCommand(runtime),
 		newLogsCommand(runtime),
+		newInvocationsCommand(runtime),
+		newContextCommand(runtime),
+		newIDsCommand(runtime),
+		newGateCommand(runtime),
 		newGatesCommand(runtime),
 		newApproveCommand(runtime),
 		newGoalControlCommand(runtime, "pause"),
 		newGoalControlCommand(runtime, "resume"),
 		newGoalControlCommand(runtime, "cancel"),
 		newReportCommand(runtime),
+		newExportCommand(runtime),
 		newCleanCommand(runtime),
 		newConfigCommand(),
 		newBenchmarkCommand(runtime),
@@ -135,6 +141,7 @@ func newRootCommand(runtime runtime) *cobra.Command {
 		newWorkCommand(runtime),
 		newVersionCommand(),
 	)
+	configureIdentifierCompletion(root, runtime)
 	return root
 }
 
@@ -166,6 +173,7 @@ type requestSpec struct {
 	body    any
 	watch   bool
 	wait    bool
+	human   bool
 	timeout time.Duration
 }
 
@@ -181,6 +189,9 @@ func (runtime runtime) executeAPI(cmd *cobra.Command, request requestSpec) error
 	if request.watch {
 		ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		if request.human {
+			return runtime.watchHumanGoal(ctx, cmd, client, request.path)
+		}
 		status, streamErr := client.Stream(ctx, request.path, cmd.OutOrStdout())
 		if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
 			return fail(6, fmt.Errorf("API stream failed: %w", streamErr))
@@ -216,9 +227,26 @@ func (runtime runtime) executeAPI(cmd *cobra.Command, request requestSpec) error
 		if status >= 400 {
 			writer = cmd.ErrOrStderr()
 		}
-		prettyJSON(writer, response)
+		if request.human && !request.wait && status >= 200 && status < 300 {
+			text, err := renderHumanGoal(response, humanCommand(cmd))
+			if err != nil {
+				return fail(5, err)
+			}
+			if _, err := fmt.Fprint(writer, text); err != nil {
+				return fail(5, err)
+			}
+		} else {
+			prettyJSON(writer, response)
+		}
 	}
 	if request.wait && status >= 200 && status < 300 {
+		var feedback *humanFeedback
+		if request.human {
+			feedback = &humanFeedback{command: humanCommand(cmd)}
+			if err := feedback.write(cmd.ErrOrStderr(), response, runtime.now(), true); err != nil {
+				return fail(5, err)
+			}
+		}
 		goalID, state, waiting, decodeErr := createdGoalState(response)
 		if decodeErr != nil {
 			return fail(5, fmt.Errorf("invalid Goal creation response: %w", decodeErr))
@@ -231,17 +259,17 @@ func (runtime runtime) executeAPI(cmd *cobra.Command, request requestSpec) error
 		case state == "COMPLETED":
 			return nil
 		default:
-			return runtime.waitForGoal(ctx, cmd, client, goalID)
+			return runtime.waitForGoal(ctx, cmd, client, goalID, feedback)
 		}
 	}
 	return silentStatus(exitCode(status, response))
 }
 
-func (runtime runtime) waitForGoal(ctx context.Context, cmd *cobra.Command, client apiClient, goalID string) error {
+func (runtime runtime) waitForGoal(ctx context.Context, cmd *cobra.Command, client apiClient, goalID string, feedback *humanFeedback) error {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		status, response, err := client.Do(ctx, http.MethodGet, "/v1/goals/"+goalID, "", nil)
+		status, response, err := readGoalObservation(ctx, client, "/v1/goals/"+url.PathEscape(goalID))
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return silentStatus(5)
@@ -256,7 +284,13 @@ func (runtime runtime) waitForGoal(ctx context.Context, cmd *cobra.Command, clie
 		if decodeErr != nil {
 			return fail(5, fmt.Errorf("invalid Goal status response: %w", decodeErr))
 		}
-		if waiting || state == "WAITING" || state == "CANCELLED" || state == "COMPLETED" {
+		terminal := waiting || state == "WAITING" || state == "CANCELLED" || state == "COMPLETED"
+		if feedback != nil {
+			if err := feedback.write(cmd.ErrOrStderr(), response, runtime.now(), terminal); err != nil {
+				return fail(5, err)
+			}
+		}
+		if terminal {
 			prettyJSON(cmd.OutOrStdout(), response)
 			return silentStatus(exitCode(status, response))
 		}

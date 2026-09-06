@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/monshunter/xgoal/internal/app"
+	"github.com/monshunter/xgoal/internal/exporter"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/report"
@@ -180,6 +181,28 @@ func runRealCLICurrentDirectoryGoals(t *testing.T, withServices bool) {
 	}
 	if historical := invoke("report", reports[0].Goal.ID); !strings.Contains(historical, reportHashes[0]) {
 		t.Fatal("second Goal changed the first immutable report")
+	}
+	auditPath := filepath.Join(root, "audit")
+	invoke("export", reports[0].Goal.ID, "--output", auditPath)
+	manifestBytes, err := os.ReadFile(filepath.Join(auditPath, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest exporter.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	reportCount, supplied := 0, false
+	for _, owner := range manifest.Owners {
+		if owner.Kind == "report" {
+			reportCount++
+		}
+		if owner.Kind == "planner" && strings.Contains(owner.ArtifactStatus, "provided-proposal") {
+			supplied = true
+		}
+	}
+	if reportCount != 2 || !supplied {
+		t.Fatalf("full export lost historical or supplied-proposal Goal: reports=%d supplied=%v", reportCount, supplied)
 	}
 	invoke("daemon", "stop", "--timeout", "10s")
 	started = false

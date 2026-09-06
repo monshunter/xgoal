@@ -109,11 +109,23 @@ Probe 成功后仍核对本次启动进程的 PID/start identity、存活、退�
 
 新增 Invocation 索引（与已有 process_invocations 分工：前者是 Agent 会话观测，后者是全部子进程的恢复屏障）。字段包含 ID、Goal、owner kind/id/generation、role/Profile、输入与有效配置引用、Provider目录、状态、已持久事件游标/截断状态。规划、Work、Review、Acceptance 在调用前登记；完成后关联会话/结果。进程恢复通过原有 owner 判断安全，不依赖日志索引是否追上。
 
-Adapter 已把脱敏公开事件写为有序不可变文件，复用这些文件作为日志事实，不再逐 token 复制到全局业务 events。EventSink 使用有界异步通知触发索引刷新，不允许慢订阅者阻塞 Adapter/心跳；队列满丢通知不丢已落盘事件，通过目录序号恢复索引。日志 I/O 失败/限额明确标记并取消该会话，回收仍独立执行。stdout/stderr 均有上限与脱敏，截断消息占用预留空间。
+Adapter 把脱敏的原生事件写为有序不可变文件，查询时按公开字段投影并排除 thinking/reasoning 等私有内容；复用这些文件作为日志事实，不再逐 token 复制到全局业务 events。EventSink 使用有界异步通知触发索引刷新，不允许慢订阅者阻塞 Adapter/心跳；队列满丢通知不丢已落盘事件，通过目录序号恢复索引。日志 I/O 失败/限额明确标记并取消该会话，回收仍独立执行。stdout/stderr 均有上限与脱敏，截断消息占用预留空间。
 
-Control 提供 Goal 的 invocations、Invocation context 和 logs 页/流（稳定 invocation ID + sequence 游标）。只读解析已登记的私有路径和已校验文件，拒绝任意路径读取；短 ID 定位有唯一性约束。上下文展示 Packet、指令输入、有效配置、公开消息/工具事件和已观察模型，私有推理不展示。
+Invocation 表使用 migration 0012，输入身份与观测分开；索引的终态是调用返回观测，不能解释为 Goal 完成或进程已确认退出。索引维护冲突按当前版本有界重读，刷新失败不改变原生调用结果；恢复把缺少返回观测的调用标为 interrupted，进程安全仍由原归属机制决定。每次文件补扫最多 256 条，通知容量为 1 并合并刷新；读者可继续补扫。stdout 与 stderr 使用各自的连续序号，游标必须同时携带 Invocation ID 与 stream。stderr 按完整行脱敏后发布不可变事件，单行 64 KiB、总量 4 MiB，与 stdout 共享调用总额度；输出超限终止调用并在额度外保留最多 4 KiB 的状态标记。单 Invocation 每个流最多 16384 条，单持久事件读取最多 16 MiB。文件操作用固定 runtime root 和逐级目录检查，拒绝链接、路径逃逸、非普通文件或公开权限。
+
+Control 提供 Goal 的 invocations、Invocation context 和 logs 页/流（稳定 invocation ID + sequence 游标）。只读解析已登记的私有路径和已校验文件，拒绝任意路径读取；短 ID 定位有唯一性约束。上下文展示 Packet、指令输入、有效配置、公开消息/工具事件和已观察模型，私有推理不展示。Packet 按注册字节哈希核验；Provider 元数据按角色核对 owner、generation、Tree、配置及委派身份，结果按对应角色协议严格解码。结构性日志缺失阻止 complete，采集限额错误保留已落盘日志。NDJSON 客户端核对身份、连续游标及明确终态，到达持久边界后才成功；HTTP 200 后的错误帧或提前 EOF 仍返回失败。
 
 CLI 保留旧 logs <attempt-id> 和默认 JSON，增加按 Goal/role/invocation 查询及 --follow/游标；显式 --format human 展示概览。wait 的人类反馈写 stderr，最终 JSON/退出码保持；heartbeat、last_output、last_material_progress 三个时间独立。新增 ID 补全/唯一前缀解析、版本展示和 Gate 决定后续作便利参数，变更仍传版本 CAS；歧义返回候选且不写入。init 从 go.mod/package.json/已知 Python 测试配置发现入口，不执行依赖安装，未知项目输出覆盖缺口及准备命令。
+
+Activity 是既有表的只读派生投影，不新增进度状态机：租约 Heartbeat、持久日志 LastOutput、受信 MaterialProgress 分列。进展来源为冻结 Goal Revision、生效 Plan、Gate 决定、已观察且 Tree 改变的 Promotion、已关闭 Finding、同 Revision/config/Tree/Definition 的 Validator 结果变化、移除采集 ID/时间后的环境事实变化，以及已发布 Final Report。相同验证结果和相同环境事实不因重复执行而刷新时间，所有关联按 Goal 的 Work/Attempt/Workspace 归属隔离。状态查询在 Store 连接外对最新 Invocation 做最多 2s、每流256条的补扫，使 stderr-only 输出可见；索引错误作为观测诊断，不改变 Goal 状态。human wait 输出到 stderr，变化反馈限频1s、无变化15s再提示、终态立即提示；human watch 每秒读取状态，JSON watch 保持原事件游标协议。Next 命令保留显式项目/状态目录/socket 参数。
+
+ID 查询限定 Goal/Work/Gate/Invocation 四类，按字面前缀匹配，精确 ID 优先；每页最多100项并标记 more。读取完整 Work/Gate 可获取版本，Shell 动态补全有500ms请求期限。新歧义写请求在记录幂等意图前拒绝；此前已完成的请求即使后来前缀变歧义仍重放原响应。流式读取只解析一次身份，Invocation 响应以明确完整 ID 绑定客户端帧校验，后续出现相似 ID 不能切换订阅。
+
+PLAN-015 的续作入口为 `POST /v1/gates/{id}/resume`，请求同时携带 `expected_gate_version` 和 `expected_owner_version`。CLI `approve --resume --owner-version` 顺序执行决定与续作，第二步固定第一次返回的完整 Gate ID 和版本；`gate resume` 只重试续作。两步各有幂等请求，不自动刷新 CAS；部分成功保留决定并给出读取当前状态后的精确续作入口。
+
+Planner 的新请求及 Packet 保存一个 `prior`：上代 Effect ID/request hash/generation、退出后的 Observation（问题、失败或 Proposal）及已批准答案。事务核对同代 Gate、配置、旧现场、必要 Gate 和进程归属后消费一次并创建下一代；实际 BeginPlanning 再核对 Prior Tree/CheckoutIdentity 和必要 Gate。现场或权限变化进入可诊断 Waiting。已消费答案的 generation 中断后需要新决定，不能由恢复重复使用有限授权。Work 复用原现场重试事务，同时核对所选 Gate 版本与最新失败 Attempt；不根据任意 Work ID 代替权限或信任 Gate 的专属消费者。
+
+Final owner 续作核对当前 Goal version/Revision/config/Tree、最新 Acceptance Effect、场景归属、必要 Gate、进程退出和完整 checkout。Goal 恢复与答案消费保持原 owner 边界：新 Acceptance Effect 创建时才原子消费，重新准备环境失败不丢失答案。新 Packet 的可选 Prior 保留上一 Invocation、Observation hash 与完整公开 Observation；历史迟到结果可以作为明确标记的反馈，准确人工决定才可启动新会话，旧 Claim 不能恢复成当前 Evidence，`replaySafe` 不能自动重放历史 Claim。
 
 ## 一致导出与迁移
 
@@ -122,6 +134,16 @@ CLI 保留旧 logs <attempt-id> 和默认 JSON，增加按 Goal/role/invocation 
 包含完整项目数据库快照时，文件闭包也必须覆盖快照内所有 Goal 的被引用制品；不能只复制选定 Goal 文件而将整库标成完整备份。选定 Goal 的结构化视图是操作焦点，导出范围和其他 Goal 包含事实由 manifest 明示。
 
 使用私有临时导出目录，snapshot/data/files/manifest 的清单最后写入并 fsync/rename；任一缺失/损坏/清理竞态导致 incomplete，不发布 complete。clean 与导出串行或有引用保护，避免导出期间主动删除引用。导出仅本地只读，不提供导入执行或跨机器进程恢复；不要复制宿主凭据、未脱敏原生会话库或可写工作区冒充完成制品。
+
+具体入口为 `export <goal> --output <new-directory>` / `POST /v1/goals/{id}/exports`。输出固定为 `snapshot/state.db`、`data/goal.json`、`files/<runtime-relative-path>` 和 `manifest.json`；完整项目范围在清单中显式说明。独立 WAL-aware `mode=ro` 连接执行 VACUUM INTO，完成副本通过 quick_check/foreign_key_check 后以 immutable 方式读取；不能对在线源使用 immutable，因为它会忽略 WAL。边界保存复制起止区间和各 aggregate 的最大 Event ID/sequence；不用可能被 VACUUM 重排的 rowid 冒充全局时间。此机制沿用 [SQLite VACUUM INTO 的一致快照语义](https://www.sqlite.org/lang_vacuum.html)。
+
+快照 owner 枚举覆盖所有 Attempt Packet、Patch manifest/对象、Validator Receipt/输出、Review Packet/Result、SCENARIO Evidence manifest/文件、Environment JSON、Final Report、Invocation 和 Planner/Acceptance Effect、未清理 Workspace marker 及已登记迁移备份。单一受限读取器检查运行目录下的相对路径、目录/文件权限、符号链接、常规文件和大小；复制读取到的同一份字节，再用协议 owner/hash 与副本校验闭包。源码路径、Harness 文件、Git Tree/commit 及可写工作目录是事实引用，不变成任意宿主文件复制入口。
+
+Invocation 日志边界是快照 cursor/字节数，公开投影同时记录源字节 SHA-256 和导出字节 SHA-256；更晚的事件不追入快照。未登记 hash 的 Provider metadata/result 文件及旧未索引流明确排除，冻结输入和观察结果仍在 DB。初始 Planner 的 BeginPlanning 先于预检/Packet；用户提供 Proposal 时根本没有 Provider Packet。未索引且无返回 Proposal/session 的缺失输入标为 preflight/legacy unknown，不能当作丢失已封存制品；已登记 Invocation 或已返回的旧 Provider 输入仍要求存在。已 CLEANED marker 标为 retired。PENDING_RENAME Report 从快照 blob 生成并保留原状态；COMMITTED 报告必须验证在线文件，不能回填遮盖损坏。
+
+Control 使用同一可取消互斥串行化 clean 与整个导出，从创建快照前持有到文件复制/发布完成；普通状态、Heartbeat/CAS/取消不获取此锁。文件最后 fsync，Darwin `RENAME_EXCL` / Linux `RENAME_NOREPLACE` 原子发布且不覆盖任何已存在目录；不支持时明确失败。输出位于项目及状态目录外。总时限 5 分钟，其中快照 2 分钟；文件总量 2 GiB，文件/引用各 100,000，引用 JSON 256 MiB，数据库/迁移备份单文件 512 MiB，其余沿各 owner 限额并以 128 MiB 为上限。失败保留私有未完成目录；公开错误入口再次脱敏，再进入 API/幂等响应。
+
+Provider 进程退出与公开输出落盘是两个观察阶段。Supervisor 仍核对进程组退出并保留调用超时/终止 grace；Go `exec.WaitDelay` 设为 5 秒，超期关闭未完成管道并保留错误，避免把短暂 fsync 延迟错误归类为 Provider 失败。这不是任意 `io.Writer` 的硬截止，已开始的本地写入仍遵循操作系统 I/O 完成语义；Terminate 的既有期限到达后保留 Unknown 屏障。未完成或失败的输出仍不当作完整成功，不以进程 exit 0 跳过日志错误。
 
 新增 migration 0011 扩展 failure CHECK 并保留旧 BUDGET_EXHAUSTED 等历史行（不恢复运行功能），重建引用它的 reconcile 表时先复制关系、删除旧 child/parent、重命名并 FK 检查；追加 Work 自动计数。后续 Invocation 表按独立 migration 追加。旧 migrations 不修改。可选 JSON 字段 omitempty，历史 Definition/Packet/Config 可读取；新解释器信任绑定故意改变 Definition hash，当前运行须重新验收。旧冲突配置给出具体字段和迁移步骤，不静默容忍。
 

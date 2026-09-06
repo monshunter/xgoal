@@ -14,6 +14,7 @@ import (
 	"github.com/monshunter/xgoal/internal/config"
 	"github.com/monshunter/xgoal/internal/project"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
+	"github.com/monshunter/xgoal/internal/testdiscovery"
 )
 
 type Options struct {
@@ -24,16 +25,17 @@ type Options struct {
 }
 
 type Result struct {
-	ProjectRoot    string `json:"project_root"`
-	ProjectID      string `json:"project_id"`
-	GitCommonDir   string `json:"git_common_dir"`
-	ConfigPath     string `json:"config_path"`
-	StateDir       string `json:"state_dir"`
-	BaseBranch     string `json:"base_branch"`
-	CreatedConfig  bool   `json:"created_config"`
-	CreatedIgnore  bool   `json:"created_ignore"`
-	IsolationLevel string `json:"isolation_level"`
-	RemoteChanges  bool   `json:"remote_changes"`
+	ValidationPreparation testdiscovery.Result `json:"validation_preparation"`
+	ProjectRoot           string               `json:"project_root"`
+	ProjectID             string               `json:"project_id"`
+	GitCommonDir          string               `json:"git_common_dir"`
+	ConfigPath            string               `json:"config_path"`
+	StateDir              string               `json:"state_dir"`
+	BaseBranch            string               `json:"base_branch"`
+	CreatedConfig         bool                 `json:"created_config"`
+	CreatedIgnore         bool                 `json:"created_ignore"`
+	IsolationLevel        string               `json:"isolation_level"`
+	RemoteChanges         bool                 `json:"remote_changes"`
 }
 
 func Initialize(ctx context.Context, options Options) (Result, error) {
@@ -111,8 +113,13 @@ func Initialize(ctx context.Context, options Options) (Result, error) {
 	if err := ensureGitIgnore(root); err != nil {
 		return Result{}, err
 	}
+	configuration, err := config.LoadFile(configPath)
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
-		ProjectRoot: root, ProjectID: paths.ProjectID, GitCommonDir: paths.CommonDir,
+		ValidationPreparation: testdiscovery.Inspect(root, &configuration),
+		ProjectRoot:           root, ProjectID: paths.ProjectID, GitCommonDir: paths.CommonDir,
 		ConfigPath: configPath, StateDir: paths.StateDir, BaseBranch: baseBranch,
 		CreatedConfig: createdConfig, CreatedIgnore: createdIgnore,
 		IsolationLevel: "L0", RemoteChanges: false,
@@ -127,9 +134,9 @@ func generatedConfig(name, baseBranch string, commands map[string]string, goProj
 	if commands["claude"] != "" {
 		fmt.Fprintf(&agents, "  - id: claude\n    adapter: claude-cli\n    command: %s\n    roles: [planner, implementer, reviewer]\n    timeout: 45m\n    permissionMode: dontAsk\n    providerTransport: allow\n    credentialSource: cli-session\n    activeProbe: explicit\n    environmentAllowlist: [PATH, HOME, TMPDIR]\n", strconv.Quote(commands["claude"]))
 	}
-	validator := "  - id: git-diff-check\n    type: command\n    phases: [change, final]\n    argv: [git, diff, --check]\n    timeout: 2m\n    required: true\n"
+	validator := "  - id: git-diff-check\n    description: Whitespace diff checks only; does not verify business behavior.\n    type: command\n    phases: [change, final]\n    argv: [git, diff, --check]\n    timeout: 2m\n    required: true\n"
 	if goProject {
-		validator += "  - id: go-test-all\n    type: command\n    phases: [change, final]\n    argv: [go, test, ./...]\n    timeout: 20m\n    required: true\n"
+		validator += "  - id: go-test-all\n    description: Runs repository Go tests; inspect their assertions for business coverage.\n    type: command\n    phases: [change, final]\n    argv: [go, test, ./...]\n    timeout: 20m\n    required: true\n"
 	}
 	return fmt.Sprintf(`apiVersion: xgoal.dev/v1alpha1
 kind: Project

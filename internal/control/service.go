@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monshunter/xgoal/internal/adapter"
@@ -34,6 +35,7 @@ import (
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
 	"github.com/monshunter/xgoal/internal/supervisor"
+	"github.com/monshunter/xgoal/internal/testdiscovery"
 	"github.com/monshunter/xgoal/internal/workspace"
 )
 
@@ -46,6 +48,8 @@ type Service struct {
 	configuration *config.Config
 	configError   error
 	lifecycle     Lifecycle
+	artifactOnce  sync.Once
+	artifactToken chan struct{}
 }
 
 // Lifecycle is the daemon-owned execution signal surface. Control operations
@@ -107,8 +111,13 @@ func (service *Service) Events(ctx context.Context, goalID, afterID string, limi
 }
 
 func (service *Service) Execute(ctx context.Context, operation api.Operation) (int, any, error) {
-	if errors.Is(service.configError, config.ErrMigrationRequired) && operation.Name != "goal.cancel" && operation.Name != "work.cancel" {
+	if errors.Is(service.configError, config.ErrMigrationRequired) && operation.Name != "goal.cancel" && operation.Name != "work.cancel" && operation.Name != "goal.exports" {
 		return 0, nil, &api.APIError{Status: http.StatusConflict, Code: "CONFIG_MIGRATION_REQUIRED", Message: service.configError.Error()}
+	}
+	var resolveErr error
+	operation, resolveErr = service.ResolveResource(ctx, operation)
+	if resolveErr != nil {
+		return 0, nil, resolveErr
 	}
 	if operation.Name == "goal.pause" || operation.Name == "goal.resume" || operation.Name == "goal.replan" || operation.Name == "goal.finalize" {
 		model, err := service.store.GoalExecutionModel(ctx, operation.ResourceID)
@@ -120,6 +129,8 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 		}
 	}
 	switch operation.Name {
+	case "goal.exports":
+		return service.exportGoal(ctx, operation)
 	case "project.init":
 		var request struct{}
 		if err := api.DecodeStrict(operation.Body, &request); err != nil {
@@ -195,6 +206,8 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 			return 0, nil, mapStoreError(err)
 		}
 		return http.StatusOK, gate, nil
+	case "gate.resume":
+		return service.resumeGate(ctx, operation)
 	case "work.retry":
 		var request versionRequest
 		if err := api.DecodeStrict(operation.Body, &request); err != nil || request.ExpectedVersion <= 0 {
@@ -244,6 +257,11 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 		if err := api.DecodeStrict(operation.Body, &request); err != nil {
 			return 0, nil, invalid("invalid clean request", err)
 		}
+		release, err := service.lockArtifacts(ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer release()
 		candidates, err := service.store.CleanableWorkspaces(ctx)
 		if err != nil {
 			return 0, nil, mapStoreError(err)
@@ -280,14 +298,33 @@ func (service *Service) Execute(ctx context.Context, operation api.Operation) (i
 }
 
 func (service *Service) Query(ctx context.Context, operation api.Operation) (int, any, error) {
+	var err error
+	operation, err = service.ResolveResource(ctx, operation)
+	if err != nil {
+		return 0, nil, err
+	}
 	switch operation.Name {
+	case "identifiers":
+		return service.queryIdentifiers(ctx, operation)
+	case "work.get":
+		item, err := service.store.WorkItem(ctx, operation.ResourceID)
+		return http.StatusOK, item, mapStoreError(err)
+	case "gate.get":
+		item, err := service.store.Gate(ctx, operation.ResourceID)
+		return http.StatusOK, item, mapStoreError(err)
+	case "goal.invocations":
+		return service.queryInvocations(ctx, operation)
+	case "invocation.context", "invocation.logs":
+		return service.queryInvocation(ctx, operation)
 	case "doctor":
 		return http.StatusOK, service.Doctor(ctx), nil
 	case "goal.get":
+		observationError := service.refreshLatestInvocation(ctx, operation.ResourceID)
 		status, err := service.store.GoalStatus(ctx, operation.ResourceID)
 		if err != nil {
 			return 0, nil, mapStoreError(err)
 		}
+		status.Activity.ObservationError = observationError
 		response := map[string]any{
 			"goal_id": status.Goal.ID, "state": status.Goal.State, "active_revision_id": status.Goal.ActiveRevisionID,
 			"goal_revision": status.GoalRevision,
@@ -299,6 +336,7 @@ func (service *Service) Query(ctx context.Context, operation api.Operation) (int
 			"validation_summary": status.Validation, "latest_material_progress_hash": status.LatestProgressHash,
 			"execution_boundary": service.executionBoundary(),
 			"authority":          status.Authority,
+			"activity":           status.Activity,
 			"execution_model":    status.ExecutionModel,
 		}
 		blocker := service.executionBlocker()
@@ -535,7 +573,8 @@ func (service *Service) Doctor(ctx context.Context) map[string]any {
 	}
 	boundary := service.executionBoundary()
 	return map[string]any{
-		"project_root": service.projectRoot, "store": service.store.Info(), "tools": tools,
+		"validation_preparation": testdiscovery.Inspect(service.projectRoot, service.configuration),
+		"project_root":           service.projectRoot, "store": service.store.Info(), "tools": tools,
 		"os": runtime.GOOS, "arch": runtime.GOARCH, "git": gitFacts, "config_hash": service.configHash,
 		"execution_available": service.executionBlocker() == "", "execution_blocker": service.executionBlocker(),
 		"agent_profiles": profiles, "role_selections": selections, "validators": validators, "unmet_capabilities": unmet,
@@ -754,6 +793,10 @@ func goalView(goal domain.Goal) map[string]any {
 
 func mapStoreError(err error) error {
 	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, sqlite.ErrInvalidIdentifierQuery):
+		return invalid("invalid identifier query", err)
 	case errors.Is(err, sqlite.ErrInvalidPlanningProposal):
 		return invalid("planning proposal failed deterministic validation", err)
 	case errors.Is(err, sqlite.ErrPlanningBlocked):
@@ -762,6 +805,8 @@ func mapStoreError(err error) error {
 		return &api.APIError{Status: http.StatusConflict, Code: "CONFIGURATION_CHANGED", Message: err.Error()}
 	case errors.Is(err, sqlite.ErrCheckoutBusy):
 		return &api.APIError{Status: http.StatusConflict, Code: "PROJECT_BUSY", Message: err.Error()}
+	case errors.Is(err, sqlite.ErrCheckoutConflict):
+		return checkoutAPIError(err)
 	case errors.Is(err, basestore.ErrNotFound):
 		return &api.APIError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: err.Error()}
 	case errors.Is(err, basestore.ErrIdempotencyConflict), errors.Is(err, basestore.ErrConflict), errors.Is(err, basestore.ErrAlreadyExists), errors.Is(err, basestore.ErrActiveLease), errors.Is(err, basestore.ErrStaleLease):

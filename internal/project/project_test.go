@@ -344,6 +344,10 @@ func TestOwnershipValidatesPathsBeforeWritingAndRejectsLinkedLocks(t *testing.T)
 	if err := os.WriteFile(target, []byte("preserve"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// Exercise rejection before any chmod even under a restrictive user umask.
+	if err := os.Chmod(target, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(target, filepath.Join(lockdir, "owner.lock")); err != nil {
 		t.Fatal(err)
 	}
@@ -351,9 +355,9 @@ func TestOwnershipValidatesPathsBeforeWritingAndRejectsLinkedLocks(t *testing.T)
 		owner.Close()
 		t.Fatal("linked lock accepted")
 	}
-	info, _ := os.Stat(target)
-	if info.Mode().Perm() != 0644 {
-		t.Fatal("linked file permissions changed")
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0644 {
+		t.Fatalf("linked target no longer has mode 0644: %v %v", info, err)
 	}
 }
 
@@ -438,6 +442,10 @@ func TestOwnershipRejectsHardlinkedLockWithoutChangingTarget(t *testing.T) {
 	if err := os.WriteFile(target, []byte("preserve"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// Keep the precondition independent of the test runner's umask.
+	if err := os.Chmod(target, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Link(target, filepath.Join(dir, "owner.lock")); err != nil {
 		t.Fatal(err)
 	}
@@ -445,9 +453,9 @@ func TestOwnershipRejectsHardlinkedLockWithoutChangingTarget(t *testing.T) {
 		owner.Close()
 		t.Fatal("hardlinked lock accepted")
 	}
-	info, _ := os.Stat(target)
-	if info.Mode().Perm() != 0644 {
-		t.Fatal("hardlinked target permissions changed")
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0644 {
+		t.Fatalf("hardlinked target no longer has mode 0644: %v %v", info, err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,8 @@ func (runtime *Adapter) Plan(ctx context.Context, invocation planner.Invocation,
 	defer cancel()
 	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
 	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("plans", invocation.InvocationID)), sink, runtime.clock, limiter, cancel)
-	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
+	stream.runtimeRoot = filepath.Dir(filepath.Dir(runtime.root))
+	stderr := &boundedStderr{limiter: limiter, cancel: cancel, live: callindex.NewStderrLog(filepath.Dir(filepath.Dir(runtime.root)), directory)}
 	arguments := []string{runtime.binary, "--ask-for-approval", "never", "--sandbox", "read-only", "--cd", invocation.WorkDir}
 	arguments = append(arguments, executionArguments(invocation.ExecutionConfig)...)
 	arguments = append(arguments, "exec", "--json", "--output-schema", schemaPath, "--color", "never", "-")

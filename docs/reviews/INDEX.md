@@ -57,4 +57,6 @@
 | REVIEW-052-profile-harness | REVIEW-052：PLAN-013 Agent Profile 与项目 Harness 变更审查 | [REVIEW-052-profile-harness.md](REVIEW-052-profile-harness.md) |
 | REVIEW-053-acceptance-effect-design | REVIEW-053：Acceptance Packet 与 Effect 生命周期设计审查 | [REVIEW-053-acceptance-effect-design.md](REVIEW-053-acceptance-effect-design.md) |
 | REVIEW-054-runtime-acceptance | REVIEW-054：PLAN-014 受信环境与独立 Acceptance 变更审查 | [REVIEW-054-runtime-acceptance.md](REVIEW-054-runtime-acceptance.md) |
+| REVIEW-055-plan-015-verification | REVIEW-055：PLAN-015 验收资源与时长调整 Plan Review | [REVIEW-055-plan-015-verification.md](REVIEW-055-plan-015-verification.md) |
+| REVIEW-056-runtime-observation-and-closure | REVIEW-056：PLAN-015 运行观测、用户操作与 OBJ-004 收口 Change Review | [REVIEW-056-runtime-observation-and-closure.md](REVIEW-056-runtime-observation-and-closure.md) |
 <!-- AGENT-HARNESS:END INDEX -->

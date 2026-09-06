@@ -16,6 +16,7 @@ import (
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/environment"
 	"github.com/monshunter/xgoal/internal/harness"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/redact"
 	basestore "github.com/monshunter/xgoal/internal/store"
@@ -79,6 +80,11 @@ func (engine *Engine) invokeAcceptance(ctx context.Context, goal domain.Goal, re
 		}
 		if old.Packet.GoalRevisionHash == revision.Hash && old.Packet.ConfigHash == engine.configHash && old.Packet.TreeHash == snapshot.InputTree {
 			previous = old.Packet.ID
+			var observation acceptance.Observation
+			if err := json.Unmarshal(prior.ObservationJSON, &observation); err != nil {
+				return empty, false, err
+			}
+			packet.Prior = &acceptance.PriorContext{InvocationID: previous, ObservationHash: prior.ObservationHash, Observation: observation}
 			gate, err := engine.store.Gate(ctx, "gate_"+prior.ID)
 			if err == nil && gate.State == domain.GateApproved && gate.Decision == domain.GateAllow && gate.Used == 0 {
 				packet.Decisions = []protocol.PacketDecision{{GateID: gate.ID, GateVersion: gate.Version, Answer: redact.String(gate.DecisionReason)}}
@@ -115,9 +121,14 @@ func (engine *Engine) invokeAcceptance(ctx context.Context, goal domain.Goal, re
 	values := profileEnvironment(profile)
 	values["XGOAL_SCENARIO_DIR"] = filepath.Join(handle.Root, "scenario")
 	values["XGOAL_ENVIRONMENT_ID"] = handle.ID
-	prompt := "Act as the xgoal Acceptance worker. Read the immutable Acceptance Packet at " + path + `. Execute only the listed scenario steps with the profile's explicitly allowed tools. The Kernel has prepared the environment and owns starting and stopping services. Read source as needed, but do not write source, scripts, configuration, Git metadata or xgoal state. Only approved test data and scenario outputs may change. Use the trusted client scripts already in the repository; do not invent shell commands or tools. The packet's decisions are scoped answers, not new authority. Report completed, blocked or failed as an AgentResult. If any account, permission or external condition is missing, return blocked with the precise question. Do not request native CLI approval or wait for interactive input. Report observations honestly; your result is a Claim and the Kernel will independently run the business assertions.`
+	prompt := "Act as the xgoal Acceptance worker. Read the immutable Acceptance Packet at " + path + `. Execute only the listed scenario steps with the profile's explicitly allowed tools. The Kernel has prepared the environment and owns starting and stopping services. XGOAL_SCENARIO_DIR and XGOAL_ENVIRONMENT_ID are already inherited by your tools and match the Packet. Invoke the listed trusted client commands exactly, without export, inline environment assignments, wrappers or compound shell commands; those changes may not match the allowed tool rules. Read source as needed, but do not write source, scripts, configuration, Git metadata or xgoal state. Only approved test data and scenario outputs may change. Use the trusted client scripts already in the repository; do not invent shell commands or tools. The packet's decisions are scoped answers, not new authority. Report completed, blocked or failed as an AgentResult. If any account, permission or external condition is missing, return blocked with the precise question. Do not request native CLI approval or wait for interactive input. Report observations honestly; your result is a Claim and the Kernel will independently run the business assertions.`
 	invocation := acceptance.Invocation{InvocationID: id, ProfileID: profile.ID, GoalRevisionHash: revision.Hash, ConfigHash: engine.configHash, TreeHash: snapshot.InputTree, PacketPath: path, PacketHash: hash, WorkDir: snapshot.Path, Prompt: prompt, OutputSchema: schema, ExecutionConfig: &effective, Environment: values, Timeout: profile.Timeout.Duration, MaxOutputBytes: maxAgentOutput}
-	execution, callErr := acceptor.Accept(ctx, invocation, nil)
+	tracker, err := engine.beginInvocation(ctx, callindex.Input{ID: id, GoalID: goal.ID, OwnerKind: "final", OwnerID: effect.ID, Generation: generation, Role: "acceptance", ProfileID: profile.ID, Provider: profile.Adapter, GoalRevisionHash: revision.Hash, InputTree: snapshot.InputTree, PacketHash: hash, Prompt: prompt, ExecutionConfig: effective}, path, schema)
+	if err != nil {
+		return effect, false, err
+	}
+	execution, callErr := acceptor.Accept(ctx, invocation, tracker.sink())
+	callErr = tracker.finish(ctx, execution.SessionID, string(execution.Result.Status), callErr)
 	cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer stop()
 	observation := acceptance.Observation{SessionID: execution.SessionID, ExecutionStopped: !errors.Is(callErr, supervisor.ErrProcessUnconfirmed)}

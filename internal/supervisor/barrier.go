@@ -131,7 +131,11 @@ func wrapperCommand(spec Command, gate *os.File) (*exec.Cmd, error) {
 	command.Env = append(withoutBarrierEnvironment(spec.Env), barrierEnvironment+"=1")
 	command.Stdin, command.Stdout, command.Stderr = spec.Stdin, spec.Stdout, spec.Stderr
 	command.ExtraFiles = []*os.File{gate}
-	command.WaitDelay = 250 * time.Millisecond
+	// Event sinks fsync immutable output. A healthy writer can outlive the
+	// process by more than a scheduler tick, especially under concurrent disk
+	// load. Keep orphan-pipe draining bounded without mistaking a short final
+	// flush for process failure; process termination retains its own grace.
+	command.WaitDelay = 5 * time.Second
 	configureProcessGroup(command)
 	return command, nil
 }

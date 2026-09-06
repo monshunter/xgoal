@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/planner"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/redact"
@@ -37,6 +39,7 @@ func (limiter *outputLimiter) consume(size int) error {
 }
 
 type stream struct {
+	runtimeRoot          string
 	mu                   sync.Mutex
 	pending              []byte
 	directory, rawPrefix string
@@ -90,6 +93,9 @@ func (s *stream) Write(value []byte) (int, error) {
 }
 
 func (s *stream) process(line []byte) error {
+	if len(line) > maxEventBytes {
+		return errors.New("Claude stream event exceeded its per-line limit")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.UseNumber()
 	var raw map[string]any
@@ -104,8 +110,10 @@ func (s *stream) process(line []byte) error {
 	if !ok || typeName == "" {
 		return fmt.Errorf("%w: Claude event type is missing", adapter.ErrInvalidOutput)
 	}
-	s.sequence++
-	name := fmt.Sprintf("%06d.json", s.sequence)
+	if int64(s.sequence) >= callindex.MaxEvents {
+		return errors.New("claude event count exceeded its limit")
+	}
+	name := fmt.Sprintf("%06d.json", s.sequence+1)
 	sanitized := redact.Value(raw)
 	if sanitizedMap, ok := sanitized.(map[string]any); ok {
 		delete(sanitizedMap, "usage")
@@ -118,6 +126,7 @@ func (s *stream) process(line []byte) error {
 	if err := writeImmutable(filepath.Join(s.directory, name), content, 0o600); err != nil {
 		return err
 	}
+	s.sequence++
 	rawRef := filepath.ToSlash(filepath.Join(s.rawPrefix, "events", name))
 	event := protocol.AgentEvent{ProtocolVersion: protocol.AgentEventVersion, At: s.now().UTC(), RawRef: rawRef}
 	switch typeName {
@@ -264,6 +273,7 @@ func (s *stream) processPendingAtEOF() error {
 
 func (s *stream) fail(err error) {
 	s.err = err
+	_ = callindex.WriteLogStatus(s.runtimeRoot, filepath.Dir(s.directory), "stdout", int64(s.sequence), err, strings.Contains(err.Error(), "exceeded"))
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -280,6 +290,10 @@ func redactAgentResult(result protocol.AgentResult) protocol.AgentResult {
 	}
 	for i := range result.Assumptions {
 		result.Assumptions[i] = redact.String(result.Assumptions[i])
+	}
+	for i := range result.ChecksClaimed {
+		result.ChecksClaimed[i].Name = redact.String(result.ChecksClaimed[i].Name)
+		result.ChecksClaimed[i].Status = redact.String(result.ChecksClaimed[i].Status)
 	}
 	result.RecommendedNextAction = redact.String(result.RecommendedNextAction)
 	return result

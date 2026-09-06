@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -181,6 +182,19 @@ func (client *Client) Stream(ctx context.Context, path string, writer io.Writer)
 		return 0, err
 	}
 	defer response.Body.Close()
+	if response.StatusCode >= 200 && response.StatusCode < 300 && strings.HasPrefix(request.URL.Path, "/v1/invocations/") {
+		if selected := response.Header.Get("XGoal-Invocation-ID"); selected != "" {
+			parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+			if len(parts) != 4 || !validHeaderLabel(selected) || strings.Contains(selected, "/") || !strings.HasPrefix(selected, parts[2]) {
+				return response.StatusCode, errors.New("invocation selection does not match requested ID")
+			}
+			resolved := *request.URL
+			resolved.Path = "/v1/invocations/" + selected + "/logs"
+			resolved.RawPath = ""
+			path = resolved.RequestURI()
+		}
+		return response.StatusCode, copyInvocationStream(ctx, path, response.Body, writer)
+	}
 	_, err = io.Copy(writer, response.Body)
 	return response.StatusCode, err
 }
@@ -212,9 +226,12 @@ func (client *Client) Do(ctx context.Context, method, path, idempotencyKey strin
 		return 0, nil, err
 	}
 	defer response.Body.Close()
-	encoded, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	encoded, err := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 	if err != nil {
 		return 0, nil, err
+	}
+	if len(encoded) > 32<<20 {
+		return response.StatusCode, nil, errors.New("API response exceeded 32 MiB limit")
 	}
 	return response.StatusCode, encoded, nil
 }

@@ -232,14 +232,18 @@ func (s *Store) AutomaticRetryCheckoutWork(ctx context.Context, workID string, e
 	if authorization.Limit <= 0 || authorization.FailureID == "" || authorization.ConfigHash == "" || event.ActorType != "kernel" {
 		return domain.WorkItem{}, ErrAutomaticRetryDenied
 	}
-	return s.retryCheckoutWork(ctx, workID, expectedVersion, identity, tree, &authorization, event)
+	return s.retryCheckoutWork(ctx, workID, expectedVersion, identity, tree, &authorization, nil, event)
 }
 
 func (s *Store) RetryCheckoutWork(ctx context.Context, workID string, expectedVersion int64, identity gitrepo.CheckoutIdentity, tree string, event EventInput) (domain.WorkItem, error) {
-	return s.retryCheckoutWork(ctx, workID, expectedVersion, identity, tree, nil, event)
+	return s.retryCheckoutWork(ctx, workID, expectedVersion, identity, tree, nil, nil, event)
 }
 
-func (s *Store) retryCheckoutWork(ctx context.Context, workID string, expectedVersion int64, identity gitrepo.CheckoutIdentity, tree string, automatic *AutomaticRetry, event EventInput) (domain.WorkItem, error) {
+func (s *Store) ResumeWorkGate(ctx context.Context, workID string, c GateContinuation, identity gitrepo.CheckoutIdentity, tree string, event EventInput) (domain.WorkItem, error) {
+	return s.retryCheckoutWork(ctx, workID, c.OwnerVersion, identity, tree, nil, &c, event)
+}
+
+func (s *Store) retryCheckoutWork(ctx context.Context, workID string, expectedVersion int64, identity gitrepo.CheckoutIdentity, tree string, automatic *AutomaticRetry, continuation *GateContinuation, event EventInput) (domain.WorkItem, error) {
 	event.Payload = redact.Value(event.Payload)
 	prepared, err := prepareEvent(event)
 	if err != nil {
@@ -260,6 +264,19 @@ func (s *Store) retryCheckoutWork(ctx context.Context, workID string, expectedVe
 		goalID, err := workGoalID(ctx, tx, work)
 		if err != nil {
 			return err
+		}
+		if continuation != nil {
+			gate, err := s.continuationGate(ctx, tx, *continuation)
+			if err != nil {
+				return err
+			}
+			var attemptID string
+			if err := tx.QueryRowContext(ctx, `SELECT attempt_id FROM failure_records WHERE work_item_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, workID).Scan(&attemptID); err != nil {
+				return err
+			}
+			if gate.GoalID != goalID || gate.WorkItemID != workID || gate.AttemptID != attemptID || (gate.ReasonCode != "agent_blocked" && gate.ReasonCode != "checkout_retry_required") {
+				return basestore.ErrAuthorizationDenied
+			}
 		}
 		goal, err := readGoal(ctx, tx, goalID)
 		if err != nil {

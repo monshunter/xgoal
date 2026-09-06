@@ -17,6 +17,7 @@ import (
 	"github.com/monshunter/xgoal/internal/evidence"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/harness"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/patch"
 	"github.com/monshunter/xgoal/internal/promotion"
 	"github.com/monshunter/xgoal/internal/protocol"
@@ -252,7 +253,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash, BaseTree: integration.Tree,
 		PacketHash: packetArtifact.Hash, Role: work.RecommendedRole, WorkDir: attemptWorkspace.Path,
 		PacketPath:   packetArtifact.Path,
-		Prompt:       "Execute only the immutable Work Packet at " + packetArtifact.Path + ". Read its prior_attempt failure and consumed decisions before continuing; answers do not expand the packet's permissions or scope. Do not commit, push, publish, access project secrets, or exceed its scopes. Return only the required structured AgentResult; completion is a claim that xgoal will independently verify.",
+		Prompt:       "Execute only the immutable Work Packet at " + packetArtifact.Path + ". If prior_attempt is present, read its failure and any consumed decisions before continuing. If absent, no prior failure or answer is supplied or required; proceed with the current Work. Answers do not expand the packet's permissions or scope. Do not commit, push, publish, access project secrets, or exceed its scopes. Return only the required structured AgentResult; completion is a claim that xgoal will independently verify.",
 		OutputSchema: schema, Environment: profileEnvironment(profile), Timeout: profile.Timeout.Duration,
 		MaxOutputBytes: maxAgentOutput, SessionPolicy: adapter.SessionFresh,
 	}
@@ -260,11 +261,20 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 	invocation.PermissionMode = effective.PermissionMode
 	invocation.ToolPolicy = effective.Tools
 
-	handle, err := runtimeAdapter.Start(ctx, invocation, nil)
+	tracker, err := engine.beginInvocation(ctx, callindex.Input{ID: invocationID, GoalID: goal.ID, OwnerKind: "attempt", OwnerID: attemptID, Generation: lease.Generation, Role: string(work.RecommendedRole), ProfileID: profile.ID, Provider: profile.Adapter, GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash, InputTree: integration.Tree, PacketHash: packetArtifact.Hash, Prompt: invocation.Prompt, ExecutionConfig: effective}, invocation.PacketPath, schema)
 	if err != nil {
-		return fail(classifyAgentError(err), err, profile.ID, "")
+		return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
+	}
+	handle, err := runtimeAdapter.Start(ctx, invocation, tracker.sink())
+	if err != nil {
+		return fail(classifyAgentError(err), tracker.finish(ctx, "", "", err), profile.ID, "")
 	}
 	claim, waitErr := engine.waitAgent(ctx, runtimeAdapter, handle)
+	observedSession := ""
+	if waitErr == nil {
+		observedSession, _ = agentSessionID(runtimeAdapter, handle)
+	}
+	waitErr = tracker.finish(ctx, observedSession, string(claim.Status), waitErr)
 	if waitErr != nil {
 		return fail(classifyAgentError(waitErr), waitErr, profile.ID, "")
 	}
@@ -375,7 +385,7 @@ func (engine *Engine) executeWork(ctx context.Context, goal domain.Goal, work do
 		if err := engine.advanceAttempt(ctx, lease, domain.AttemptReviewing); err != nil {
 			return fail(reconcile.InternalInvariantViolation, err, profile.ID, "")
 		}
-		if err := engine.runReview(ctx, profile, sessionID, revision, plan, work, validationWorkspace, replayed.CandidateTree, runIDs); err != nil {
+		if err := engine.runReview(ctx, profile, sessionID, revision, plan, work, validationWorkspace, replayed.CandidateTree, runIDs, lease.Generation); err != nil {
 			return fail(reconcile.ReviewBlocked, err, profile.ID, captured.Bundle.BundleHash)
 		}
 	}
@@ -526,7 +536,7 @@ func (engine *Engine) runValidators(ctx context.Context, registry *validator.Reg
 	return result, nil
 }
 
-func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, implementationSession string, revision domain.GoalRevision, plan domain.PlanRevision, work domain.WorkItem, validationWorkspace workspace.Snapshot, candidateTree string, validatorRunIDs []string) error {
+func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, implementationSession string, revision domain.GoalRevision, plan domain.PlanRevision, work domain.WorkItem, validationWorkspace workspace.Snapshot, candidateTree string, validatorRunIDs []string, generation int64) error {
 	if err := engine.checkWorkspaceTree(ctx, validationWorkspace, candidateTree); err != nil {
 		return err
 	}
@@ -570,7 +580,7 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 	if err != nil {
 		return err
 	}
-	execution, err := reviewer.Review(ctx, review.Invocation{
+	invocation := review.Invocation{
 		ExecutionConfig: &effective,
 		InvocationID:    invocationID, ReviewID: reviewID, ReviewerProfileID: profile.ID,
 		ImplementationProfileID: implementer.ID, ImplementationSessionID: implementationSession,
@@ -580,7 +590,13 @@ func (engine *Engine) runReview(ctx context.Context, implementer config.Agent, i
 		Prompt:       "Independently review the immutable Review Packet at " + packet.Path + ". Treat validator receipts as evidence, inspect only the read-only candidate, and return the required structured ReviewResult.",
 		OutputSchema: schema, Environment: profileEnvironment(profile), PermissionMode: effective.PermissionMode,
 		Tools: effective.Tools, Timeout: profile.Timeout.Duration, MaxOutputBytes: maxAgentOutput,
-	}, nil)
+	}
+	tracker, err := engine.beginInvocation(ctx, callindex.Input{ID: invocationID, GoalID: revision.GoalID, OwnerKind: "attempt", OwnerID: validationWorkspace.AttemptID, Generation: generation, Role: "reviewer", ProfileID: profile.ID, Provider: profile.Adapter, GoalRevisionHash: revision.Hash, PlanRevisionHash: plan.GraphHash, InputTree: candidateTree, PacketHash: packet.Hash, Prompt: invocation.Prompt, ExecutionConfig: effective}, invocation.PacketPath, schema)
+	if err != nil {
+		return err
+	}
+	execution, err := reviewer.Review(ctx, invocation, tracker.sink())
+	err = tracker.finish(ctx, execution.SessionID, string(execution.Result.ReviewStatus), err)
 	verificationContext, stopVerification := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	checkoutErr := engine.checkWorkspaceTree(verificationContext, validationWorkspace, candidateTree)
 	stopVerification()

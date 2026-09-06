@@ -14,6 +14,10 @@ import (
 )
 
 func (service *Service) retryCheckoutWork(ctx context.Context, workID string, request versionRequest) (domain.WorkItem, error) {
+	return service.retryCheckoutWorkGate(ctx, workID, request, nil)
+}
+
+func (service *Service) retryCheckoutWorkGate(ctx context.Context, workID string, request versionRequest, continuation *sqlite.GateContinuation) (domain.WorkItem, error) {
 	goalID, err := service.store.WorkGoalID(ctx, workID)
 	if err != nil {
 		return domain.WorkItem{}, mapStoreError(err)
@@ -48,12 +52,18 @@ func (service *Service) retryCheckoutWork(ctx context.Context, workID string, re
 	if actual.Identity != identity {
 		return domain.WorkItem{}, checkoutAPIError(gitrepo.ErrCheckoutChanged)
 	}
-	if readErr != nil || checkout.WorkID == "" {
+	if continuation == nil && (readErr != nil || checkout.WorkID == "") {
 		if _, err := service.store.AdmitCheckout(ctx, goalID, identity, actual.Tree); err != nil {
 			return domain.WorkItem{}, checkoutAPIError(err)
 		}
 	}
-	work, err := service.store.RetryCheckoutWork(ctx, workID, request.ExpectedVersion, identity, actual.Tree, sqlite.EventInput{Type: "WorkRetryReady", ActorType: "human", Payload: map[string]any{"reason": request.Reason, "tree": actual.Tree}})
+	event := sqlite.EventInput{Type: "WorkRetryReady", ActorType: "human", Payload: map[string]any{"reason": request.Reason, "tree": actual.Tree}}
+	var work domain.WorkItem
+	if continuation == nil {
+		work, err = service.store.RetryCheckoutWork(ctx, workID, request.ExpectedVersion, identity, actual.Tree, event)
+	} else {
+		work, err = service.store.ResumeWorkGate(ctx, workID, *continuation, identity, actual.Tree, event)
+	}
 	if err != nil {
 		return domain.WorkItem{}, checkoutAPIError(err)
 	}

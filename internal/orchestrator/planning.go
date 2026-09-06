@@ -13,6 +13,7 @@ import (
 	"github.com/monshunter/xgoal/internal/domain"
 	"github.com/monshunter/xgoal/internal/gitrepo"
 	"github.com/monshunter/xgoal/internal/harness"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/planner"
 	basestore "github.com/monshunter/xgoal/internal/store"
 	"github.com/monshunter/xgoal/internal/store/sqlite"
@@ -86,12 +87,19 @@ func (engine *Engine) runPlanning(ctx context.Context, goalID string) error {
 		}
 		record, err = engine.store.BeginPlanning(ctx, sqlite.PlanningClaim{GoalID: goalID, EffectID: record.Effect.ID, Generation: record.Generation, ExpectedGoalVersion: record.Goal.Version, ExpectedEffectVersion: record.Effect.Version, CurrentConfigHash: configHash, InvocationID: invocationID, InputTree: snapshot.Tree, CheckoutIdentity: snapshot.Identity})
 		if err != nil {
-			if errors.Is(err, sqlite.ErrCheckoutBusy) {
+			if errors.Is(err, sqlite.ErrCheckoutBusy) || errors.Is(err, sqlite.ErrCheckoutConflict) || errors.Is(err, basestore.ErrAuthorizationDenied) {
 				current, readErr := engine.store.Planning(ctx, goalID)
 				if readErr != nil {
 					return readErr
 				}
-				return engine.failPlanning(ctx, current, "project_execution_blocked", err, true)
+				code := "project_execution_blocked"
+				if errors.Is(err, sqlite.ErrCheckoutConflict) {
+					code = "planning_input_changed"
+				}
+				if errors.Is(err, basestore.ErrAuthorizationDenied) {
+					code = "planning_authorization_blocked"
+				}
+				return engine.failPlanning(ctx, current, code, err, true)
 			}
 			return engine.planningControlRace(ctx, goalID, err)
 		}
@@ -186,7 +194,7 @@ func (engine *Engine) invokePlanner(ctx context.Context, record sqlite.PlanningR
 	if err != nil {
 		return planner.Execution{}, err
 	}
-	packetPath, packetHash, err := planner.PrepareInvocation(engine.runtimeRoot, invocationID, record.Generation, planner.Packet{ValidationCapabilities: record.Request.ValidationCapabilities, Harness: &harnessInput, ProtocolVersion: planner.PacketVersion, GoalID: record.Goal.ID, RawGoal: record.Request.RawGoal, Mode: record.Request.Mode, ConfigHash: record.Request.ConfigHash, TrustedValidators: record.Request.TrustedValidatorIDs, ProjectRoot: engine.projectRoot, ProjectNetwork: engine.config.Runtime.ProjectNetwork, ProjectSecrets: engine.config.Runtime.ProjectSecrets})
+	packetPath, packetHash, err := planner.PrepareInvocation(engine.runtimeRoot, invocationID, record.Generation, planner.Packet{Prior: record.Request.Prior, ValidationCapabilities: record.Request.ValidationCapabilities, Harness: &harnessInput, ProtocolVersion: planner.PacketVersion, GoalID: record.Goal.ID, RawGoal: record.Request.RawGoal, Mode: record.Request.Mode, ConfigHash: record.Request.ConfigHash, TrustedValidators: record.Request.TrustedValidatorIDs, ProjectRoot: engine.projectRoot, ProjectNetwork: engine.config.Runtime.ProjectNetwork, ProjectSecrets: engine.config.Runtime.ProjectSecrets})
 	if err != nil {
 		return planner.Execution{}, err
 	}
@@ -195,7 +203,7 @@ func (engine *Engine) invokePlanner(ctx context.Context, record sqlite.PlanningR
 		return planner.Execution{}, err
 	}
 	prompt := "Act as the read-only xgoal Planner. Read the immutable Planner Packet at " + packetPath + `.
-Inspect only the current repository. Do not modify files or Git metadata. Record unresolved product or authorization questions in ambiguities.
+Inspect only the current repository. Do not modify files or Git metadata. When prior is present, use its last failure and scoped decision to resolve the question; the answer grants no new tools, validator trust or project permissions. Record unresolved product or authorization questions in ambiguities.
 Return a bounded Goal Contract and acyclic Work Graph using the packet's trusted validator IDs. When there are no ambiguities:
 - Provide a non-empty summary and rationale and at least one specific, unique entry in every Contract list, including quality_attributes and human_gates.
 - Human gates describe conditional approval boundaries from the project policy, such as scope expansion; they do not require unnecessary approval for already authorized work.
@@ -210,7 +218,12 @@ If a verifiable plan cannot be formed within the supplied goal and trusted valid
 	invocation := planner.Invocation{RequestHash: record.Effect.RequestHash, InputTree: record.Observation.InputTree, Generation: record.Generation, ExecutionConfig: &effective, InvocationID: invocationID, ProfileID: profile.ID, WorkDir: engine.projectRoot, PacketPath: packetPath, PacketHash: packetHash, Prompt: prompt, OutputSchema: schema, Environment: profileEnvironment(profile), Timeout: profile.Timeout.Duration, MaxOutputBytes: maxPlannerOutput}
 	providerContext, stop := context.WithTimeout(ctx, invocation.Timeout)
 	defer stop()
-	execution, err := plannerAdapter.Plan(providerContext, invocation, nil)
+	tracker, err := engine.beginInvocation(ctx, callindex.Input{ID: invocationID, GoalID: record.Goal.ID, OwnerKind: "planning", OwnerID: record.Effect.ID, Generation: record.Generation, Role: "planner", ProfileID: profile.ID, Provider: profile.Adapter, RequestHash: record.Effect.RequestHash, InputTree: invocation.InputTree, PacketHash: packetHash, Prompt: prompt, ExecutionConfig: effective}, packetPath, schema)
+	if err != nil {
+		return planner.Execution{}, err
+	}
+	execution, err := plannerAdapter.Plan(providerContext, invocation, tracker.sink())
+	err = tracker.finish(ctx, execution.SessionID, "", err)
 	if err != nil {
 		return execution, err
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/monshunter/xgoal/internal/canonical"
 	"github.com/monshunter/xgoal/internal/clock"
 	"github.com/monshunter/xgoal/internal/domain"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/redact"
 	"github.com/monshunter/xgoal/internal/supervisor"
@@ -70,6 +71,7 @@ type execution struct {
 }
 
 type boundedStderr struct {
+	live    *callindex.StderrLog
 	mu      sync.Mutex
 	buffer  bytes.Buffer
 	limiter *outputLimiter
@@ -298,7 +300,8 @@ func (runtime *Adapter) start(ctx context.Context, invocation adapter.Invocation
 	runContext, cancel := context.WithTimeout(ctx, invocation.Timeout)
 	limiter := &outputLimiter{remaining: invocation.MaxOutputBytes}
 	stream := newJSONLStream(eventsDir, filepath.ToSlash(filepath.Join("invocations", invocation.InvocationID)), sink, runtime.clock, limiter, cancel)
-	stderr := &boundedStderr{limiter: limiter, cancel: cancel}
+	stream.runtimeRoot = filepath.Dir(filepath.Dir(runtime.root))
+	stderr := &boundedStderr{limiter: limiter, cancel: cancel, live: callindex.NewStderrLog(filepath.Dir(filepath.Dir(runtime.root)), invocationDir)}
 	arguments := runtime.arguments(invocation, schemaPath, resumeSessionID)
 	running, err := supervisor.StartContext(runContext, supervisor.Command{
 		Argv: arguments, Dir: validated.workDir, Env: validated.environment,
@@ -440,12 +443,25 @@ func (stderr *boundedStderr) Write(value []byte) (int, error) {
 	}
 	if err := stderr.limiter.consume(len(value)); err != nil {
 		stderr.err = err
+		if stderr.live != nil {
+			stderr.live.Fail(err)
+		}
 		stderr.cancel()
 		return len(value), err
+	}
+	if stderr.live != nil {
+		if _, err := stderr.live.Write(value); err != nil {
+			stderr.err = err
+			stderr.cancel()
+			return len(value), err
+		}
 	}
 	_, err := stderr.buffer.Write(value)
 	if err != nil {
 		stderr.err = err
+		if stderr.live != nil {
+			stderr.live.Fail(err)
+		}
 		stderr.cancel()
 	}
 	return len(value), err
@@ -454,6 +470,9 @@ func (stderr *boundedStderr) Write(value []byte) (int, error) {
 func (stderr *boundedStderr) persist(filename string) error {
 	stderr.mu.Lock()
 	defer stderr.mu.Unlock()
+	if stderr.live != nil {
+		stderr.err = errors.Join(stderr.err, stderr.live.Close())
+	}
 	content := []byte(redact.String(strings.ToValidUTF8(stderr.buffer.String(), "�")))
 	if err := writeImmutable(filename, content, 0o600); err != nil {
 		return err

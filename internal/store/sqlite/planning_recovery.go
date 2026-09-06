@@ -96,6 +96,11 @@ func (s *Store) RecoverPlanning(ctx context.Context, options PlanningRecoveryOpt
 				if code == "planner_interrupted" && interruptions >= options.NoProgressLimit {
 					continue
 				}
+				// An answered Gate authorized one new generation. A crash cannot
+				// reuse that finite decision for another Provider invocation.
+				if p.Request.Prior != nil {
+					continue
+				}
 				request, err := normalizePlanningRequest(p.Request, p.Generation+1)
 				if err != nil {
 					return err

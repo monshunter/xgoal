@@ -94,6 +94,10 @@ func TestCobraReadCommandsRouteRequests(t *testing.T) {
 	}{
 		{[]string{"status", "goal-1"}, "/v1/goals/goal-1", false},
 		{[]string{"status", "goal-1", "--watch", "--after-event-id", "event-2"}, "/v1/goals/goal-1/events?watch=1&after_event_id=event-2", true},
+		{[]string{"invocations", "goal-1", "--role", "planner"}, "/v1/goals/goal-1/invocations?role=planner", false},
+		{[]string{"context", "invoke-1"}, "/v1/invocations/invoke-1/context", false},
+		{[]string{"logs", "--invocation", "invoke-1", "--after", "2"}, "/v1/invocations/invoke-1/logs?after=2&limit=100&stream=stdout", false},
+		{[]string{"logs", "--invocation", "invoke-1", "--stream", "stderr", "--follow"}, "/v1/invocations/invoke-1/logs?after=0&limit=100&stream=stderr&watch=1", true},
 		{[]string{"logs", "attempt-1"}, "/v1/attempts/attempt-1/logs", false},
 		{[]string{"gates", "goal-1"}, "/v1/goals/goal-1/gates?state=open", false},
 		{[]string{"report", "goal-1"}, "/v1/goals/goal-1/report", false},

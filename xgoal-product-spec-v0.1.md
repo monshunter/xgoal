@@ -1017,24 +1017,24 @@ SQLite 保留事务状态、CAS、Lease、Gate、事件、进程归属和恢复�
 
 以下各项均须指向当前代码和运行 Evidence 后才能勾选；完整发布 Benchmark 与本次实际 Provider 功能验收分开记录。
 
-- [ ] **AC-HR-001**：默认三角色流程完成；可选 Acceptance 独立运行动态反馈场景，源码保持不变，错误 Claim 被真实业务断言拒绝。
-- [ ] **AC-HR-002**：场景/Validator 能力进入规划输入，缺失行为覆盖无法以格式检查代替通过；Evidence 绑定最终 Tree 与场景制品。
-- [ ] **AC-HR-003**：解释器入口、直接脚本及显式依赖在候选 Tree 被篡改时均拒绝；旧 Goal 的 Gate/普通 replan 不接受新入口，仅新 Goal 接纳审阅后的新基线，旧 Evidence 不复活。
-- [ ] **AC-HR-004**：服务依赖/readiness/场景从真实配置和 CLI/daemon 贯通；业务错误、探针超时、bootstrap 失败均阻止完成并保留诊断。
-- [ ] **AC-HR-005**：服务取消/失败/崩溃后仅回收有证明归属的资源；未知或未确认退出的进程阻止下一写入者。
-- [ ] **AC-HR-006**：四种角色共享 Profile 解析与显式绑定；旧缺省/有效安全配置继续可用，旧冲突权限或缺少必要信任声明的配置获得迁移诊断，冲突和不支持字段在执行前拒绝。
-- [ ] **AC-HR-007**：Codex/Claude 的模型、effort、权限实际进入调用；真实双 Provider Evidence 对照请求与可观测有效配置，未知实际值不伪造。
-- [ ] **AC-HR-008**：改变有效 Profile 配置不能复用旧绑定会话，原配置在安全前提下仍可恢复；初始 Planner 的请求/generation/输入 Tree 身份和其余角色的 Revision 身份均可查，不能要求初始调用具备尚不存在的 Revision。
-- [ ] **AC-HR-009**：必需 Harness 缺失/不兼容在调用前拒绝；可选缺失有准备说明；规则输入与加载观察区分，委派职责不创建竞争运行状态。
-- [ ] **AC-HR-010**：合法 blocked、failed、协议错误分别持久化；Gate 保存 blockers/建议及上下文，跨重启可见。
-- [ ] **AC-HR-011**：初始规划、Work 和最终验收的决定并续作从用户入口完成，分别由下一规划 generation、新 Attempt、同一最终 Tree 的新验收 Invocation 消费实际决定；拒绝/过期/陈旧版本/取消/外部编辑不能错误续作。
-- [ ] **AC-HR-012**：显式有界自动修复在安全现场成功恢复；默认关闭、重复无进展、总数耗尽和所有不安全边界均停止且保留现场。
-- [ ] **AC-HR-013**：各角色运行中可查询上下文并实时跟随公开事件，断线游标不遗漏已持久记录；输出限额、脱敏及慢客户端不破坏控制循环。
-- [ ] **AC-HR-014**：human 状态与 wait 反馈清楚区分存活/输出/进展；现有默认 JSON、退出码、help/version/completion 和取消语义保持。
-- [ ] **AC-HR-015**：目标/Work/Gate/Invocation 定位与补全可用，歧义和 CAS 冲突可诊断；初始化对已知/未知项目正确说明测试能力与准备步骤。
-- [ ] **AC-HR-016**：运行中一致导出包含结构化状态和全部关联文件校验，缺失/损坏被识别且无完成标记；导出编辑不影响运行状态。
-- [ ] **AC-HR-017**：新增数据库迁移保留历史失败/Gate/事件引用，旧配置/历史报告可读取；并发、崩溃和迟到写入不绕过现有完成谓词。
-- [ ] **AC-HR-018**：全仓发布门禁和当前双 Provider、CLI/daemon、服务真实验收通过；README/示例/操作记录与最终实现一致，未运行项明确保留。
+- [x] **AC-HR-001**：默认三角色流程完成；可选 Acceptance 独立运行动态反馈场景，源码保持不变，错误 Claim 被真实业务断言拒绝。
+- [x] **AC-HR-002**：场景/Validator 能力进入规划输入，缺失行为覆盖无法以格式检查代替通过；Evidence 绑定最终 Tree 与场景制品。
+- [x] **AC-HR-003**：解释器入口、直接脚本及显式依赖在候选 Tree 被篡改时均拒绝；旧 Goal 的 Gate/普通 replan 不接受新入口，仅新 Goal 接纳审阅后的新基线，旧 Evidence 不复活。
+- [x] **AC-HR-004**：服务依赖/readiness/场景从真实配置和 CLI/daemon 贯通；业务错误、探针超时、bootstrap 失败均阻止完成并保留诊断。
+- [x] **AC-HR-005**：服务取消/失败/崩溃后仅回收有证明归属的资源；未知或未确认退出的进程阻止下一写入者。
+- [x] **AC-HR-006**：四种角色共享 Profile 解析与显式绑定；旧缺省/有效安全配置继续可用，旧冲突权限或缺少必要信任声明的配置获得迁移诊断，冲突和不支持字段在执行前拒绝。
+- [x] **AC-HR-007**：Codex/Claude 的模型、effort、权限实际进入调用；真实双 Provider Evidence 对照请求与可观测有效配置，未知实际值不伪造。
+- [x] **AC-HR-008**：改变有效 Profile 配置不能复用旧绑定会话，原配置在安全前提下仍可恢复；初始 Planner 的请求/generation/输入 Tree 身份和其余角色的 Revision 身份均可查，不能要求初始调用具备尚不存在的 Revision。
+- [x] **AC-HR-009**：必需 Harness 缺失/不兼容在调用前拒绝；可选缺失有准备说明；规则输入与加载观察区分，委派职责不创建竞争运行状态。
+- [x] **AC-HR-010**：合法 blocked、failed、协议错误分别持久化；Gate 保存 blockers/建议及上下文，跨重启可见。
+- [x] **AC-HR-011**：初始规划、Work 和最终验收的决定并续作从用户入口完成，分别由下一规划 generation、新 Attempt、同一最终 Tree 的新验收 Invocation 消费实际决定；拒绝/过期/陈旧版本/取消/外部编辑不能错误续作。
+- [x] **AC-HR-012**：显式有界自动修复在安全现场成功恢复；默认关闭、重复无进展、总数耗尽和所有不安全边界均停止且保留现场。
+- [x] **AC-HR-013**：各角色运行中可查询上下文并实时跟随公开事件，断线游标不遗漏已持久记录；输出限额、脱敏及慢客户端不破坏控制循环。
+- [x] **AC-HR-014**：human 状态与 wait 反馈清楚区分存活/输出/进展；现有默认 JSON、退出码、help/version/completion 和取消语义保持。
+- [x] **AC-HR-015**：目标/Work/Gate/Invocation 定位与补全可用，歧义和 CAS 冲突可诊断；初始化对已知/未知项目正确说明测试能力与准备步骤。
+- [x] **AC-HR-016**：运行中一致导出包含结构化状态和全部关联文件校验，缺失/损坏被识别且无完成标记；导出编辑不影响运行状态。
+- [x] **AC-HR-017**：新增数据库迁移保留历史失败/Gate/事件引用，旧配置/历史报告可读取；并发、崩溃和迟到写入不绕过现有完成谓词。
+- [x] **AC-HR-018**：全仓发布门禁和当前双 Provider、CLI/daemon、服务真实验收通过；README/示例/操作记录与最终实现一致，未运行项明确保留。
 
 ### 20.9 当前增量 Evidence
 
@@ -1081,3 +1081,65 @@ SQLite 保留事务状态、CAS、Lease、Gate、事件、进程归属和恢复�
 
 - 真实 Codex CLI 0.153.4 / gpt-6-astra / low 四角色 Standard Goal 通过（测试220.028s，运行3m37.575s）：只读 Acceptance 独立 session `01a071cd-34c6-7ec3-8d16-3bc4d1ee2a34`，场景 `output-inspection` 不声明文件制品，最终 Tree `2a54b5b88d98072acf457c8a4d12e9f95d02571d`、Evidence Set `evidence_set_final_802eaedc5121e4d9cdb18af9`。修正共享验收夹具错误假设后，按声明数量检查制品；模型继承/实际可观测值的展示仍由 PLAN-015 收口。
 - PLAN-014 最后集成回归：完整 Acceptance CLI 正向/三类边界/持久 blocked 崩溃/安全中断重放/取消场景合计 PASS243.343s；七类服务故障矩阵 PASS127.636s（新增最终缺失制品31.82s，其他覆盖 bootstrap、启动、readiness、HTTP200业务错误、取消和 daemon SIGKILL）。Orchestrator 全包 PASS247.727s、Control12.143s、Codex Adapter5.983s、Claude Adapter4.063s、Recovery1.160s；配置/编译/场景/报告/SQLite/Acceptance/Supervisor/Validator 全包通过，`go vet ./...` 与示例配置校验通过。独立 Reviewer 的 Config/Environment/Scenario/GoalCompile/Report/Supervisor race 和 SQLite 定向 race 已通过；原生 Acceptance fixture 的1s预算在 race 下不足，仅将该测试调用预算改为10s并复跑，不修改生产超时。
+
+- PLAN-015 Phase 1.1：migration 0012 新增纯观测 Invocation 索引，四角色在调用前登记 Packet 字节身份、有效配置和各自 owner；日志不进入 Goal 业务 events。CAS/单调游标/终态不复活/Store 重开不改变 Goal 的定向测试通过。Claude 带换行的超长单条事件和 ChecksClaimed 脱敏负例先失败后修复。
+- 当前实际 CLI/daemon/服务四角色链路 PASS34.752s，逐角色核对索引 returned、持续事件游标、session、无 LogError；初始 Planner 使用 request/generation/input Tree，未要求尚不存在的 Goal Revision。双 Work 的 Review/Promotion/Final Report 与合法 blocked/failed Engine 回归 PASS49.763s。
+- 分段独立审查发现并关闭：错误路径无界读取 SessionID、观测错误改变 Provider 结果、中间目录 symlink 写入逃逸和正常追加误报 gap。负例验证外部目录零新增、故障观测 Store 不改变原调用结果、ENOENT 后正常发布可续读。独立定向 race：Invocation1.220s、Orchestrator2.003s、SQLite2.189s。
+- 两个实际 Provider CLI 子进程夹具在慢刷新、满通知队列下仍可读取运行中 stderr 并完成取消，定向 race PASS（Codex1.836s、Claude2.072s）；完整行脱敏、无换行长行、限额独立标记和 I/O 失败也有负例。该测试调用真实本地进程而非模型服务，不代替最终真实双 Provider 验收。最终 Invocation/SQLite/Codex Adapter/Claude Adapter/Acceptance 全包 PASS（0.346s/16.045s/6.002s/4.096s/2.246s）。用户 API/CLI 日志入口及在线一致导出仍由后续 Phase 验收。
+
+- PLAN-015 Phase 1.2：`TestRealCLIInvocationContextsLiveFollowAndReconnect` 在真实 CLI/daemon/服务链路 PASS36.360s，覆盖 Planner 运行中上下文和 stdout/stderr 脱敏读取、Ctrl-C 仅取消读者、携带游标断线续读、HTTP200 后移走持久日志的错误帧与 CLI exit6、四角色终态元数据/结果读取，以及 Goal+role 定位。Planner generation 数字解码和错误 complete 边界的负例先红后绿；大于2^53的整数保持准确。独立增量 race：API1.625s、Invocation1.376s；此前 Control3.043s。本条 Provider 为可控 CLI fixture，实际模型仍由综合验收覆盖。
+
+- PLAN-015 Phase 2.1：human 状态、等待流分离、格式校验的负例先红后绿；Activity 定向测试证明心跳/输出不刷新受信进展，重复验证结果及只改变采集 ID/时间的环境快照不刷新进展，相同 Contract hash 的另一 Goal 不串入。独立审查发现 stderr-only 输出不会更新状态索引，真实 Planner 持有进程的用例先因时间停滞失败；有界补扫后 `TestRealCLIHumanWaitAndObservation` PASS33.933s（真实 CLI/daemon/双服务，Provider为可控CLI fixture），覆盖 status 更新、human watch 中断不取消 Goal、run wait 的 stdout JSON/终态stderr，以及已发布 FinalReport 的受信进展。定向 race：CLI2.526s、Control3.464s、SQLite4.810s；`go vet ./...` PASS。
+- Phase 2.1 增量独立复核无阻断：SQLite3.101s、CLI2.086s、Control2.523s 定向 race PASS，覆盖补扫、噪声去重及连接参数保留。Goal Revision 冻结时间亦从其权威记录读取；最终定向回归 PASS。
+
+- PLAN-015 Phase 2.2 定位增量：真实 CLI/daemon 日志与上下文用例扩展为 Invocation 前缀、Goal 前缀 human 状态、ID 查询和动态补全，PASS37.932s；四角色结果读取、断线续读和中途日志错误仍通过。HTTP 歧义请求原先会预留幂等记录，负例复现后前置解析，且新增相似 ID 后原已完成请求仍重放；迁移诊断优先级的全包回归失败已修复并定向通过。后续 Gate 续作 Evidence 见下条。
+
+- PLAN-015 Phase 2.2 续作增量：真实 CLI/daemon/双服务的 Planner→Work 两次 blocked/问题→approve --resume→最终完成 PASS40.585s；两个 Provider 子进程必须实际解析不可变 Packet 中的原问题和准确答案，否则测试不能完成。最终 Acceptance 外部编辑负例、决定保留/未消费、恢复原文件后 gate resume、新进程读取 Prior Claim 与答案、独立断言及完成 PASS42.123s。两条链路使用可控 Provider CLI，实际模型仍由综合验收覆盖。
+- ID watch 固定选择和特殊字符路径/游标已完成 RED→GREEN，独立定向 race CLI3.695s、Control2.691s、API1.261s。Gate 续作新增 Planner 双版本/现场/必要权限 Gate/插入回滚/崩溃有限授权，以及 Acceptance pause 后 Historical Claim 仅进入人工授权的新调用的回归；定向 PASS0.462s。当前 Control/SQLite/Acceptance/Planner/API 全包 PASS11.746s/14.460s/1.801s/0.863s/1.331s。
+- Phase 2.2 分段独立复核 PASS，无剩余阻断：新增 BeginPlanning 授权拒绝转 `planning_authorization_blocked` 的持久 Waiting，不再留在 QUEUED 重复尝试；最新独立 SQLite3.086s、CLI1.502s 定向 race 通过。主 Agent 定向 race SQLite4.462s、CLI4.270s、Control3.095s、API1.359s 通过。Plan Item 已据此完成，整个 PLAN-015 与 Objective 仍待初始化/导出和综合验收。
+
+- PLAN-015 Phase 2.3：真实 CLI 初始化已知 Node/未知项目、离线 doctor 的测试发现/准备指引、未执行测试脚本、未扩大信任 PASS2.931s。独立 WAL-aware 只读快照在控制 Store 唯一连接被占用时仍成功，之后在线 Goal 变更不改变副本，副本拒绝写入；定向 PASS0.367s，后续 race SQLite2.216s。
+- 实际 CLI/daemon/双服务完成后，一致导出覆盖 Packet/Patch/Receipt 日志/Review/场景/环境/报告/Invocation/Workspace；破坏 Validator 日志返回 EXPORT_INCOMPLETE，再用含 API_KEY 哨兵的损坏 Packet 验证公开错误和幂等响应均脱敏，PASS33.566s。实际双 Goal（第二个使用用户提供 Proposal）完整导出保留两个历史报告并明确标记没有 Provider Packet，PASS52.225s。
+- 快照 owner 枚举包含整个项目；单元验证第二个 Goal 的引用也不能遗漏，新增但未索引日志不进入冻结边界，公开日志无私有推理。缺失/符号链接/内容变化、COMMITTED 报告丢失、已有空目录、项目内输出、取消均拒绝；PENDING_RENAME 仅用快照 blob，不改在线报告。clean 与导出共享可取消锁，但状态读取/CAS 取消继续成功。定向 race Exporter13.486s、Control2.169s、TestDiscovery1.518s、ProjectInit3.842s，Linux exporter 交叉编译通过。
+- 分段独立审查发现并修复 Planner 预检/崩溃及 supplied Proposal 无 Packet 的合法生命周期、错误脱敏和旧 Planner Packet 冻结字段对账。旧未索引 Packet 校验全部已知 Request 字段并明确没有旧字节 hash；Validator 集合/模式篡改和已返回的旧输入丢失拒绝导出。当前 Exporter/Planner 全包 PASS1.410s/0.489s。Phase 2.3 完成；全仓发布门禁、当前真实模型、AC 总对账和正式 Change Review 尚未完成。
+
+- PLAN-015 综合验收：`TestRealCLIExportsLiveWorkWhileLogsAndLeaseContinue` PASS10.091s。真实 Work 保持 RUNNING/ACTIVE lease 时导出，源日志游标与租约心跳随后继续推进；源 Goal 取消且进程回收后，副本仍为 RUNNING，未包含冻结边界外的下一条日志。独立复核关闭 AC-HR-016 的同链证据缺口。
+- 首轮全仓门禁发现正常进程退出后，日志 fsync 超过 `exec.WaitDelay=250ms` 会被误报为 Provider 失败。`TestSuccessfulExitWaitsForDurableOutputDrain` 用 750ms 写入延迟先 RED，再以 5s 排空期限修复；重复三次 Supervisor/Codex ActiveProbe PASS2.866s/1.628s。未吞掉 I/O 错误，终止/未知进程屏障保持；最终 Control/Codex/Claude/Supervisor 全包 race PASS34.676s/32.098s/23.777s/13.827s。
+- 首轮普通测试同时触及 Go 默认的单包 10 分钟总期限，当时正在执行的服务场景仅运行37s；按精确 binary/project/socket 正常停止遗留测试 daemon，保留 `/private/tmp/xgoal-cli-current-2077589481`。Makefile 将普通/race/shuffle 包级预算改为30m/45m/6h，保留完整测试范围、20次乱序及所有运行时超时。下一轮普通全包 PASS（CLI776.100s、Orchestrator261.654s、SQLite19.440s）；后因下面的真实入口发现中断刚开始的旧版本 shuffle，未计为完整发布门禁通过。
+- 修补 Supervisor 后的真实 Codex 四角色 PASS158.400s，最终 Tree `2a54b5b88d98072acf457c8a4d12e9f95d02571d`，Evidence `evidence_set_final_81b2876fa206f0cf9cb33604`。随后真实运行又暴露两处提示歧义：首次 Work 被无条件要求读取不存在的 prior_attempt；Claude Acceptance 自行添加环境变量前缀，导致允许规则不匹配。两次均保留 blocked/Waiting。提示分别改为“有历史才读取”和“场景变量已经注入，原样执行受信客户端命令”，未改变权限。另一轮 Claude Reviewer 原生事件出现 `unexpected EOF`，明确失败并保留 `/private/tmp/xgoal-real-goal-1893109096`，没有忽略损坏输出或伪造通过。Codex 缺省历史负例保留 `/private/tmp/xgoal-real-goal-3359996322`；两者 daemon 均由测试停止。
+- 从实际 Claude Waiting 现场执行手册时，`gate get`/`work get` 的成功结果被 `mapStoreError(nil)` 错误包装为500。真实 `TestRealCLIGateContinuationPlannerAndWork` 增加两个读取入口后 RED4.312s；映射 nil 后返回原成功，Work WAITING 仍保持 exit3。读取准确 Gate/owner 版本并完成两次决定续作、最终验收的回归 PASS42.072s。独立复核没有发现其他同类映射遗漏。
+- 原 Claude Acceptance 阻塞现场 `/private/tmp/xgoal-real-goal-2535447384` 保留并以修补后二进制重启：CLI 获取版本、`approve --resume` 保存准确答案；新 Packet 的 Prior 仍为原 blocked，答案只消费一次，原 config hash 与最终 Tree 均不变。新 session `370104cb-9dda-4dad-a19a-6bb117dda2ba` 完成，独立最终 Evidence `evidence_set_final_96d7f9c15f8fd6e08e617293` 绑定 Tree `6df5a1e59ca6b6f349a3b99f21a5d94e8cb17e5f`；一致导出7282个文件后正常停止 daemon，未确认退出的归属进程为0。审计副本 `manual-completed-audit/manifest.json` SHA-256 为 `da2fdb1f05a9d5c82c96f9c07666588d8970af9058cb6e55f29ce60c3cd34b03`。这是实际模型提问、跨重启保留、用户入口回答与最终验收的 Evidence。
+- 真实测试现在逐角色并列记录 requested model、effort、CLI version 与 observed model。当前 Claude Code 2.1.235 请求 `sonnet/low`，原生公开事件报告 `deepseek-v4-flash[1m]`；本次验证的是当前已配置 Claude Code 通道，不能把该结果描述为 Anthropic Sonnet 模型验收。Codex 不报告实际模型时保持 unknown。未修改用户登录、路由或全局模型配置。单 Goal 的受信服务断言收紧为精确 `accepted\n`，共享双 Goal 的追加行为夹具保持原合同。
+- 上述修补后的最终真实双 Provider 四角色均通过，并逐角色在运行中读取 context/公开输出，在完成后实际导出全部引用。Codex0.153.4 请求 `gpt-6-astra/low`、四角色 observed model 均为 unknown；测试 PASS153.042s，Goal2m30.674s，Acceptance session `01a07404-f137-7441-b7e2-15e2cdc8a711`，最终 Tree `2a54b5b88d98072acf457c8a4d12e9f95d02571d`、Evidence `evidence_set_final_93e536cd101663d972bb62ab`。Claude Code2.1.235 请求 `sonnet/low`、四角色均报告 `deepseek-v4-flash[1m]`；测试 PASS153.459s，Goal2m30.483s，Acceptance session `8e51e56a-6420-440a-a01e-d5f2b92b8025`，最终 Tree `1daf47caaa0fbc6ea302ee1cf015f1e9b7cb4526`、Evidence `evidence_set_final_2c5bc5e82f12f7711ab18b6b`。准确字节、独立会话、HEAD/index、受信服务断言、场景制品及进程停止均由真实 CLI 测试核对；成功夹具按合同清理。Phase3.1 完成，完整发布门禁尚未完成。
+
+- 用户报告主机 CPU 跑满后，确认热点属于全仓 shuffle×20 的并行测试，停止归属验收进程并正常回收其测试 daemon 后 CPU idle 从约0–2%恢复到74–78%。默认 Makefile 限制为一个 Go 包、每进程 GOMAXPROCS=2；SQLite 全包两轮 PASS28.182s，运行中 idle 79–83%。Engine blocked/failed/有限重试定向 PASS62.214s、Store 安全边界 PASS0.881s，独立审查未发现无等待无限循环。详见 [BUG-002](docs/bugs/BUG-002-verification-host-cpu-saturation.md)。
+- 按用户的分钟级用例要求，REVIEW-055 批准调整 PLAN-015 Phase3：移除小时级门禁预算，完整 race 单轮覆盖全部真实场景，去掉发布入口重复聚合；20次乱序限定8个短合同包和11个逐个校验存在的 SQLite 用例，2分钟单包预算下全部通过，SQLite8.218s。完整 test/race 最终使用15/20分钟整包累计保护，单场景保留秒/分钟有界等待；30秒失败兜底替代两处进程测试 helper 的一小时等待设计。完整发布门禁与最终 AC-HR-018 仍待新鲜运行和 Change Review。
+
+- 分层门禁的完整 race 单轮执行后，CLI741.599s、Orchestrator891.008s等45包通过，无 DATA RACE；Project 两个链接锁用例因 umask077 与0644初始权限假设冲突失败，诊断显示操作前后均0600。显式建立0644测试前置条件后，Project 全包在077/022下 race PASS5.421s/5.426s，生产锁实现未改。原整条命令仍记FAIL；其余包源码未变，复用当轮新鲜结果并按剩余门禁继续。race仅有约1%包级余量，独立审查后设置20分钟累计保护；15分钟内通过的结果仍为更严格证据，单场景3分钟与短shuffle2分钟不变。
+
+- 最终分段发布门禁完整覆盖当前输入：初始45包 race 通过结果、修补后的 Project 全包双 umask race，以及 `make -o race verify-m6 GOFLAGS=-v` 的剩余门禁 exit0。fmt、短合同 shuffle20、vet、实际 CLI/config smoke、Benchmark 配置校验及 Linux/Darwin 编译全部通过；跨平台测试编译不计为原生运行。Reviewer 对账初始与最终清单，唯一 Go/SQL 变化为已重新验证的 Project 测试文件；原完整 make 失败记录保留，没有把第二条命令单独当作全仓通过。实测最慢叶场景155.24s，CLI/Orchestrator 的741.599s/891.008s为多用例整包累计。独立 [REVIEW-056](docs/reviews/REVIEW-056-runtime-observation-and-closure.md) 为 PASS，无剩余阻断；结合上面的当前双 Provider、跨重启回答、服务与导出 Evidence，AC-HR-001–018 全部成立。审查后只更新结果记录、完成勾选及索引，未再修改实现或测试；三组真实性能 Benchmark 继续 `NOT_RUN`、`upload=false`。
+
+### 20.10 增量验收对账入口
+
+本表索引可复核的实现与测试；实际运行结果由20.9和最终 Change Review 保存，勾选仍由20.8拥有。模型 smoke 与可注入故障的 Provider fixture 分开记录。
+
+| 验收项 | 对账入口与关键检查 |
+| --- | --- |
+| AC-HR-001 | `TestEngineRunsTwoWorkItemsThroughReviewPromotionAndFinalReport` 保留默认三角色；两个真实 Acceptance smoke 及 `TestRealCLIAcceptanceBlockedAnswerAndFalseClaimsCannotComplete` 检查独立会话、源码不变、错误 Claim 被业务断言拒绝。 |
+| AC-HR-002 | `goalcompile.TestCompileRequiresEveryScenarioBusinessAssertion`、`TestFinalizeCannotOmitFrozenScenarioMappingAndArtifacts` 与真实场景制品缺失负例；只验证声明的覆盖关系，不宣称证明任意测试语义完备。 |
+| AC-HR-003 | `TestFrozenInterpreterRejectsTamperedCandidateAndAcceptsNewBaseline`、`TestRegistryRejectsUndeclaredControlAndUnsafeFiles`、Engine 源码变更负例和 `TestLegacyValidatorBindingRequiresReviewedConfiguration`；批准旧 Gate 不重绑定入口。 |
+| AC-HR-004 | `TestRealCLIManagedServicesBusinessAssertionsAndCleanup`、`TestRealCLIServiceFailureAndInterruptionPreserveSafety`：实际双服务、readiness、业务错误与准备失败，保留命令诊断。 |
+| AC-HR-005 | 同一真实服务故障矩阵、Acceptance 崩溃/取消矩阵、Supervisor/Recovery 及 Store process ownership 负例；只停止可归属进程，未知退出仍阻断。 |
+| AC-HR-006 | `config` Profile/角色绑定负例、两个 Adapter 的 `TestExplicitExecutionConfigReachesProviderAndArtifacts`、四角色实际元数据与旧信任迁移；无效字段不静默丢弃。 |
+| AC-HR-007 | 两个真实四角色 smoke 的 requested/effective/observed 对照，以及主动 Probe 契约；配置模型别名与原生报告模型分列。 |
+| AC-HR-008 | 双 Provider Resume 精确绑定测试、`TestPlannerExecutionConfigAndInitialInputProvenance`、`TestMetadataCannotContradictRegisteredConfigurationOrTree`；未知继承配置不能证明会话兼容。 |
+| AC-HR-009 | `harness` 必需/可选发现测试、`TestEngineStopsBeforeProviderWhenRequiredHarnessIsMissing` 与双 Provider 原生委派；发现路径不等于模型理解。 |
+| AC-HR-010 | `TestEnginePreservesLegalBlockedAndFailedResults`、`TestAgentOutcomeMigrationPreservesFailureDecisionHistory` 和真实 Acceptance blocked/损坏输出；问题与 Invocation 归属持久可读。 |
+| AC-HR-011 | `TestRealCLIGateContinuationPlannerAndWork`、最终 Acceptance 外部编辑后续作、Store 双版本/回滚/过期/历史 Claim 负例，以及20.9记录的真实 Claude 跨重启回答闭环。 |
+| AC-HR-012 | `TestEngineAutomaticallyRepairsOnlyWithinConfiguredLimit`、`TestAutomaticRetryRejectsUnsafeOrUnapprovedScenes`；默认关闭、总数上限与重复无进展均不能放行。 |
+| AC-HR-013 | `TestRealCLIInvocationContextsLiveFollowAndReconnect`、真实四角色运行中读取、Invocation 限额/完整行脱敏/慢通知回归、API 完整帧/EOF 负例；私有推理排除。 |
+| AC-HR-014 | `TestRealCLIHumanWaitAndObservation`、Activity 去噪与跨 Goal 隔离、help/version/completion/JSON/exit 合同；心跳、输出与受信进展分列。 |
+| AC-HR-015 | 真实 Gate/Work get 与续作版本回归、ID 前缀/补全/歧义/幂等回放、`TestRealCLIInitializationExplainsKnownAndUnknownTests`；不自动执行发现的脚本。 |
+| AC-HR-016 | `TestRealCLIExportsLiveWorkWhileLogsAndLeaseContinue`、已完成双 Goal 导出、`TestRealCLIExportsCompletedServiceEvidenceAndRejectsCorruption`、快照/导出负例；WAL、完整引用闭包、不可覆盖及不完整标记均核验。 |
+| AC-HR-017 | SQLite migration0011/0012、历史注册/报告、Effect/Gate CAS 和 process/Finalize 负例；Invocation 仅作观测，不能决定执行安全或完成。 |
+| AC-HR-018 | 当前 `make verify-m6`、实际双 Provider 结果和独立 Change Review；README、操作手册、示例和设计对账。三组真实性能 Benchmark 继续 `NOT_RUN`、`upload=false`。 |

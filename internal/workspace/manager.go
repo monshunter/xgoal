@@ -231,6 +231,12 @@ func ReadMarkerSnapshot(markerPath string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	return DecodeMarkerSnapshot(markerPath, data)
+}
+
+// DecodeMarkerSnapshot validates bytes already captured by a safe reader. The
+// path is the original bound path, including when validating an audit copy.
+func DecodeMarkerSnapshot(markerPath string, data []byte) (Snapshot, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var record marker

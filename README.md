@@ -28,7 +28,7 @@
 ```bash
 go build -o ./bin/xgoal ./cmd/xgoal
 ./bin/xgoal version
-go test ./...
+make test
 ```
 
 ## 快速开始
@@ -64,19 +64,31 @@ printf '%s\n' '修复并验收当前回归' | xgoal run --goal-file -
 常用控制命令：
 
 ```text
-xgoal status <goal-id> [--watch]
+xgoal status <goal-id> [--watch] [--format json|human]
 xgoal logs <attempt-id>
+xgoal ids [prefix] [--kind goal|work|gate|invocation]
+xgoal work get <work-id>
+xgoal gate get <gate-id>
+xgoal gate resume <gate-id> --version <approved-gate-version> --owner-version <n>
+xgoal invocations <goal-id> [--role planner|implementer|reviewer|acceptance]
+xgoal context <invocation-id>
+xgoal logs --invocation <invocation-id> [--stream stdout|stderr] [--after <sequence>] [--follow]
+xgoal logs --goal <goal-id> [--role <role>] [--follow]
 xgoal gates <goal-id>
 xgoal approve <gate-id> --version <n> --reason <text>
+xgoal approve <gate-id> --version <n> --reason <answer> --resume --owner-version <n>
 xgoal pause|resume|cancel <goal-id> --version <n>
 xgoal work retry|cancel <work-id> --version <n> [--reason <text>]
 xgoal goal plan <goal-id> --expected-version <n> --reason <text> [--proposal-file <proposal.json>]
 xgoal goal replan <goal-id> --file <request.json>
 xgoal report <goal-id>
+xgoal export <goal-id> --output <new-directory-outside-project>
 xgoal clean [project-id] --dry-run
 xgoal daemon status
 xgoal daemon stop [--timeout 30s]
 ```
+
+`invocations` 列出四个角色的调用；`context` 展示注册输入、有效配置和可验证的公开结果，未观察到的实际模型或负载明确为 unknown。日志的续读游标由 Invocation ID、stream 和 sequence 共同确定；`--goal` 只选择当前最新的一次调用，跟随过程中不会自动切换。Ctrl-C 停止读日志，Goal 继续运行；文件丢失、序号缺口或未收到完整终止帧会明确报错。公开输出不包含私有推理。
 
 所有 command 和 subcommand 都提供 Cobra 标准帮助与参数说明：
 
@@ -85,11 +97,17 @@ xgoal --help
 xgoal goal replan --help
 ```
 
+Goal、Work、Gate 和 Invocation 接受唯一前缀，精确 ID 优先；歧义返回候选，不记录新的写请求。`ids`、`work get`、`gate get` 提供当前版本，修改仍要求显式版本 CAS。动态补全查询当前项目的 ID 和版本；daemon 不可用时安静返回空候选，不自动启动或初始化项目。
+
+`approve --resume` 先保存 ALLOW 答案，再按 Gate 的归属继续：Planner 新建规划 generation，Work 重试当前失败，最终 Acceptance 新建验收会话。`--owner-version` 对 Planner/最终验收使用 `status` 中的 Goal version，对 Work 使用 `work get` 中的 version。若版本冲突、文件变化或进程未退出，第二步失败但答案保留；检查现场及当前版本后使用 `gate resume`，无需再次批准。权限、信任更新或未知类型的 Gate 仍使用其专用操作。前缀在持续观察的第一帧解析后固定为完整 ID，不会因新增相似 ID 切换目标。
+
 可直接生成 Bash、Zsh、fish 或 PowerShell completion 脚本。例如当前 Zsh 会话可执行：
 
 ```bash
 source <(xgoal completion zsh)
 ```
+
+`status --format human` 展示 Goal、Work、当前 Invocation、Gate 版本和下一条读取命令；`--watch` 持续观察，Ctrl-C 只停止观察。`run --wait --format human` 将等待反馈写入 stderr，stdout 仍为接收与终态 JSON。心跳时间仅代表租约信号，最近输出与受信进展单独显示；没有已知事实时为 unknown。重复同一验证结果或只改变采集 ID/时间的环境快照不刷新进展时间。
 
 `run --wait` 持续读取 SQLite 权威状态，并在 Goal `Completed`、`Waiting`、`Cancelled` 时分别退出 0、3、4；不带 `--wait` 只表示 Goal 已被持久接收。
 
@@ -98,6 +116,20 @@ source <(xgoal completion zsh)
 未冻结 Goal 可暂停、恢复或取消规划；`goal plan` 为规划失败创建新的 generation，可提交修正 Proposal。旧请求、失败和结果保留。`status` 给出的 `version` 用于控制命令的并发校验。修改 `xgoal.yaml` 后需重启 daemon 加载配置，再显式重试规划；运行中的 daemon 不自动热加载配置。主动 Probe 与所有 Agent 角色共享项目执行槽，忙时返回 `PROJECT_BUSY`。
 
 项目入口统一使用 `--project`、`--state-dir`、`--socket`，优先级为显式参数、对应 `XGOAL_PROJECT`/`XGOAL_STATE_DIR`/`XGOAL_SOCKET` 环境变量、已绑定项目位置、默认值。例如 `xgoal --project /path/to/A daemon status`。项目绑定后不能通过另一个 state-dir 启动第二个实例；linked worktree 入口明确拒绝。`doctor` 默认可离线运行，不打开、创建或迁移 SQLite；主动 Probe 需要运行中的 daemon。
+
+`init` 和离线/在线 `doctor` 的 `validation_preparation` 会检查 Go、Node package test、Cargo、pytest 和 Make test 入口，展示命令是否可用、是否已配置为 Validator，以及准备步骤。检测不会执行项目代码或安装依赖；`coverage: not_verified` 明确表示尚未证明行为覆盖。没有发现入口时返回 `status: unknown`；默认 `git-diff-check` 只检查空白格式，不能替代业务断言。Node、Cargo、pytest 和 Make 的发现结果仅作建议，需审阅测试、声明可信入口并提交配置后才能用于 Goal。
+
+运行中的 daemon 可导出本地审计快照：
+
+```bash
+xgoal export <goal-id-or-unique-prefix> --output /absolute/path/outside-project/new-audit
+```
+
+输出包含整个项目的 SQLite 一致快照、所选 Goal 的 JSON 视图、所有 Goal 的已封存文件引用，以及最后发布的 `manifest.json`。清单记录数据库事件边界、每个 Invocation 的日志游标、文件校验和及排除范围。导出使用独立只读连接，不占用控制数据库连接；期间仍可查看或取消 Goal。`clean` 等待导出完成，等待可取消。输出目录必须不存在且位于项目和状态目录外；已有目录不会被覆盖。
+
+导出包含工作 Packet、Patch 对象、Receipt/日志、Review、场景证据、报告和登记的迁移备份；Provider 日志只保留冻结游标内的公开脱敏内容。正在改名的报告从快照内已校验的 blob 生成，并保留 `PENDING_RENAME` 标记；已发布文件损坏不能用 blob 掩盖。预检尚未创建的 Planner Packet、用户提供 Proposal 的无调用路径、已清理 marker 和旧未索引日志各自明确标注。缺失必需文件、校验失败或取消会保留私有 `.incomplete-*` 目录供检查，并返回失败；只有成功发布的目标目录可视为完整导出。总时限 5 分钟、总文件数据 2 GiB、最多 100,000 个文件/引用；超限明确失败。
+
+这是审计数据包：不包含源码仓库、Git 对象、可写环境数据或宿主原生会话库，也不支持导入后继续执行。导出副本的编辑不会改变正在运行的 SQLite 权威状态。
 
 ## Agent Profile 与项目规则
 
@@ -201,15 +233,23 @@ v0.1 是 Local Process Provider，实际隔离等级为 L0。它不能像容器/
 make verify-m6
 ```
 
+完整门禁使用 `go test -race -count=1 ./...` 完整执行一次全部测试，包含实际 CLI/daemon/服务故障场景；不再先跑普通全仓、再重复运行历史 M2–M6 聚合测试。`make test` 保留独立的普通单轮入口。`make shuffle` 只对短状态/协议合同及准确列出的 SQLite CAS、Lease、Effect、Gate、Invocation 用例重复20次；所选用例缺失会直接失败。真实模型 smoke 继续独立显式启用。
+
+用例应在秒到分钟级完成，超时/租约状态优先使用虚拟时钟，真实进程场景使用有界条件等待。普通测试15分钟、race 20分钟的超时是一个包中全部用例的累计保护，短 shuffle 集合的单包总预算为2分钟；没有小时级门禁预算。实际耗时随机器负载变化，慢用例应按运行记录定位，不能持续放宽总超时掩盖问题。
+
+Makefile 默认串行运行门禁，即使传入 `make -j`；Go 默认同时运行一个包，每个 Go 进程使用 `GOMAXPROCS=2`，包内 `t.Parallel` 默认也为2，嵌套 Go 构建继承限制。可用 `GOMAXPROCS=4 make verify-m6 GO_PACKAGE_PARALLEL=2` 显式提高并发；原有 `GOFLAGS` 中的其他选项保留。这是并发限制，不是主机 CPU 硬配额，服务、Git 和其他应用仍可能占用资源。主机繁忙时先确认进程归属，停止当前验收并正常回收其测试 daemon，再降低并发重跑。
+
 真实 Provider smoke 必须显式运行，不包含在 `verify-m6` 中：
 
 ```bash
 make m3-real-smoke
 make m4-real-smoke
 XGOAL_RUN_REAL_GOAL_SMOKE=1 go test ./internal/cli -run '^TestRealCodexCLIBackgroundGoalToFinalReport$' -count=1 -timeout=15m -v
+XGOAL_RUN_REAL_GOAL_SMOKE=1 go test ./internal/cli -run '^TestRealCodexCLIAcceptanceReadOnlyGoalToFinalReport$' -count=1 -timeout=15m -v
+XGOAL_RUN_REAL_GOAL_SMOKE=1 go test ./internal/cli -run '^TestRealClaudeCLIAcceptanceServiceGoalToFinalReport$' -count=1 -timeout=15m -v
 ```
 
-最后一项使用临时固定仓库验证真实 Codex 的后台完整 Goal，Standard Review 使用同 Provider 的独立会话；它与 Codex/Claude 双向审查 smoke 分开记录。
+这些完整 Goal 使用临时固定仓库，Standard Review 使用同 Provider 的独立会话，与 Codex/Claude 双向审查 smoke 分开记录。后两项分别验证 Codex 只读 Acceptance 和 Claude 实际服务交互，同时检查四角色的运行中上下文、公开输出、最终 Evidence 与导出。测试明确请求的模型和 Profile 见对应测试；所需 CLI/模型及登录状态必须可用，不自动安装或修改用户全局配置。
 
 固定 Benchmark Suite 校验：
 

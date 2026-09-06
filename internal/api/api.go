@@ -30,6 +30,10 @@ type Backend interface {
 	Events(context.Context, string, string, int) ([]domain.Event, error)
 }
 
+type ResourceResolver interface {
+	ResolveResource(context.Context, Operation) (Operation, error)
+}
+
 // AtomicGoalBackend commits the Goal, planning intent and acceptance response
 // together. Other write operations retain the existing idempotency contract.
 type AtomicGoalBackend interface {
@@ -39,6 +43,10 @@ type AtomicGoalBackend interface {
 type Idempotency interface {
 	BeginIdempotentRequest(context.Context, string, string, any) (domain.IdempotencyRecord, bool, error)
 	CompleteIdempotentRequest(context.Context, string, string, string, int, any) (domain.IdempotencyRecord, error)
+}
+
+type IdempotencyLookup interface {
+	LookupIdempotentRequest(context.Context, string, string, any) (domain.IdempotencyRecord, error)
 }
 
 type Handler struct {
@@ -64,7 +72,19 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.serveWrite(writer, request, operation)
 		return
 	}
+	if operation.Name == "invocation.logs" && request.URL.Query().Get("watch") == "1" {
+		handler.serveInvocationStream(writer, request, operation)
+		return
+	}
 	if operation.Name == "goal.events" && request.URL.Query().Get("watch") == "1" {
+		if resolver, ok := handler.backend.(ResourceResolver); ok {
+			resolved, err := resolver.ResolveResource(request.Context(), operation)
+			if err != nil {
+				writeBackendError(writer, err)
+				return
+			}
+			operation = resolved
+		}
 		handler.serveEventStream(writer, request, operation)
 		return
 	}
@@ -106,6 +126,31 @@ func (handler *Handler) serveWrite(writer http.ResponseWriter, request *http.Req
 		writer.WriteHeader(record.ResponseStatus)
 		_, _ = writer.Write(record.ResponseJSON)
 		return
+	}
+	if resolver, ok := handler.backend.(ResourceResolver); ok {
+		resolved, resolveErr := resolver.ResolveResource(request.Context(), operation)
+		if resolveErr != nil {
+			// A new ambiguous request must not even reserve idempotency state.
+			// A completed request still replays its original result if the prefix
+			// became ambiguous after that request committed.
+			if lookup, ok := handler.idempotency.(IdempotencyLookup); ok {
+				prior, lookupErr := lookup.LookupIdempotentRequest(request.Context(), scope, key, model)
+				if lookupErr == nil && prior.State == domain.IdempotencyCompleted {
+					writer.Header().Set("Content-Type", "application/json")
+					writer.Header().Set("Idempotent-Replay", "true")
+					writer.WriteHeader(prior.ResponseStatus)
+					_, _ = writer.Write(prior.ResponseJSON)
+					return
+				}
+				if lookupErr != nil && !errors.Is(lookupErr, basestore.ErrNotFound) {
+					writeBackendError(writer, lookupErr)
+					return
+				}
+			}
+			writeBackendError(writer, resolveErr)
+			return
+		}
+		operation = resolved
 	}
 	record, created, err := handler.idempotency.BeginIdempotentRequest(request.Context(), scope, key, model)
 	if err != nil {
@@ -200,6 +245,18 @@ func route(request *http.Request) (Operation, bool, bool) {
 		operation.Name = "goal.create"
 		return operation, true, true
 	}
+	if len(parts) == 2 && parts[0] == "v1" && parts[1] == "identifiers" && request.Method == http.MethodGet {
+		operation.Name = "identifiers"
+		return operation, false, true
+	}
+	if len(parts) == 3 && parts[0] == "v1" && (parts[1] == "work-items" || parts[1] == "gates") && request.Method == http.MethodGet {
+		operation.Name = "work.get"
+		if parts[1] == "gates" {
+			operation.Name = "gate.get"
+		}
+		operation.ResourceID = parts[2]
+		return operation, false, true
+	}
 	if len(parts) == 2 && parts[0] == "v1" && parts[1] == "doctor" && request.Method == http.MethodGet {
 		operation.Name = "doctor"
 		return operation, false, true
@@ -215,12 +272,12 @@ func route(request *http.Request) (Operation, bool, bool) {
 	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "goals" {
 		operation.ResourceID = parts[2]
 		switch parts[3] {
-		case "pause", "resume", "cancel", "plan", "replan", "finalize":
+		case "pause", "resume", "cancel", "plan", "replan", "finalize", "exports":
 			if request.Method == http.MethodPost {
 				operation.Name = "goal." + parts[3]
 				return operation, true, true
 			}
-		case "work-items", "events", "gates", "report":
+		case "work-items", "events", "gates", "report", "invocations":
 			if request.Method == http.MethodGet {
 				operation.Name = "goal." + parts[3]
 				return operation, false, true
@@ -230,6 +287,14 @@ func route(request *http.Request) (Operation, bool, bool) {
 	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "gates" && parts[3] == "decisions" && request.Method == http.MethodPost {
 		operation.Name, operation.ResourceID = "gate.decide", parts[2]
 		return operation, true, true
+	}
+	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "gates" && parts[3] == "resume" && request.Method == http.MethodPost {
+		operation.Name, operation.ResourceID = "gate.resume", parts[2]
+		return operation, true, true
+	}
+	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "invocations" && request.Method == http.MethodGet && (parts[3] == "context" || parts[3] == "logs") {
+		operation.Name, operation.ResourceID = "invocation."+parts[3], parts[2]
+		return operation, false, true
 	}
 	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "attempts" && parts[3] == "logs" && request.Method == http.MethodGet {
 		operation.Name, operation.ResourceID = "attempt.logs", parts[2]

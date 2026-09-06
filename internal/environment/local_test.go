@@ -129,7 +129,10 @@ func TestEnvironmentServiceHelper(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("XGOAL_ENV_READY"), []byte("ready"), 0o600); err != nil {
 		os.Exit(6)
 	}
-	time.Sleep(time.Hour)
+	// The owner should terminate this service immediately after readiness.
+	// Bound an orphan's lifetime and fail if normal ownership cleanup is lost.
+	time.Sleep(30 * time.Second)
+	os.Exit(124)
 }
 
 func TestLocalProviderUsesCurrentInputTreeWithoutMovingUserHEADOrIndex(t *testing.T) {

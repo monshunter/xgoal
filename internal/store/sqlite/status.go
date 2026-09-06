@@ -37,6 +37,7 @@ type ValidationSummary struct {
 }
 
 type GoalStatus struct {
+	Activity           GoalActivity                `json:"activity"`
 	ExecutionModel     string                      `json:"execution_model"`
 	ExecutionBlocker   string                      `json:"execution_blocker,omitempty"`
 	Goal               domain.Goal                 `json:"goal"`
@@ -70,6 +71,7 @@ func (s *Store) GoalStatus(ctx context.Context, goalID string) (GoalStatus, erro
 		"failures": domain.AuthorityFact, "findings": domain.AuthorityInference,
 		"latest_tree": domain.AuthorityFact, "validation_summary": domain.AuthorityDeterministic,
 		"latest_material_progress_hash": domain.AuthorityDeterministic,
+		"activity":                      domain.AuthorityDeterministic,
 	}}
 	result.ExecutionModel = model
 	if model != "current-directory" && goal.State != domain.GoalCompleted && goal.State != domain.GoalCancelled {
@@ -127,6 +129,10 @@ func (s *Store) GoalStatus(ctx context.Context, goalID string) (GoalStatus, erro
 		return GoalStatus{}, err
 	}
 	result.LatestProgressHash, err = s.goalProgressHash(ctx, result)
+	if err != nil {
+		return GoalStatus{}, err
+	}
+	result.Activity, err = s.goalActivity(ctx, result)
 	if err != nil {
 		return GoalStatus{}, err
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/monshunter/xgoal/internal/adapter"
 	"github.com/monshunter/xgoal/internal/canonical"
+	callindex "github.com/monshunter/xgoal/internal/invocation"
 	"github.com/monshunter/xgoal/internal/planner"
 	"github.com/monshunter/xgoal/internal/protocol"
 	"github.com/monshunter/xgoal/internal/redact"
@@ -39,18 +40,19 @@ func (limiter *outputLimiter) consume(size int) error {
 }
 
 type jsonlStream struct {
-	mu        sync.Mutex
-	pending   []byte
-	directory string
-	rawPrefix string
-	sink      adapter.EventSink
-	clock     gistClock
-	limiter   *outputLimiter
-	cancel    func()
-	sequence  int
-	parseErr  error
-	sessionID string
-	finalText string
+	runtimeRoot string
+	mu          sync.Mutex
+	pending     []byte
+	directory   string
+	rawPrefix   string
+	sink        adapter.EventSink
+	clock       gistClock
+	limiter     *outputLimiter
+	cancel      func()
+	sequence    int
+	parseErr    error
+	sessionID   string
+	finalText   string
 }
 
 type gistClock interface {
@@ -193,8 +195,10 @@ func (stream *jsonlStream) processLine(line []byte) error {
 	if !ok || rawType == "" {
 		return fmt.Errorf("%w: Codex JSONL event type is missing", adapter.ErrInvalidOutput)
 	}
-	stream.sequence++
-	name := fmt.Sprintf("%06d.json", stream.sequence)
+	if int64(stream.sequence) >= callindex.MaxEvents {
+		return errors.New("codex event count exceeded its limit")
+	}
+	name := fmt.Sprintf("%06d.json", stream.sequence+1)
 	sanitized, ok := redact.Value(raw).(map[string]any)
 	if !ok {
 		return errors.New("redacted Codex event changed JSON shape")
@@ -207,6 +211,7 @@ func (stream *jsonlStream) processLine(line []byte) error {
 	if err := writeImmutable(filepath.Join(stream.directory, name), content, 0o600); err != nil {
 		return err
 	}
+	stream.sequence++
 	rawRef := filepath.ToSlash(filepath.Join(stream.rawPrefix, "events", name))
 	events, finalText, sessionID, err := normalizeEvent(rawType, raw, rawRef, stream.clock.Now().UTC())
 	if err != nil {
@@ -236,6 +241,7 @@ func (stream *jsonlStream) processLine(line []byte) error {
 
 func (stream *jsonlStream) fail(err error) {
 	stream.parseErr = err
+	_ = callindex.WriteLogStatus(stream.runtimeRoot, filepath.Dir(stream.directory), "stdout", int64(stream.sequence), err, strings.Contains(err.Error(), "exceeded"))
 	if stream.cancel != nil {
 		stream.cancel()
 	}
