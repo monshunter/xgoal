@@ -49,7 +49,7 @@ Runner 是命令模板，不在 suite 中保存 Secret。Harness 创建临时 Gi
 ## 5. 发布制品与授权
 
 - `LICENSE` 采用 Apache-2.0；用户的“自行决策”授权覆盖仓库许可证选择，但本实现不构成法律意见。
-- `ACKNOWLEDGEMENTS.md` 说明 AutoGo 与 LoopX 的思想启发及 clean-room 边界，不暗示代码复制或背书。
+- `ACKNOWLEDGEMENTS.md` 说明 AutoGo 的思想启发及 clean-room 边界，不暗示代码复制或背书。
 - Threat Model 明确可信仓库、L0、Provider Transport/Project Network/Secret、恶意脚本、PID 复用、日志和授权风险。
 - ADR 固化确定性 Kernel、SQLite 单一真相、串行 Promotion、报告提交协议与 Benchmark 公平性。
 - 不 push、不创建远端 release、不发布 Benchmark；这些仍需独立 Human Gate。

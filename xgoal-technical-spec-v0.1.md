@@ -23,7 +23,7 @@
 
 ### 1.1 核心架构决策
 
-1. **新建独立 Go 项目**，不在 AutoGo 中嵌入运行时，也不直接 Fork LoopX。
+1. **独立 Go 项目**，由 xgoal 自身管理运行时，通过协议衔接 AutoGo 工程治理。
 2. 采用 **Native Agent Execution, External Orchestration**：Codex/Claude Code 负责有界回合中的推理和编码，xgoal 负责跨 Agent 生命周期。
 3. 不实现 Manager LLM、模型路由推理链或自有工具调用循环；所有 Agent 均通过 CLI Adapter 启动。
 4. 使用 **确定性 Orchestration Kernel** 管理 Goal、Work Graph、Lease、Gate、Evidence、Reconcile 和 Completion。
@@ -1921,7 +1921,7 @@ wall_time
 
 ### ADR-001：独立 clean-room 实现
 
-- **选择**：新建 xgoal 仓库，概念借鉴 AutoGo/LoopX，不直接复制 LoopX 当前代码。
+- **选择**：xgoal 使用独立仓库和独立 Go 实现，通过协议衔接工程治理规则。
 - **原因**：保持产品责任、Go 技术栈、运行状态和许可证边界清晰。
 
 ### ADR-002：确定性 Kernel 而非 Manager Agent
@@ -1965,9 +1965,7 @@ wall_time
 ## 31. 许可证与第三方兼容
 
 - AutoGo 采用 MIT License。
-- LoopX 当前主分支采用 Apache-2.0，并保留早期版本 MIT 历史说明。
 - xgoal 推荐清洁实现，并在 `ACKNOWLEDGEMENTS.md` 中注明设计启发。
-- 若复制 LoopX 当前代码，必须保留 Apache-2.0 许可证、NOTICE 和归属；不要把历史 MIT 说明误认为当前全部代码可直接按 MIT 使用。
 - xgoal 自有代码在未复制受限代码的前提下可选择 MIT 或 Apache-2.0；从基础设施项目和明确专利条款考虑，建议评估 Apache-2.0。
 - 依赖必须维护 SBOM/依赖清单、许可证扫描和版本固定。本节不是法律意见。
 
@@ -2044,7 +2042,6 @@ v0.1 成功的标志不是“同时跑了多少 Agent”，而是：**系统在�
 ## 34. 兼容性参考
 
 - AutoGo：`https://github.com/monshunter/autogo`
-- LoopX：`https://github.com/huangruiteng/loopx`
 - Codex CLI：以非交互执行、JSONL Event、结构化输出、会话恢复和 sandbox 的实际 Probe 结果为准。
 - Claude Code CLI：以 Print Mode、JSON/Stream JSON、JSON Schema、会话恢复、工具白名单和权限模式的实际 Probe 结果为准。
 

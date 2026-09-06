@@ -13,13 +13,12 @@
 
 本文定义 `xgoal` 的产品定位、边界、用户体验、核心概念、功能需求、验收口径、风险与版本路线。技术组件、数据模型、状态机、Agent 适配协议、并发与恢复算法见《xgoal 技术 SPEC》。
 
-`xgoal` 基于两个已有方向继续演进：
+`xgoal` 独立承担长期软件工程目标的执行与验收编排，与工程治理工具的职责如下：
 
 - **AutoGo**：为 Codex、Claude Code 等原生 Agent 安装治理规则、Skills、模板和工程工作流，解决“Agent 应该怎样工作”。
-- **LoopX**：将长期目标、待办、证据、门禁、交接等做成持久控制状态，解决“长期任务怎样跨轮次持续推进”。
 - **xgoal**：面向软件工程场景，直接启动和编排 Codex、Claude Code 等原生 Agent，管理隔离环境、任务租约、补丁晋升、独立验证、失败恢复与最终验收，解决“由谁、在什么环境、针对哪个有界任务执行，以及结果何时才可以被接受”。
 
-本项目不复制 LoopX 的代码或把 AutoGo 改造成第二套 Agent；推荐采用独立仓库、概念借鉴、清洁实现（clean-room implementation）的方式建设。
+本项目采用独立仓库和独立 Go 实现，通过协议衔接工程治理规则与运行时编排。
 
 ---
 
@@ -64,17 +63,16 @@ Codex、Claude Code 等原生 Coding Agent 已能完成复杂的单轮或短周�
 - 环境依赖、工具链、缓存、服务和配置没有形成可复现快照。
 - 需要项目/工具网络、额外密钥、付费资源或生产权限时，没有可靠的人类门禁。
 
-### 2.2 现有两个项目的责任边界
+### 2.2 工程治理与运行时编排的责任边界
 
 | 项目 | 主要责任 | 优势 | 对 xgoal 而言仍缺少的能力 |
 |---|---|---|---|
 | AutoGo | 安装治理规则、Skills、模板和工程协作约定 | Native Agent First、证据优先、Fast/Standard 流程、Human Gate | 不拥有运行时任务、Agent 进程、租约、隔离工作区和长期状态 |
-| LoopX | 持久目标、待办、证据、门禁、交接和恢复 | 长期控制状态、Agent 对等协作、跨轮次恢复 | 不聚焦软件工程的工作区、补丁、测试、构建、集成和最终代码晋升 |
 | xgoal | 软件工程专用的多 Agent 执行与验收编排 | 原生 Agent 适配、当前目录快照、环境观测、验证证据、补丁晋升、恢复 | v0.1 聚焦本地可信仓库，不覆盖分布式执行和生产自治 |
 
 ### 2.3 产品机会
 
-AutoGo 已回答“Agent 怎样遵守工程治理”，LoopX 展示了“长期目标怎样成为持久控制对象”。`xgoal` 可以在两者之间形成一个明确的新产品层：
+`xgoal` 将长期目标、执行状态和验收证据纳入持久控制，负责原生 Agent 之外的工程编排：
 
 > **Native Agent Execution, External Orchestration**  
 > 原生 Agent 保留单次执行中的推理、工具调用和编码能力；`xgoal` 成为唯一的跨 Agent、跨轮次、跨工作区编排与生命周期控制面。
@@ -789,20 +787,19 @@ v0.1 发布硬门槛：
 
 ## 14. 关键产品决策
 
-### D-001：独立项目，不直接 Fork LoopX
+### D-001：独立项目与运行时边界
 
 **选项**：
 
-1. Fork LoopX 并加入编码能力。
-2. 在 AutoGo 内加入运行时。
-3. 独立建设 xgoal，通过协议复用 AutoGo、借鉴 LoopX。
+1. 在 AutoGo 内加入运行时。
+2. 独立建设 xgoal，通过协议复用 AutoGo。
 
-**决定**：选择 3。
+**决定**：选择 2。
 
 **理由**：
 
 - AutoGo 的价值在安装期治理，加入持久运行时会破坏其极简边界。
-- LoopX 是通用长期控制平面，xgoal 的差异点是 Coding Agent 进程、当前目录快照、验证器、补丁晋升和最终代码验收。
+- xgoal 独立管理 Coding Agent 进程、当前目录快照、验证器、补丁晋升和最终代码验收。
 - 独立项目更容易建立明确状态所有权、技术栈和许可证边界。
 
 ### D-002：确定性 Kernel，不设置 Manager LLM
@@ -852,9 +849,7 @@ v0.1 发布硬门槛：
 ## 16. 许可证与归属建议
 
 - AutoGo 当前采用 MIT License。
-- LoopX 当前主许可证为 Apache License 2.0，并保留早期版本 MIT 的历史说明。
 - 推荐 xgoal 使用独立仓库和清洁实现，仅复用公开思想与接口模式，并在 `ACKNOWLEDGEMENTS.md` 中说明启发来源。
-- 未复制 LoopX 代码时，可独立选择许可证；若直接复制当前 LoopX 代码，必须遵守其 Apache-2.0、NOTICE 和归属要求。
 - 从社区协作、专利条款和基础设施项目属性考虑，可优先评估 Apache-2.0；最终选择应由项目作者确认。本段不是法律意见。
 
 ---
@@ -943,7 +938,6 @@ Evidence Closure 负责“何时可以说完成”
 ## 19. 参考基线
 
 - AutoGo：`https://github.com/monshunter/autogo`
-- LoopX：`https://github.com/huangruiteng/loopx`
 - OpenAI Codex CLI：非交互执行、JSONL 事件、结构化输出、会话恢复和 sandbox 能力。
 - Anthropic Claude Code CLI：Print Mode、JSON/Stream JSON、JSON Schema、会话恢复、工具白名单与权限模式。
 
