@@ -9,7 +9,7 @@ OBJ-003 / PLAN-011 修订，2026-09-05，待本次 Design Review。本文替代�
 ## 1. 不变量与用户结果
 
 - 一个 Git Common Directory 仅一个 daemon；只支持当前主工作目录，linked worktree 入口明确拒绝。所有角色与命令在该目录串行运行。
-- 系统不改用户 HEAD、符号分支和 index；不自动 stash/reset/clean/checkout，不自动提交到用户分支。Agent 改动这些元数据会阻断发布，系统不通过悄悄恢复掩盖越界。
+- Goal 执行期间系统不改用户 HEAD、符号分支和 index；不自动 stash/reset/clean/checkout，不自动提交到用户分支。Agent 改动这些元数据会阻断发布，系统不通过悄悄恢复掩盖越界。
 - 当前文件内容是实际输入，Git Tree 是不可变身份。原始基线来自当前 HEAD，后续基线来自已验收的私有集成 Commit/Tree，不要求用户 HEAD 跟着移动。
 - 系统快照使用私有临时 index，原始内容直接写 Git blob，不执行 clean/smudge filters 或 hooks。Git/状态目录不进入业务 Patch。
 - Patch、Scope、Validator、独立 Reviewer、Gate 与最终 Tree-bound Evidence 继续决定晋升与完成；退出 0 或目录存在都不足以通过。
@@ -46,6 +46,8 @@ Git 对象/ref、文件内容和进程是外部事实；SQLite 保存状态和�
 同一验证阶段的受管后台服务可与 runtime probe 共存；服务不得并发修改源码，阶段结束前必须回收。整个阶段的 Tree 与 Git 身份核对覆盖这些服务。
 
 ## 3. 当前目录准入与连续目标
+
+2026-09-06 / OBJ-005 / PLAN-016 初始化例外：用户授权 `xgoal init` 在真正 unborn 的命名分支上自动创建首次本地 Commit。`projectinit` 沿用仓库排他锁与无关 dirty 拒绝，检查 HEAD 与分支引用，登记 `.gitignore`、`.xgoalignore`、`xgoal.yaml` 的 intent-to-add，再用 `git commit --only -- <三个路径>` 完成提交。已有文件按完整内容纳入，现有 Git 身份和内容转换规则生效，hooks/自动签名显式禁用。错误保留文件与登记状态并提示修正后重跑，不覆盖或回滚用户数据；重复 init 或已有 HEAD 不提交。该例外仅属于初始化入口，不改变运行期快照、晋升及失败恢复合同。
 
 项目会话保存 root/CommonDir、用户 HEAD commit、符号 HEAD、index fingerprint、最后已验收 Commit/Tree、当前 owner 和最后观察 Tree。Git 指令使用显式目录并清除继承的 GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/GIT_INDEX_FILE 等定位变量；命令属性、hooks、filters 不作为可信捕获依赖。
 

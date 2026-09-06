@@ -18,4 +18,5 @@
 | PLAN-013 | PLAN-013：贯通 Agent Profile 与项目 Harness | [PLAN-013.md](PLAN-013.md) |
 | PLAN-014 | PLAN-014：完成受信环境与场景验收链路 | [PLAN-014.md](PLAN-014.md) |
 | PLAN-015 | PLAN-015：完善实时观测、用户操作与综合验收 | [PLAN-015.md](PLAN-015.md) |
+| PLAN-016 | PLAN-016：初始化无首次提交的 Git 仓库 | [PLAN-016.md](PLAN-016.md) |
 <!-- AGENT-HARNESS:END INDEX -->

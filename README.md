@@ -33,7 +33,7 @@ make test
 
 ## 快速开始
 
-以下示例在可信 Git 主工作目录执行；首次运行 Goal 前提交配置与已有修改，保持工作目录干净：
+以下示例在可信 Git 主工作目录执行。新项目可先 `git init`；尚无首次提交时，`xgoal init` 会自动提交 `.gitignore`、`.xgoalignore`、`xgoal.yaml` 三个完整文件，并在 JSON 的 `initial_commit` 中返回提交 ID。已有 HEAD 或重复初始化不会自动提交；已有仓库仍需在首次运行 Goal 前提交配置与已有修改，保持工作目录干净。
 
 ```bash
 xgoal init
@@ -41,6 +41,8 @@ xgoal config validate --file xgoal.yaml
 xgoal daemon start
 xgoal daemon status
 ```
+
+首次提交使用已有 Git 身份，禁用 hooks 和自动签名，不提交业务文件或 `.xgoal/`。无关未提交修改仍会使初始化拒绝。若 Git 身份、锁或提交失败，请按错误修正后重跑 `xgoal init`；文件与可能已登记的初始化路径会保留，不自动回滚。运行中的 daemon 持有项目锁时，需要先正常停止该项目 daemon，再执行 init。
 
 同一终端即可继续：
 

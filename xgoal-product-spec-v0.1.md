@@ -396,6 +396,8 @@ goal_revision:
 
 - 检查 Git 仓库、基础分支和工作目录。
 - 创建 `xgoal.yaml`、本地运行目录和忽略规则。
+- 对尚无 HEAD 提交的命名主工作目录，在初始化成功时自动创建一次本地首次提交，仅包含 `xgoal.yaml`、`.xgoalignore` 和 `.gitignore` 三个完整文件；已有配置及忽略规则保留原内容后随文件纳入。不提交业务文件、`.xgoal/` 或其他暂存内容，原有无关 dirty 拒绝规则保持。
+- 已有 HEAD 时不自动提交；重复初始化不增加提交。JSON 仅在本次创建提交时增加 `initial_commit`（Commit ID）。首次提交使用已有 Git 身份，禁用 hooks 和自动签名；身份、锁或其他 Git 错误应明确报错，保留文件和可能已登记的初始化路径以便修正后重跑，不自动清理、回滚或修改全局 Git 配置。
 - 选择 Agent Profile、默认模式和验证器。
 - 可选检查或安装 AutoGo；不得复制 AutoGo 内部 Skills。
 - 不修改用户未授权的远端配置或生产资源。
@@ -860,7 +862,7 @@ v0.1 发布硬门槛：
 
 ### 17.1 Feature Requirement 验收
 
-- [x] **AC-FR-001**：在干净的可信 Git 主工作目录或其子目录执行 init，生成严格配置、本地 Project ID 和受控运行目录；linked worktree 拒绝，Git worktree 列表、用户 HEAD/index 与远端不变。
+- [x] **AC-FR-001**：在已有 HEAD 的干净可信 Git 主工作目录或其子目录执行 init，生成严格配置、本地 Project ID 和受控运行目录；linked worktree 拒绝，Git worktree 列表、用户 HEAD/index 与远端不变。无 HEAD 初始化的提交例外由 AC-INIT-001 单独验收。
 - [x] **AC-FR-002**：`xgoal doctor` 能报告 Git/OS/Arch/Agent/Validator/隔离与策略事实；默认被动探测不发起模型回合，显式 Active Probe 才使用 Provider Transport 与认证，并在受控超时内保存 Evidence。
 - [x] **AC-FR-010**：自然语言、文件和 stdin 目标均能生成并校验 Goal Contract；原始输入、Config Hash 和创建者可追溯，关键缺口进入 Gate 而非被 Agent 猜测。
 - [x] **AC-FR-011**：Planner 输出能形成版本化 Work Graph；环路、缺失依赖、写 Scope 冲突、缺失 Validator 和无界 Work Item 会被确定性拒绝或转入 Finding/Gate。
@@ -911,7 +913,7 @@ v0.1 发布硬门槛：
 - [x] **AC-BG-005**：历史 IN_PROGRESS、半冻结 Goal、未决 Attempt/Lease/Work 经保守恢复得到确定结果/等待，不无限停留，重复恢复不重复副作用。
 - [x] **AC-BG-006**：真实 CLI→daemon→Provider→Git→Validator→Report 通过；固定 Provider fixture 的确定性故障测试与真实 Provider smoke 分别标注；全量门禁及 macOS/Linux 平台证据可复核。
 - [x] **AC-CWD-001**：实际 Planner/Implementer/Reviewer CWD 为当前主目录，Validator 与 bootstrap CWD 为其内部受信的相对目录，完整 Goal 前后 Git worktree 列表不变；代码结果直接可见。
-- [x] **AC-CWD-002**：未归属的 staged/unstaged/untracked 修改拒绝接管且字节不变；系统操作保留用户 HEAD、符号分支和 index；两个连续 Goal 可采纳完全匹配的已验收结果。
+- [x] **AC-CWD-002**：未归属的 staged/unstaged/untracked 修改拒绝接管且字节不变；Goal 执行期间系统操作保留用户 HEAD、符号分支和 index；两个连续 Goal 可采纳完全匹配的已验收结果。
 - [x] **AC-CWD-003**：私有 index/Object Tree 正确覆盖 tracked/非忽略 untracked/binary/rename/mode/symlink/delete，忽略构建产物，拒绝元数据、Scope 越界和路径逃逸；不执行 Agent 的 Git filters/hooks。
 - [x] **AC-CWD-004**：Validator/Reviewer 期间源 Tree 或 HEAD/index 漂移使 Evidence 无效；最终当前目录、私有集成 Tree、Evidence 和 Report 必须一致。
 - [x] **AC-CWD-005**：失败/暂停/取消/daemon 中断保留文件，已观察现场可显式 retry；未知漂移得到可操作等待而非覆盖、删除或无限自动重试。
@@ -1137,3 +1139,11 @@ SQLite 保留事务状态、CAS、Lease、Gate、事件、进程归属和恢复�
 | AC-HR-016 | `TestRealCLIExportsLiveWorkWhileLogsAndLeaseContinue`、已完成双 Goal 导出、`TestRealCLIExportsCompletedServiceEvidenceAndRejectsCorruption`、快照/导出负例；WAL、完整引用闭包、不可覆盖及不完整标记均核验。 |
 | AC-HR-017 | SQLite migration0011/0012、历史注册/报告、Effect/Gate CAS 和 process/Finalize 负例；Invocation 仅作观测，不能决定执行安全或完成。 |
 | AC-HR-018 | 当前 `make verify-m6`、实际双 Provider 结果和独立 Change Review；README、操作手册、示例和设计对账。三组真实性能 Benchmark 继续 `NOT_RUN`、`upload=false`。 |
+
+## 21. 无首次提交的仓库初始化（OBJ-005 / PLAN-016）
+
+- [x] **AC-INIT-001**：只有 git init 的新仓库执行 xgoal init 后产生恰好一个包含三个初始化文件的 HEAD Commit，用户 index 与工作目录干净；重复执行不再提交。
+- [x] **AC-INIT-002**：已有 HEAD、无关 staged/unstaged/untracked 文件、损坏引用、锁冲突与提交失败不造成业务文件混入或覆盖；失败保留可重试的初始化文件。
+- [x] **AC-INIT-003**：真实 CLI/daemon 从无首次提交仓库初始化后进入 Planner 调用，验证不再因 HEAD 缺失而等待；Provider fixture 与真实 Provider Evidence 分开报告。
+
+Evidence（2026-09-06）：projectinit 定向测试 PASS 5.562s，覆盖首次提交、幂等、Git 身份/锁失败重试、损坏引用、已有仓库、dirty 与运行数据保护。真实 CLI/daemon 用例 TestRealCLIUnbornInitRunsGoalWithoutManualCommit PASS 25.77s：无手工 commit，初始 Commit 9414a06cb6b14a70f1ce0d04bc3709688d07351b，只含三个初始化文件；Planner、Implementer、独立 Reviewer 与受信验证均运行，Goal Completed，最终 output.txt 为 accepted 换行，初始化 HEAD/index 未变化。Provider 为确定性可执行夹具，未调用真实模型或验收贪吃蛇游戏。已知/未知项目初始化 CLI 回归 PASS 2.85s。详情见 PLAN-016 Change Review。

@@ -28,6 +28,14 @@ Plans:
 ## Objectives
 
 ---
+ID: OBJ-005
+Objective: 支持新 Git 仓库通过 xgoal init 自动提交初始化文件并进入 Goal 规划
+Status: 已完成
+Plans:
+- [x] [PLAN-016：初始化无首次提交的 Git 仓库](docs/plans/PLAN-016.md)
+---
+
+---
 ID: OBJ-004
 Objective: 落实运行时 Harness 综合改进设计，完成配置、验收、恢复与观测的实现和闭环验收
 Status: 已完成

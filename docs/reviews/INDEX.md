@@ -59,4 +59,7 @@
 | REVIEW-054-runtime-acceptance | REVIEW-054：PLAN-014 受信环境与独立 Acceptance 变更审查 | [REVIEW-054-runtime-acceptance.md](REVIEW-054-runtime-acceptance.md) |
 | REVIEW-055-plan-015-verification | REVIEW-055：PLAN-015 验收资源与时长调整 Plan Review | [REVIEW-055-plan-015-verification.md](REVIEW-055-plan-015-verification.md) |
 | REVIEW-056-runtime-observation-and-closure | REVIEW-056：PLAN-015 运行观测、用户操作与 OBJ-004 收口 Change Review | [REVIEW-056-runtime-observation-and-closure.md](REVIEW-056-runtime-observation-and-closure.md) |
+| REVIEW-057-plan-016 | REVIEW-057：PLAN-016 新仓库初始化 Plan Review | [REVIEW-057-plan-016.md](REVIEW-057-plan-016.md) |
+| REVIEW-058-init-contract | REVIEW-058：无首次提交仓库的初始化合同审查 | [REVIEW-058-init-contract.md](REVIEW-058-init-contract.md) |
+| REVIEW-059-init-first-commit | REVIEW-059：新仓库初始化首次提交 Change Review | [REVIEW-059-init-first-commit.md](REVIEW-059-init-first-commit.md) |
 <!-- AGENT-HARNESS:END INDEX -->

@@ -36,6 +36,7 @@ type Result struct {
 	CreatedIgnore         bool                 `json:"created_ignore"`
 	IsolationLevel        string               `json:"isolation_level"`
 	RemoteChanges         bool                 `json:"remote_changes"`
+	InitialCommit         string               `json:"initial_commit,omitempty"`
 }
 
 func Initialize(ctx context.Context, options Options) (Result, error) {
@@ -117,12 +118,16 @@ func Initialize(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	initialCommit, err := commitUnborn(ctx, paths)
+	if err != nil {
+		return Result{}, fmt.Errorf("initial commit failed; initialization files and registered paths are preserved; resolve the Git error and rerun xgoal init: %w", err)
+	}
 	return Result{
 		ValidationPreparation: testdiscovery.Inspect(root, &configuration),
 		ProjectRoot:           root, ProjectID: paths.ProjectID, GitCommonDir: paths.CommonDir,
 		ConfigPath: configPath, StateDir: paths.StateDir, BaseBranch: baseBranch,
 		CreatedConfig: createdConfig, CreatedIgnore: createdIgnore,
-		IsolationLevel: "L0", RemoteChanges: false,
+		IsolationLevel: "L0", RemoteChanges: false, InitialCommit: initialCommit,
 	}, nil
 }
 

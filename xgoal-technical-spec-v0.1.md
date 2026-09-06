@@ -911,9 +911,11 @@ Attempt、Agent Event、Result 和 Evidence 都保存 `packet_hash`，避免输�
 
 初次 Goal 接管干净的 tracked/index/非忽略 untracked；也可接管完全匹配系统上次已验收结果且用户 HEAD/index 未变的目录，从该已验收 Commit/Tree 继续。其他 dirty、未知 ref/index 变化保留并等待，不能自动 stash/reset/clean。
 
-用户 HEAD、符号分支及 index 始终不由 xgoal 改写。私有审计引用为 `refs/xgoal/goals/<goal-id>/integration`，起点为接管时的基线 Commit。系统用 commit-tree 创建审计 Commit，以 update-ref old-value CAS 晋升。最终代码直接留在当前目录，相对用户 HEAD 显示为待用户审阅提交的修改；不自动 push 或提交到用户分支。
+Goal 执行期间用户 HEAD、符号分支及 index 不由 xgoal 改写。无 HEAD 的首次 init 提交是执行前的限定例外，见下段。私有审计引用为 `refs/xgoal/goals/<goal-id>/integration`，起点为接管时的基线 Commit。系统用 commit-tree 创建审计 Commit，以 update-ref old-value CAS 晋升。最终代码直接留在当前目录，相对用户 HEAD 显示为待用户审阅提交的修改；不自动 push 或提交到用户分支。
 
 初始干净准入要求用户 index Tree、HEAD Tree 与原始字节工作目录 Tree 一致；不依赖 git status，也不执行 filter 自动规范化。
+
+初始化例外：projectinit 在现有项目排他锁内区分可解析 HEAD、真正 unborn 的命名分支与损坏引用。仅 unborn 时登记三个初始化路径，使用 Git 的指定路径提交创建首次 Commit，并由 Git 同步这些路径的用户 index；不新建基线或恢复状态机。提交仅包含 xgoal.yaml、.xgoalignore、.gitignore，显式关闭 hooks/自动签名，使用用户 Git 身份及原生内容转换规则，不修改全局配置。失败保留文件与可能的 intent-to-add 状态并提示重跑；已有 HEAD 或重复 init 不创建提交。后续 Goal 仍按上述原始字节 Tree 准入，内容转换造成的 Tree 差异不会被隐式接受。
 
 ### 14.2 当前目录会话与快照
 
